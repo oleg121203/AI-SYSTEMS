@@ -1,5 +1,5 @@
 # Use an appropriate base image
-FROM python:3.12-slim
+FROM python:3.11-slim
 
 # Install system dependencies
 RUN apt-get update && \
@@ -7,23 +7,17 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/* && \
     pip install --upgrade pip
 
-# Create a non-root user and switch to it
-RUN adduser -m $USER:$USER appuser && \
-    mkdir -p /app && \
-    chown $USER:$USER /app
-USER $USER 
-
 # Set the working directory in the container
 WORKDIR /app
 
 # Copy the requirements file into the container
-COPY --chown=$USER:$USER requirements_async.txt .
+COPY requirements_async.txt .
 
 # Install Python dependencies
-RUN pip install --no-cache-dir --user -r requirements_async.txt
+RUN pip install --no-cache-dir -r requirements_async.txt
 
 # Copy the rest of your application code into the container
-COPY --chown=$USER:$USER . .
+COPY . .
 
 # Fix line endings, make sure script is executable, and configure git safe directory
 RUN mkdir -p logs repo && \
