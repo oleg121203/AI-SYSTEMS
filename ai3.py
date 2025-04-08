@@ -1,0 +1,643 @@
+import asyncio
+import importlib
+import json
+import logging
+import os
+import re
+import subprocess
+import time
+from datetime import datetime
+from pathlib import Path
+
+import aiohttp
+from git import GitCommandError, Repo
+
+from config import load_config
+from providers import BaseProvider, ProviderFactory
+from utils import logger  # Assuming logger is setup in utils
+from utils import log_message, wait_for_service
+
+logger = logging.getLogger(__name__)  # Use logger correctly
+
+config = load_config()
+MCP_API_URL = config.get("mcp_api", "http://localhost:7860")
+REPO_DIR = config.get("repo_dir", "repo")
+LOG_FILE_PATH = config.get("log_file", "logs/mcp.log")  # Still needed for general logs
+
+
+def _init_or_open_repo(repo_path: str) -> Repo:
+    try:
+        Path(repo_path).mkdir(parents=True, exist_ok=True)
+        repo = Repo(repo_path)
+        log_message(f"[AI3-Git] Opened existing repository at: {repo_path}")
+        return repo
+    except Exception:
+        try:
+            repo = Repo.init(repo_path)
+            log_message(f"[AI3-Git] Initialized new repository at: {repo_path}")
+            gitignore_path = os.path.join(repo_path, ".gitignore")
+            if not os.path.exists(gitignore_path):
+                with open(gitignore_path, "w") as f:
+                    f.write("# Ignore OS-specific files\n.DS_Store\n")
+                    f.write("# Ignore virtual environment files\nvenv/\n.venv/\n")
+                    f.write("# Ignore IDE files\n.idea/\n.vscode/\n")
+                    f.write("# Ignore log files\nlogs/\n*.log\n")
+                try:
+                    repo.index.add([".gitignore"])
+                    repo.index.commit("Add .gitignore")
+                    log_message("[AI3-Git] Added .gitignore and committed.")
+                except GitCommandError as git_e:
+                    log_message(
+                        f"[AI3-Git] Warning: Failed to commit .gitignore: {git_e}"
+                    )
+            return repo
+        except Exception as init_e:
+            log_message(
+                f"[AI3-Git] CRITICAL: Failed to initialize or open repository at {repo_path}: {init_e}"
+            )
+            raise
+
+
+def _commit_changes(repo: Repo, file_paths: list, message: str):
+    if not file_paths:
+        return
+    try:
+        valid_paths = [
+            os.path.relpath(p, repo.working_dir)
+            for p in file_paths
+            if os.path.exists(p)
+        ]
+        paths_to_add = [
+            p
+            for p in valid_paths
+            if p in repo.untracked_files
+            or p in [item.a_path for item in repo.index.diff(None)]
+        ]
+
+        if not paths_to_add and not repo.is_dirty(
+            untracked_files=True, path=valid_paths
+        ):
+            log_message(f"[AI3-Git] No changes detected in {valid_paths} to commit.")
+            return
+
+        if paths_to_add:
+            repo.index.add(paths_to_add)
+
+        if repo.is_dirty():
+            repo.index.commit(message)
+            log_message(
+                f"[AI3-Git] Committed changes for {len(paths_to_add)} file(s): {message}"
+            )
+        else:
+            log_message(f"[AI3-Git] No staged changes to commit for message: {message}")
+
+    except GitCommandError as e:
+        log_message(
+            f"[AI3-Git] Error committing changes: {message}. Files: {file_paths}. Error: {e}"
+        )
+    except Exception as e:
+        log_message(f"[AI3-Git] Unexpected error during commit: {e}")
+
+
+async def generate_structure(target: str) -> dict:
+    prompt = f"""
+Generate a JSON structure for a project with the target: "{target}".
+Respond ONLY with the JSON structure itself, enclosed in triple backticks (```json ... ```).
+The structure should be a valid JSON object representing directories and files. Use null for files.
+Example:
+```json
+{{
+  "src": {{
+    "main.py": null,
+    "utils.py": null
+  }},
+  "tests": {{
+    "test_main.py": null
+  }},
+  "README.md": null,
+  ".gitignore": null
+}}
+```
+Do not include any explanatory text before or after the JSON block. Ensure the JSON is well-formed.
+"""
+    ai_config_base = config.get("ai_config", {})
+    ai3_config = ai_config_base.get("ai3", {})
+    if not ai3_config:
+        log_message("[AI3] Warning: 'ai_config.ai3' section not found. Using defaults.")
+        ai3_config = {"provider": "openai"}
+
+    provider_name = ai3_config.get("provider", "openai")
+
+    response_text = None
+    primary_provider = None
+    fallback_provider = None
+    try:
+        log_message(
+            f"[AI3] Attempting structure generation with provider: {provider_name}"
+        )
+        primary_provider: BaseProvider = ProviderFactory.create_provider(provider_name)
+        try:
+            response_text = await primary_provider.generate(
+                prompt=prompt,
+                model=ai3_config.get("model"),
+                max_tokens=ai3_config.get("max_tokens"),
+                temperature=ai3_config.get("temperature"),
+            )
+        finally:
+            if hasattr(primary_provider, "close_session") and callable(
+                primary_provider.close_session
+            ):
+                await primary_provider.close_session()
+
+        log_message(
+            f"[AI3] Raw response preview from '{provider_name}': {response_text[:200] if response_text else 'None'}"
+        )
+
+        if isinstance(response_text, str) and response_text.startswith(
+            "Ошибка генерации"
+        ):
+            raise Exception(
+                f"Primary provider '{provider_name}' failed: {response_text}"
+            )
+
+    except Exception as e:
+        primary_provider_name_for_log = (
+            primary_provider.name if primary_provider else provider_name
+        )
+        log_message(
+            f"[AI3] Error calling primary provider '{primary_provider_name_for_log}': {e}"
+        )
+        fallback_provider_name = ai3_config.get("fallback_provider")
+        if fallback_provider_name:
+            log_message(f"[AI3] Attempting fallback provider: {fallback_provider_name}")
+            try:
+                fallback_provider: BaseProvider = ProviderFactory.create_provider(
+                    fallback_provider_name
+                )
+                try:
+                    response_text = await fallback_provider.generate(
+                        prompt=prompt,
+                        model=ai3_config.get("model"),
+                        max_tokens=ai3_config.get("max_tokens"),
+                        temperature=ai3_config.get("temperature"),
+                    )
+                finally:
+                    if hasattr(fallback_provider, "close_session") and callable(
+                        fallback_provider.close_session
+                    ):
+                        await fallback_provider.close_session()
+
+                log_message(
+                    f"[AI3] Raw response preview from fallback '{fallback_provider_name}': {response_text[:200] if response_text else 'None'}"
+                )
+
+                if isinstance(response_text, str) and response_text.startswith(
+                    "Ошибка генерации"
+                ):
+                    raise Exception(
+                        f"Fallback provider '{fallback_provider_name}' also failed: {response_text}"
+                    )
+
+            except Exception as fallback_e:
+                log_message(
+                    f"[AI3] Fallback provider '{fallback_provider_name}' also failed: {fallback_e}"
+                )
+                await initiate_collaboration(
+                    str(fallback_e),
+                    "Both primary and fallback providers failed during structure generation",
+                )
+                return None
+        else:
+            log_message("[AI3] No fallback provider configured.")
+            await initiate_collaboration(
+                str(e),
+                "Primary provider failed during structure generation, no fallback configured",
+            )
+            return None
+
+    if not response_text:
+        log_message(
+            "[AI3] No response received from AI model for structure generation."
+        )
+        await initiate_collaboration(
+            "No response from model",
+            "AI model did not return any response for structure generation",
+        )
+        return None
+
+    match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", response_text, re.DOTALL)
+    json_structure_str = None
+    if match:
+        json_structure_str = match.group(1)
+        log_message("[AI3] Found JSON structure within backticks.")
+    else:
+        potential_json = response_text.strip()
+        if potential_json.startswith("{") and potential_json.endswith("}"):
+            json_structure_str = potential_json
+            log_message(
+                "[AI3] Attempting to parse the entire response as JSON (no backticks found)."
+            )
+        else:
+            log_message(
+                "[AI3] Could not find JSON structure in model response (checked with/without backticks)."
+            )
+            await initiate_collaboration(
+                "JSON structure not found",
+                f"Model response did not contain a valid JSON block. Preview: {response_text[:200]}",
+            )
+            return None
+
+    try:
+        parsed_structure = json.loads(json_structure_str)
+        if not isinstance(parsed_structure, dict):
+            raise json.JSONDecodeError(
+                "Parsed JSON is not an object (dictionary).", json_structure_str, 0
+            )
+        log_message("[AI3] Successfully extracted and parsed JSON structure.")
+        return parsed_structure
+    except json.JSONDecodeError as e:
+        log_message(
+            f"[AI3] Extracted text is not valid JSON: {e}. Text preview: {json_structure_str[:200]}"
+        )
+        await initiate_collaboration(
+            str(e),
+            f"Failed to parse extracted JSON structure. Preview: {json_structure_str[:200]}",
+        )
+        return None
+    except Exception as e:
+        log_message(f"[AI3] Unexpected error parsing JSON structure: {e}")
+        await initiate_collaboration(str(e), "Unexpected error parsing JSON structure")
+        return None
+
+
+async def send_structure_to_api(structure_obj: dict):
+    api_url = f"{MCP_API_URL}/structure"
+    log_message(f"[AI3 -> API] Sending structure object to {api_url}")
+    async with aiohttp.ClientSession() as client_session:
+        try:
+            async with client_session.post(
+                api_url, json={"structure": structure_obj}, timeout=30
+            ) as resp:
+                response_text = await resp.text()
+                if resp.status == 200:
+                    log_message(
+                        f"[AI3 -> API] Structure successfully sent. Response: {response_text}"
+                    )
+                    return True
+                else:
+                    log_message(
+                        f"[AI3 -> API] Error sending structure. Status: {resp.status}, Response: {response_text}"
+                    )
+                    return False
+        except Exception as e:
+            log_message(f"[AI3 -> API] Error sending structure: {str(e)}")
+            return False
+
+
+async def send_ai3_report(status: str, details: dict = None):
+    api_url = f"{MCP_API_URL}/ai3_report"
+    payload = {"status": status}
+    if details:
+        payload["details"] = details
+    log_message(f"[AI3 -> API] Sending report to {api_url}: {payload}")
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.post(api_url, json=payload, timeout=15) as resp:
+                response_text = await resp.text()
+                log_message(
+                    f"[AI3 -> API] Report sent. Status: {resp.status}, Response: {response_text}"
+                )
+                return resp.status == 200
+        except asyncio.TimeoutError:
+            log_message(f"[AI3 -> API] Timeout sending report: {status}")
+            return False
+        except aiohttp.ClientError as e:
+            log_message(f"[AI3 -> API] Connection error sending report: {str(e)}")
+            return False
+        except Exception as e:
+            log_message(f"[AI3 -> API] Unexpected error sending report: {str(e)}")
+            return False
+
+
+async def initiate_collaboration(error: str, context: str):
+    api_url = f"{MCP_API_URL}/ai_collaboration"
+    collaboration_request = {"error": error, "context": context, "ai": "AI3"}
+    log_message(
+        f"[AI3 -> API] Initiating collaboration via {api_url}: {collaboration_request}"
+    )
+    async with aiohttp.ClientSession() as session:
+        try:
+            async with session.post(
+                api_url, json=collaboration_request, timeout=20
+            ) as resp:
+                response_text = await resp.text()
+                log_message(
+                    f"[AI3 -> API] Collaboration request sent. Status: {resp.status}, Response: {response_text}"
+                )
+                return resp.status == 200
+        except asyncio.TimeoutError:
+            log_message(f"[AI3 -> API] Timeout initiating collaboration.")
+            return False
+        except aiohttp.ClientError as e:
+            log_message(
+                f"[AI3 -> API] Connection error initiating collaboration: {str(e)}"
+            )
+            return False
+        except Exception as e:
+            log_message(
+                f"[AI3 -> API] Unexpected error initiating collaboration: {str(e)}"
+            )
+            return False
+
+
+async def create_files_from_structure(structure_obj: dict, repo: Repo):
+    base_path = repo.working_dir
+    created_files = []
+    created_dirs = []
+
+    async def _create_recursive(struct: dict, current_rel_path: str):
+        for key, value in struct.items():
+            sanitized_key = re.sub(r'[<>:"/\\|?*]', "_", key).strip()
+            if not sanitized_key:
+                log_message(
+                    f"[AI3] Warning: Skipping empty or invalid name derived from '{key}'"
+                )
+                continue
+
+            new_rel_path = os.path.join(current_rel_path, sanitized_key)
+            full_path = os.path.join(base_path, new_rel_path)
+
+            try:
+                if isinstance(value, dict):
+                    if not os.path.exists(full_path):
+                        os.makedirs(full_path)
+                        log_message(f"[AI3] Created directory: {new_rel_path}")
+                        created_dirs.append(full_path)
+                        if not value:
+                            gitkeep_path = os.path.join(full_path, ".gitkeep")
+                            with open(gitkeep_path, "w") as f:
+                                f.write("")
+                            log_message(
+                                f"[AI3] Created .gitkeep in empty directory: {new_rel_path}"
+                            )
+                    await _create_recursive(value, new_rel_path)
+                elif value is None or isinstance(value, str):
+                    parent_dir = os.path.dirname(full_path)
+                    if not os.path.exists(parent_dir):
+                        os.makedirs(parent_dir)
+                        log_message(
+                            f"[AI3] Created parent directory: {os.path.relpath(parent_dir, base_path)}"
+                        )
+
+                    if not os.path.exists(full_path):
+                        initial_content = (
+                            value
+                            if isinstance(value, str)
+                            else "# Initial empty file created by AI3\n"
+                        )
+                        with open(full_path, "w", encoding="utf-8") as f:
+                            f.write(initial_content)
+                        log_message(f"[AI3] Created file: {new_rel_path}")
+                        created_files.append(full_path)
+                    else:
+                        log_message(
+                            f"[AI3] File already exists, skipping creation: {new_rel_path}"
+                        )
+                else:
+                    log_message(
+                        f"[AI3] Warning: Unknown type in structure for key '{key}', skipping: {type(value)}"
+                    )
+
+            except OSError as e:
+                log_message(f"[AI3] Error creating file/directory {new_rel_path}: {e}")
+            except Exception as e:
+                log_message(f"[AI3] Unexpected error processing {new_rel_path}: {e}")
+
+    try:
+        log_message("[AI3] Starting file creation from structure...")
+        await _create_recursive(structure_obj, "")
+        files_to_commit = created_files + [
+            os.path.join(d, ".gitkeep")
+            for d in created_dirs
+            if os.path.exists(os.path.join(d, ".gitkeep"))
+        ]
+        _commit_changes(
+            repo, files_to_commit, "Created initial project structure from AI"
+        )
+        log_message("[AI3] File creation process completed.")
+        await send_ai3_report("structure_creation_completed")
+        return True
+    except Exception as e:
+        log_message(f"[AI3] Error in create_files_from_structure: {e}")
+        await initiate_collaboration(str(e), "Failed to create files from structure")
+        await send_ai3_report("structure_creation_failed", {"error": str(e)})
+        return False
+
+
+async def simple_log_monitor():
+    log_message(f"[AI3] Starting simple log monitoring: {LOG_FILE_PATH}")
+    position = 0
+    if os.path.exists(LOG_FILE_PATH):
+        try:
+            position = os.path.getsize(LOG_FILE_PATH)
+        except OSError:
+            position = 0
+
+    error_pattern = re.compile(r".*(ERROR|CRITICAL).*", re.IGNORECASE)
+
+    while True:
+        try:
+            current_size = os.path.getsize(LOG_FILE_PATH)
+            if current_size < position:
+                position = 0
+
+            if current_size > position:
+                with open(LOG_FILE_PATH, "r", encoding="utf-8") as file:
+                    file.seek(position)
+                    new_content = file.read()
+                    position = file.tell()
+
+                    for line in new_content.splitlines():
+                        if error_pattern.search(line):
+                            log_message(
+                                f"[AI3-Monitor] Detected potential error: {line}"
+                            )
+                            pass
+
+        except FileNotFoundError:
+            log_message(f"[AI3] Log file not found: {LOG_FILE_PATH}. Retrying...")
+            position = 0
+        except Exception as e:
+            log_message(f"[AI3] Error in simple log monitor: {e}")
+
+        await asyncio.sleep(config.get("ai3_log_monitor_interval", 10))
+
+
+def install_missing_modules(module_name):
+    try:
+        importlib.import_module(module_name)
+    except ImportError:
+        print(f"{module_name} not found. Installing...")
+        subprocess.check_call(["pip", "install", module_name])
+
+
+class AI3:
+    async def update_file_and_commit(self, file_path_relative: str, content: str):
+        """Оновлює файл у репозиторії та комітить зміни."""
+        repo_dir = "repo"
+        full_path = os.path.join(repo_dir, file_path_relative)
+
+        try:
+            # Переконатися, що директорія існує
+            os.makedirs(os.path.dirname(full_path), exist_ok=True)
+
+            # Записати вміст файлу
+            with open(full_path, "w", encoding="utf-8") as f:
+                f.write(content)
+            logger.info(f"Оновлено файл: {full_path}")
+
+            # Додати файл до індексу Git
+            add_result = subprocess.run(
+                ["git", "add", full_path],
+                cwd=repo_dir,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            if add_result.returncode != 0:
+                logger.error(f"Помилка 'git add' для {full_path}: {add_result.stderr}")
+                return  # Не продовжувати, якщо add не вдався
+
+            logger.info(f"Додано до індексу Git: {full_path}")
+
+            # Закомітити зміни
+            commit_message = f"AI3: Оновлено {file_path_relative}"
+            # Використовує глобально налаштованого користувача Git (з new_repo.sh)
+            commit_result = subprocess.run(
+                ["git", "commit", "-m", commit_message],
+                cwd=repo_dir,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            if commit_result.returncode != 0:
+                # Можливо, коміт не вдався, бо не було змін (це нормально)
+                if (
+                    "nothing to commit, working tree clean" not in commit_result.stdout
+                    and "no changes added to commit" not in commit_result.stderr
+                ):
+                    logger.error(
+                        f"Помилка 'git commit' для {file_path_relative}: {commit_result.stderr}"
+                    )
+                else:
+                    logger.info(f"Немає змін для коміту в файлі: {file_path_relative}")
+
+            else:
+                logger.info(f"Зроблено коміт для файлу: {file_path_relative}")
+
+        except FileNotFoundError:
+            logger.error(
+                f"Помилка: команда 'git' не знайдена. Переконайтеся, що Git встановлено та доступний у PATH."
+            )
+        except Exception as e:
+            logger.error(
+                f"Не вдалося оновити або закомітити файл {file_path_relative}: {e}"
+            )
+
+    async def handle_ai2_output(self, data):
+        # ... логіка для вилучення file_path та content ...
+        file_path = data.get("filename")  # Або інше поле, що містить шлях
+        content = data.get("code")  # Або інше поле, що містить вміст
+
+        if file_path and content is not None:
+            # Переконайтеся, що file_path є відносним шляхом всередині 'repo/'
+            if file_path.startswith(os.path.abspath("repo")):
+                file_path = os.path.relpath(file_path, "repo")
+
+            await self.update_file_and_commit(file_path, content)
+        else:
+            logger.warning(
+                f"Не вдалося вилучити шлях до файлу або вміст зі звіту AI2: {data}"
+            )
+
+
+async def main():
+    install_missing_modules("together")
+    install_missing_modules("mistralai")
+
+    target = config.get("target")
+    if not target:
+        log_message("[AI3] CRITICAL: 'target' not found in config.json. Exiting.")
+        return
+
+    log_message(f"[AI3] Started with target: {target}")
+
+    log_message(f"[AI3] Checking connection to MCP API at {MCP_API_URL}")
+    if not await wait_for_service(MCP_API_URL, timeout=120):
+        log_message(f"[AI3] CRITICAL: MCP API at {MCP_API_URL} not available. Exiting.")
+        return
+
+    try:
+        repo = _init_or_open_repo(REPO_DIR)
+    except Exception as e:
+        log_message(
+            f"[AI3] CRITICAL: Failed to initialize repository. Exiting. Error: {e}"
+        )
+        return
+
+    structure_obj = None
+    try:
+        api_url = f"{MCP_API_URL}/structure"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(api_url, timeout=10) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    if (
+                        data
+                        and isinstance(data.get("structure"), dict)
+                        and data["structure"]
+                    ):
+                        structure_obj = data["structure"]
+                        log_message("[AI3] Found existing structure from API.")
+    except Exception as e:
+        log_message(f"[AI3] Could not check for existing structure: {e}")
+
+    if not structure_obj:
+        log_message("[AI3] Attempting to generate project structure...")
+        structure_obj = await generate_structure(target)
+
+        if structure_obj:
+            log_message(
+                "[AI3] Structure generated. Sending to API and creating files..."
+            )
+            if await send_structure_to_api(structure_obj):
+                if not await create_files_from_structure(structure_obj, repo):
+                    log_message(
+                        "[AI3] Failed to create files from structure. Continuing monitor."
+                    )
+                    await send_ai3_report("structure_creation_failed")
+            else:
+                log_message(
+                    "[AI3] Failed to send structure to API. Cannot create files."
+                )
+                await send_ai3_report("structure_api_send_failed")
+        else:
+            log_message("[AI3] Failed to generate structure. Cannot create files.")
+            await send_ai3_report("structure_generation_failed")
+
+    log_message("[AI3] Starting simplified log monitoring.")
+    try:
+        await simple_log_monitor()
+    except asyncio.CancelledError:
+        log_message("[AI3] Main task cancelled.")
+    except Exception as e:
+        log_message(f"[AI3] Monitoring stopped unexpectedly: {e}")
+
+    log_message("[AI3] Exiting.")
+
+
+if __name__ == "__main__":
+    log_dir = os.path.dirname(LOG_FILE_PATH)
+    if log_dir:
+        os.makedirs(log_dir, exist_ok=True)
+    asyncio.run(main())

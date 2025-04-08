@@ -1,0 +1,70 @@
+{
+  "name": "Python & Node.js Development",
+  "image": "mcr.microsoft.com/devcontainers/python:1-3.12",
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "lts"
+    },
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+  },
+  "runArgs": ["--add-host=host.docker.internal:host-gateway", "--network=host"],
+  "containerEnv": {
+    "OLLAMA_HOST": "http://localhost:11434",
+    "OLLAMA_API": "http://localhost:11434"
+  },
+  "mounts": [
+    "source=my-app-data,target=/data,type=volume",
+    "source=${localWorkspaceFolder},target=/home/vscode/AI-SYSTEMS,type=bind,consistency=cached"
+  ],
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.black-formatter",
+        "ms-python.flake8",
+        "ms-python.isort",
+        "ms-python.vscode-pylance",
+        "njpwerner.autodocstring",
+        "ms-toolsai.jupyter",
+        "ms-python.debugpy",
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        "vscjava.vscode-java-pack",
+        "redhat.java",
+        "vscjava.vscode-java-debug",
+        "vscjava.vscode-maven",
+        "streetsidesoftware.code-spell-checker",
+        "ms-vscode-remote.remote-containers",
+        "eamodio.gitlens",
+        "ms-azuretools.vscode-docker",
+        "GitHub.copilot",
+        "GitHub.copilot-chat",
+        "batisteo.vscode-django",
+        "openai.openai-chatgpt-adhoc",
+        "donjayamanne.python-environment-manager",
+        "donjayamanne.python-extension-manager"
+      ]
+    }
+  },
+  "forwardPorts": [9000, 3000, 7860, 11434],
+  "portsAttributes": {
+    "9000": {
+      "label": "Hello Remote World",
+      "onAutoForward": "notify"
+    },
+    "3000": {
+      "label": "Node.js Application",
+      "onAutoForward": "notify"
+    },
+    "7860": {
+      "label": "Application Port",
+      "onAutoForward": "notify"
+    },
+    "11434": {
+      "label": "Ollama API",
+      "onAutoForward": "notify"
+    }
+  },
+  "postCreateCommand": "pip install --upgrade pip && pip install -r \"${containerWorkspaceFolder}/requirements.txt\" && if [ -f \"${containerWorkspaceFolder}/package.json\" ]; then cd \"${containerWorkspaceFolder}\" && npm install; else echo 'No package.json found, skipping npm install'; fi && git config --global user.name \"Oleg Kizyma\" && git config --global user.email \"oleg1203@gmail.com\" && echo 'Git user configured successfully'",
+  "workspaceFolder": "/home/vscode/AI-SYSTEMS"
+}

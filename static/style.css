@@ -1,0 +1,451 @@
+:root {
+    --bg-color: #f8f9fa; /* Light default background */
+    --container-bg: #ffffff; /* White container background */
+    --text-color: #212529; /* Dark text */
+    --heading-color: #007bff; /* Blue headings */
+    --border-color: #dee2e6; /* Light border */
+    --primary-color: #007bff;
+    --secondary-color: #6c757d;
+    --tertiary-color: #17a2b8;
+    --success-color: #28a745;
+    --warning-color: #ffc107;
+    --error-color: #dc3545;
+    --font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    --editor-bg: #ffffff; /* Default editor background */
+}
+
+/* Dark Theme Base (applied by default or via JS) */
+body[data-theme="dark"] {
+    --bg-color: #1a1a1a;
+    --container-bg: #2c2c2c;
+    --text-color: #e0e0e0;
+    --heading-color: #58a6ff; /* Lighter blue for dark mode */
+    --border-color: #444;
+    --primary-color: #58a6ff;
+    --secondary-color: #8b949e;
+    --tertiary-color: #3fb950; /* Greenish for contrast */
+    --success-color: #3fb950;
+    --warning-color: #d29922;
+    --error-color: #f85149;
+    --editor-bg: #1e1e1e; /* Dark editor background */
+}
+
+
+/* Specific Dark Themes - Adjust colors as desired */
+[data-theme="winter"] { /* Dark Blue/Winter */
+    --bg-color: #0d1117;
+    --container-bg: #161b22;
+    --text-color: #c9d1d9;
+    --heading-color: #58a6ff;
+    --border-color: #30363d;
+    --primary-color: #58a6ff;
+    --secondary-color: #8b949e;
+    --tertiary-color: #3fb950;
+    --editor-bg: #0d1117;
+}
+
+[data-theme="autumn"] { /* Dark Orange/Autumn */
+    --bg-color: #211d1a;
+    --container-bg: #302a27;
+    --text-color: #e6dbc B;
+    --heading-color: #f07f2e;
+    --border-color: #4a403a;
+    --primary-color: #f07f2e;
+    --secondary-color: #c48d6f;
+    --tertiary-color: #d29922;
+     --editor-bg: #211d1a;
+}
+
+/* Keep light themes for variety, but adjust if needed */
+[data-theme="spring"] { /* Light Green/Spring */
+    --bg-color: #e0f7fa;
+    --container-bg: #ffffff;
+    --text-color: #004d40;
+    --heading-color: #00796b;
+    --border-color: #b2dfdb;
+    --primary-color: #26a69a;
+    --secondary-color: #4db6ac;
+    --tertiary-color: #80cbc4;
+    --editor-bg: #ffffff;
+}
+
+[data-theme="summer"] { /* Light Yellow/Summer */
+    --bg-color: #fffde7;
+    --container-bg: #ffffff;
+    --text-color: #f57f17;
+    --heading-color: #f9a825;
+    --border-color: #fff59d;
+    --primary-color: #ffca28;
+    --secondary-color: #ffb300;
+    --tertiary-color: #ffa000;
+    --editor-bg: #ffffff;
+}
+
+
+body {
+    margin: 0;
+    padding: 0;
+    font-family: var(--font-family);
+    background-color: var(--bg-color);
+    color: var(--text-color);
+    transition: background-color 0.3s ease, color 0.3s ease;
+    overflow-x: hidden; /* Prevent horizontal scroll */
+    display: flex; /* Use flexbox for main layout */
+    flex-direction: column; /* Stack header and container */
+    min-height: 100vh;
+}
+
+.header {
+    background-color: var(--container-bg);
+    padding: 10px 20px;
+    border-bottom: 1px solid var(--border-color);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap; /* Allow wrapping on small screens */
+}
+
+.header h1 {
+    margin: 0;
+    color: var(--heading-color);
+    font-size: 1.5em;
+}
+
+.theme-switcher {
+    display: flex;
+    gap: 10px; /* Spacing between buttons */
+}
+
+.theme-switcher button {
+    padding: 6px 12px;
+    cursor: pointer;
+    background: var(--primary-color);
+    color: white;
+    border: none;
+    border-radius: 4px;
+    transition: background-color 0.3s ease;
+    font-size: 0.9em;
+}
+
+.theme-switcher button:hover {
+    opacity: 0.9;
+}
+
+.container {
+    flex-grow: 1; /* Allow container to fill remaining space */
+    padding: 20px;
+    box-sizing: border-box;
+    display: grid; /* Use Grid for layout */
+    grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); /* Responsive columns */
+    gap: 20px; /* Gap between grid items */
+    width: 100%;
+}
+
+.panel { /* Common panel styling */
+    background: var(--container-bg);
+    padding: 15px;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.05);
+    display: flex;
+    flex-direction: column; /* Stack elements vertically */
+    overflow: hidden; /* Prevent content overflow */
+}
+
+.panel h2 {
+    margin-top: 0;
+    margin-bottom: 15px;
+    color: var(--heading-color);
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 10px;
+    font-size: 1.2em;
+}
+
+/* Specific Panel Spanning (Example) */
+.control-panel { grid-column: span 1; }
+.monitoring-panel { grid-column: span 1; }
+.file-panel { grid-column: span 1; /* Adjust span as needed */ }
+.log-panel { grid-column: span 1; /* Adjust span as needed */ }
+.queue-panel { grid-column: span 1; /* Adjust span as needed */ }
+
+
+/* Control Panel Specifics */
+.control-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 15px;
+}
+
+.control-buttons button {
+    padding: 8px 12px;
+    background: var(--primary-color);
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background-color 0.3s ease;
+    font-size: 0.9em;
+}
+
+.control-buttons button:hover {
+    opacity: 0.9;
+}
+
+.control-buttons button.on { background-color: var(--success-color); }
+.control-buttons button.off { background-color: var(--error-color); }
+
+.prompt-editor textarea {
+    width: calc(100% - 20px); /* Adjust for padding */
+    height: 60px; /* Smaller default height */
+    margin-bottom: 10px;
+    padding: 10px;
+    background: var(--bg-color);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    resize: vertical;
+    color: var(--text-color);
+    font-size: 0.9em;
+    font-family: monospace;
+}
+
+.prompt-editor button {
+     padding: 8px 15px;
+     background: var(--success-color);
+     color: white;
+     border: none;
+     border-radius: 4px;
+     cursor: pointer;
+     transition: background-color 0.3s ease;
+     font-size: 0.9em;
+     align-self: flex-start; /* Align button left */
+}
+.prompt-editor button:hover { opacity: 0.9; }
+
+/* Monitoring Panel */
+.charts {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 15px;
+    margin-bottom: 15px;
+}
+
+.chart-item canvas {
+    width: 100% !important;
+    height: 180px !important; /* Slightly smaller charts */
+    background-color: var(--bg-color);
+    border-radius: 4px;
+    border: 1px solid var(--border-color);
+}
+
+.task-stats p {
+    margin: 5px 0;
+    font-size: 0.95em;
+}
+.task-stats span {
+    font-weight: bold;
+    color: var(--primary-color);
+}
+
+/* File Panel */
+.file-panel-content {
+    display: flex;
+    flex-direction: column;
+    flex-grow: 1; /* Allow content to fill panel */
+    min-height: 0; /* Necessary for flex-grow in column */
+}
+
+#file-structure {
+    height: 200px; /* Fixed initial height */
+    overflow-y: auto;
+    font-family: monospace;
+    background: var(--bg-color);
+    padding: 10px;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    margin-bottom: 15px;
+    font-size: 0.9em;
+    flex-shrink: 0; /* Prevent shrinking */
+}
+
+#editor {
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    flex-grow: 1; /* Editor takes remaining space */
+    min-height: 250px; /* Minimum editor height */
+    width: 100%;
+    background-color: var(--editor-bg); /* Use theme variable */
+}
+
+#file-structure ul {
+    list-style: none;
+    padding-left: 15px; /* Indentation */
+}
+#file-structure li {
+    margin: 3px 0;
+}
+
+#file-structure .folder, #file-structure .file {
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+#file-structure .folder i { color: var(--tertiary-color); }
+#file-structure .file i { color: var(--primary-color); }
+
+#file-structure .folder:hover, #file-structure .file:hover {
+    opacity: 0.8;
+}
+
+#file-structure ul { display: none; } /* Hide subfolders by default */
+#file-structure li.expanded > ul { display: block; } /* Show when expanded */
+
+
+/* Queue Panel */
+.queue-list {
+    display: grid; /* Use grid for queues */
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 15px;
+    flex-grow: 1;
+    overflow-y: auto; /* Scroll individual queues if needed */
+}
+
+.queue-list h3 {
+    grid-column: 1 / -1; /* Make title span all columns */
+    margin-bottom: 10px;
+    color: var(--heading-color);
+    font-size: 1.1em;
+}
+
+.queue-item {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    max-height: 250px; /* Limit height and allow scroll */
+    overflow-y: auto;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    padding: 10px;
+    background-color: var(--bg-color);
+}
+.queue-item h4 { /* Role title */
+    margin-top: 0;
+    margin-bottom: 8px;
+    font-size: 1em;
+    color: var(--secondary-color);
+}
+
+.queue-item li {
+    padding: 6px 8px;
+    margin-bottom: 5px;
+    border-radius: 3px;
+    font-size: 0.85em;
+    border: 1px solid transparent;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    background-color: var(--container-bg); /* Background for items */
+    border: 1px solid var(--border-color);
+}
+
+.queue-item li .status-icon {
+    font-size: 1.1em;
+}
+.queue-item li .task-text {
+    flex-grow: 1;
+    word-break: break-word; /* Prevent long text overflow */
+}
+.queue-item li .task-id {
+    font-size: 0.9em;
+    color: var(--secondary-color);
+    margin-left: auto; /* Push ID to the right */
+    white-space: nowrap;
+}
+
+/* Status colors for queue items */
+.queue-item li[data-status="pending"] { border-left: 3px solid var(--warning-color); }
+.queue-item li[data-status="processing"] { border-left: 3px solid var(--primary-color); }
+.queue-item li[data-status="accepted"],
+.queue-item li[data-status="code_received"], /* Treat code_received visually similar to accepted */
+.queue-item li[data-status="completed"] { border-left: 3px solid var(--success-color); }
+.queue-item li[data-status="failed"] { border-left: 3px solid var(--error-color); }
+
+
+/* Log Panel */
+#log-content {
+    height: 300px; /* Adjust height as needed */
+    overflow-y: auto;
+    background: var(--bg-color);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    padding: 10px;
+    font-family: monospace;
+    font-size: 0.85em;
+    flex-grow: 1;
+    color: var(--text-color); /* Ensure text is visible */
+}
+#log-content p {
+    margin: 2px 0;
+    white-space: pre-wrap; /* Preserve whitespace and wrap */
+    word-break: break-all; /* Break long lines */
+}
+#log-content em { /* Style messages like 'connection established' */
+    color: var(--secondary-color);
+    font-style: normal;
+}
+
+
+/* Notifications */
+.notification {
+    position: fixed;
+    bottom: 20px; /* Position at bottom */
+    right: 20px;
+    padding: 12px 20px;
+    border-radius: 4px;
+    color: white;
+    z-index: 1000;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+    font-size: 0.95em;
+}
+
+.notification.info { background-color: var(--primary-color); }
+.notification.success { background-color: var(--success-color); }
+.notification.warning { background-color: var(--warning-color); color: #333; } /* Darker text for yellow */
+.notification.error { background-color: var(--error-color); }
+
+/* Responsive Adjustments */
+@media (max-width: 1200px) {
+    .container {
+        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    }
+    .file-panel, .log-panel, .queue-panel {
+         grid-column: span 1; /* Ensure they stack */
+    }
+}
+
+@media (max-width: 768px) {
+    .header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 10px;
+    }
+    .container {
+        grid-template-columns: 1fr; /* Single column */
+        padding: 15px;
+    }
+    .panel {
+        min-width: unset; /* Remove min-width */
+    }
+    .charts {
+        grid-template-columns: 1fr; /* Stack charts */
+    }
+    .queue-list {
+        grid-template-columns: 1fr; /* Stack queues */
+    }
+    .theme-switcher {
+        width: 100%;
+        justify-content: center; /* Center theme buttons */
+    }
+}

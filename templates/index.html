@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="uk" data-theme="dark"> <!-- Default to dark theme -->
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Control Dashboard</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://unpkg.com/monaco-editor@0.34.0/min/vs/loader.js"></script>
+    <!-- Font Awesome for icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+</head>
+<body>
+    <header class="header">
+        <h1>AI Control Dashboard</h1>
+        <div class="theme-switcher">
+            <button onclick="setTheme('spring')" data-theme="spring">Весна</button>
+            <button onclick="setTheme('summer')" data-theme="summer">Літо</button>
+            <button onclick="setTheme('autumn')" data-theme="autumn">Осінь</button>
+            <button onclick="setTheme('winter')" data-theme="winter">Зима</button>
+             <button onclick="setTheme('dark')" data-theme="dark">Темна</button> <!-- Added generic dark -->
+        </div>
+    </header>
+
+    <div class="container">
+        <!-- Control Panel -->
+        <section class="panel control-panel">
+            <h2><i class="fas fa-cogs"></i> Control Center</h2>
+            <div class="control-buttons">
+                <!-- Buttons now get 'on'/'off' class via JS -->
+                <button id="ai1-button" onclick="toggleAI('ai1')">AI1: <span id="ai1-status">Off</span></button>
+                <button id="ai2-button" onclick="toggleAI('ai2')">AI2: <span id="ai2-status">Off</span></button>
+                <button id="ai3-button" onclick="toggleAI('ai3')">AI3: <span id="ai3-status">Off</span></button>
+                <button id="start-all-button" onclick="startAll()">Start All</button> <!-- Added ID -->
+                <button id="stop-all-button" onclick="stopAll()">Stop All</button>
+                <button onclick="resetSystem()">Reset & Restart</button>
+                <button id="clear-log-button" onclick="clearLogs()">Clear Logs</button> <!-- Added ID -->
+            </div>
+            <div class="prompt-editor">
+                <h3><i class="fas fa-edit"></i> Edit Prompts & Target</h3>
+                <textarea id="target" placeholder="Project Target Goal">{{ target }}</textarea>
+                <textarea id="ai1-prompt" placeholder="AI1 Prompt (Curator)">{{ config.ai1_prompt }}</textarea>
+                <textarea id="ai2-0-prompt" placeholder="AI2 Prompt (Executor)">{{ config.ai2_prompts[0] }}</textarea>
+                <textarea id="ai2-1-prompt" placeholder="AI2 Prompt (Tester)">{{ config.ai2_prompts[1] }}</textarea>
+                <textarea id="ai2-2-prompt" placeholder="AI2 Prompt (Documenter)">{{ config.ai2_prompts[2] }}</textarea>
+                <textarea id="ai3-prompt" placeholder="AI3 Prompt (Structure/File Manager)">{{ config.ai3_prompt }}</textarea>
+                <button onclick="saveConfig()">Save Config</button>
+            </div>
+        </section>
+
+        <!-- Monitoring Panel -->
+        <section class="panel monitoring-panel">
+            <h2><i class="fas fa-chart-line"></i> Monitoring</h2>
+             <div class="task-stats">
+                <p>Total Tasks: <span id="total-tasks">0</span></p>
+                <p>Completed: <span id="completed-tasks">0</span></p>
+                <p>Efficiency: <span id="efficiency">0%</span></p>
+            </div>
+            <div class="charts">
+                <div class="chart-item"><canvas id="taskChart"></canvas></div>
+                <div class="chart-item"><canvas id="progressChart"></canvas></div>
+                <div class="chart-item"><canvas id="gitChart"></canvas></div>
+            </div>
+        </section>
+
+        <!-- File Panel -->
+        <section class="panel file-panel">
+             <h2><i class="fas fa-folder-open"></i> Files & Editor</h2>
+             <div class="file-panel-content">
+                <div id="file-structure">
+                    <!-- File structure will be populated by JS -->
+                    <p><em>Loading file structure...</em></p>
+                </div>
+                <div id="editor">
+                    <!-- Monaco Editor will be initialized here -->
+                </div>
+             </div>
+        </section>
+
+         <!-- Queue Panel -->
+        <section class="panel queue-panel">
+            <h2><i class="fas fa-tasks"></i> Task Queues</h2>
+            <div class="queue-list">
+                 <div>
+                    <h4>Executor Queue (<span id="executor-queue-count">0</span>)</h4>
+                    <ul id="executor-queue" class="queue-item"></ul>
+                 </div>
+                 <div>
+                    <h4>Tester Queue (<span id="tester-queue-count">0</span>)</h4>
+                    <ul id="tester-queue" class="queue-item"></ul>
+                 </div>
+                 <div>
+                    <h4>Documenter Queue (<span id="documenter-queue-count">0</span>)</h4>
+                    <ul id="documenter-queue" class="queue-item"></ul>
+                 </div>
+            </div>
+        </section>
+
+        <!-- Log Panel -->
+        <section class="panel log-panel">
+             <h2><i class="fas fa-clipboard-list"></i> System Logs</h2>
+             <div id="log-content">
+                 <p><em>Connecting to server...</em></p>
+                 <!-- Log messages will appear here -->
+             </div>
+        </section>
+
+    </div> <!-- End container -->
+
+    <script src="/static/script.js"></script>
+</body>
+</html>

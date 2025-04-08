@@ -1,0 +1,15 @@
+services:
+  mcp-9:
+    build: .
+    container_name: mcp-9
+    network_mode: host
+    environment:
+      - WEB_PORT=7860
+      - DOCKER_ENV=true
+    volumes:
+      - ./:/app
+      - ./logs:/app/logs
+      - ./repo:/app/repo
+      - ~/.ssh/id_rsa.pub:/root/.ssh/id_rsa.pub:ro
+    restart: on-failure
+    command: bash -c "bash /app/run_async_services.sh"
