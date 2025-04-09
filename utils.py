@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import random  # Added import
 import time
 from datetime import datetime
 from typing import Any, Dict, Optional
@@ -329,3 +330,48 @@ async def wait_for_service(url, timeout=60):
 
         logger.error({"message": f"Service at {url} not available after {timeout}s"})
         return False
+
+
+async def apply_request_delay(ai_identifier: str, role: Optional[str] = None):
+    """Applies a random delay based on configuration before making an API request."""
+    try:
+        # Load fresh config inside function to get latest values
+        # Assuming load_config is robust enough or default config exists
+        from config import load_config
+
+        config = load_config()
+        delay_config = config.get("request_delays", {})
+
+        delay_range = None
+        if ai_identifier == "ai2" and role:
+            delay_range = delay_config.get("ai2", {}).get(role)
+        elif ai_identifier in delay_config:
+            delay_range = delay_config.get(ai_identifier)
+
+        if (
+            delay_range
+            and isinstance(delay_range.get("min"), (int, float))
+            and isinstance(delay_range.get("max"), (int, float))
+        ):
+            min_delay = delay_range["min"]
+            max_delay = delay_range["max"]
+            if min_delay <= max_delay and min_delay >= 0:  # Ensure valid range
+                delay = random.uniform(min_delay, max_delay)
+                logger.debug(
+                    f"Applying delay for {ai_identifier}{f' ({role})' if role else ''}: {delay:.2f}s"
+                )
+                await asyncio.sleep(delay)
+            else:
+                logger.warning(
+                    f"Invalid delay range for {ai_identifier}{f' ({role})' if role else ''}: min={min_delay}, max={max_delay}. Skipping delay."
+                )
+        else:
+            # Log only if delays are expected but not configured correctly
+            if delay_config:  # Only warn if request_delays section exists
+                logger.debug(
+                    f"No valid delay configured for {ai_identifier}{f' ({role})' if role else ''}. Skipping delay."
+                )
+    except Exception as e:
+        logger.error(
+            f"Error applying request delay: {e}"
+        )  # Log error but don't block execution

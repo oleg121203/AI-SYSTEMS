@@ -12,7 +12,7 @@ import aiohttp
 # Используем функцию load_config из config.py
 from config import load_config
 from providers import BaseProvider, ProviderFactory
-from utils import log_message
+from utils import apply_request_delay, log_message  # Import apply_request_delay
 
 config = load_config()
 MCP_API_URL = config.get("mcp_api", "http://localhost:7860")
@@ -228,6 +228,7 @@ class AI1:
         api_url = f"{MCP_API_URL}/file_content"
         params = {"path": file_path}
         log_message(f"[AI1] Attempting to fetch content for: {file_path}")
+        await apply_request_delay("ai1")  # Add delay before request
         try:
             session = await self._get_api_session()
             async with session.get(api_url, params=params, timeout=45) as response:
@@ -264,6 +265,7 @@ class AI1:
         """Fetches the status of a specific subtask from the API."""
         api_url = f"{MCP_API_URL}/subtask_status/{subtask_id}"
         log_message(f"[AI1] Querying API for status of subtask: {subtask_id}")
+        await apply_request_delay("ai1")  # Add delay before request
         try:
             session = await self._get_api_session()
             async with session.get(api_url, timeout=15) as response:
@@ -296,6 +298,7 @@ class AI1:
         """Fetches all task statuses from the API."""
         api_url = f"{MCP_API_URL}/all_subtask_statuses"
         log_message(f"[AI1] Querying API for all subtask statuses...")
+        await apply_request_delay("ai1")  # Add delay before request
         try:
             session = await self._get_api_session()
             async with session.get(api_url, timeout=30) as response:
@@ -529,6 +532,7 @@ class AI1:
         log_message(
             f"[AI1] Sending subtask: ID={subtask_id}, Role={role}, Filename={filename}{', Code included' if code is not None else ''}"
         )
+        await apply_request_delay("ai1")  # Add delay before request
         try:
             session = await self._get_api_session()
             async with session.post(api_url, json=payload, timeout=60) as response:

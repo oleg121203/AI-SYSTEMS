@@ -159,28 +159,16 @@ class BaseProvider(ABC):
             config: Параметры конфигурации провайдера (из config.json["providers"][provider_name])
         """
         self.config = config or {}
-        # Используем 'type' из конфига как имя по умолчанию, если есть
         self.name = self.config.get("type", "base")
-        self.model = self.config.get(
-            "model"
-        )  # Модель по умолчанию для этого экземпляра
-        self.api_key = self.config.get("api_key")  # API ключ для этого экземпляра
-        self.endpoint = self.config.get("endpoint")  # Endpoint для этого экземпляра
+        self.model = self.config.get("model")
+        self.api_key = self.config.get("api_key")
+        self.endpoint = self.config.get("endpoint")
+        self._session: Optional[aiohttp.ClientSession] = None
         self.setup()
 
     @abstractmethod
     def setup(self) -> None:
         """Настройка и проверка доступности провайдера."""
-        pass
-
-    @abstractmethod
-    def get_client(self) -> Any:
-        """
-        Получение клиента API провайдера.
-
-        Returns:
-            Any: Клиент API
-        """
         pass
 
     @abstractmethod
@@ -192,57 +180,74 @@ class BaseProvider(ABC):
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
     ) -> str:
-        """
-        Генерация ответа на запрос.
-
-        Args:
-            prompt: Запрос для AI
-            system_prompt: Системный промпт (опционально)
-            model: Модель для использования (переопределяет модель из config)
-            max_tokens: Максимальное количество токенов (переопределяет config)
-            temperature: Температура генерации (переопределяет config)
-
-        Returns:
-            str: Сгенерированный ответ
-        """
+        """Генерация ответа на запрос."""
         pass
 
-    def get_available_models(self) -> List[str]:
-        """
-        Получение списка доступных моделей.
+    async def get_client_session(self) -> aiohttp.ClientSession:
+        """Gets or creates an aiohttp client session."""
+        if self._session is None or self._session.closed:
+            headers = {}
+            is_sdk_provider = isinstance(
+                self,
+                (
+                    OpenAIProvider,
+                    AnthropicProvider,
+                    GroqProvider,
+                    GeminiProvider,
+                    CohereProvider,
+                    TogetherProvider,
+                    CodestralProvider,
+                ),
+            )
 
-        Returns:
-            List[str]: Список доступных моделей
-        """
-        # По умолчанию возвращаем модель, указанную в конфиге
+            if hasattr(self, "api_key") and self.api_key and not is_sdk_provider:
+                current_headers = self._session.headers if self._session else {}
+                if "Authorization" not in current_headers:
+                    headers["Authorization"] = f"Bearer {self.api_key}"
+
+            if isinstance(self, OpenRouterProvider):
+                headers["HTTP-Referer"] = self.config.get("referer", "http://localhost")
+                headers["X-Title"] = self.config.get("title", "MCP-AI-App")
+
+            self._session = aiohttp.ClientSession(headers=headers)
+            logger.debug(f"Created aiohttp session for {self.name}")
+        return self._session
+
+    async def close_session(self):
+        """Closes the aiohttp client session if it exists."""
+        if self._session and not self._session.closed:
+            await self._session.close()
+            logger.info(f"Closed aiohttp session for {self.name}")
+            self._session = None
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        await self.close_session()
+
+    def get_available_models(self) -> List[str]:
+        """Получение списка доступных моделей."""
         return [self.model] if self.model else []
 
     def get_default_model(self) -> Optional[str]:
-        """
-        Получение модели по умолчанию из конфигурации экземпляра.
-
-        Returns:
-            str: Название модели по умолчанию или None
-        """
+        """Получение модели по умолчанию из конфигурации экземпляра."""
         return self.model
 
 
-# --- Существующие провайдеры (OpenAI, Anthropic, Groq, Local, Ollama) ---
 class OpenAIProvider(BaseProvider):
     """Провайдер для OpenAI."""
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
-        super().__init__(config)  # Инициализируем BaseProvider с конфигом
-        self.name = "openai"  # Переопределяем имя, если нужно
-        self._client = None  # Кэширование клиента
+        super().__init__(config)
+        self.name = "openai"
+        self._client = None
 
     def setup(self) -> None:
-        """Настройка и проверка доступности OpenAI."""
         try:
             import openai
 
             self.openai = openai
-            # Получаем ключ из конфига ИЛИ из переменной окружения
             self.api_key = self.config.get("api_key") or os.environ.get(
                 "OPENAI_API_KEY"
             )
@@ -259,7 +264,6 @@ class OpenAIProvider(BaseProvider):
             self.openai = None
 
     def get_client(self) -> Any:
-        """Получение клиента API OpenAI."""
         if not self.openai:
             raise ValueError("Модуль openai не импортирован.")
         if not self.api_key:
@@ -276,13 +280,11 @@ class OpenAIProvider(BaseProvider):
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
     ) -> str:
-        """Генерация ответа с помощью OpenAI."""
         if not self.openai:
             return "Ошибка генерации: модуль openai не импортирован."
         if not self.api_key:
             return "Ошибка генерации: API ключ OpenAI не установлен."
 
-        # Приоритет: аргумент -> конфиг экземпляра -> дефолт провайдера
         model_to_use = model or self.get_default_model() or "gpt-4"
         max_tokens_to_use = max_tokens or self.config.get("max_tokens") or 2000
         temperature_to_use = (
@@ -311,15 +313,19 @@ class OpenAIProvider(BaseProvider):
                     f"Ответ от OpenAI не содержит ожидаемых данных: {response}"
                 )
                 return "Ошибка генерации: Не получен корректный ответ от API."
+        except self.openai.APIError as e:
+            logger.error(
+                f"OpenAI API Error ({model_to_use}): Status={e.status_code}, Message={e.message}"
+            )
+            return f"Ошибка генерации (OpenAI API {e.status_code}): {e.message}"
         except Exception as e:
             logger.error(
-                f"Ошибка при генерации ответа с помощью OpenAI ({model_to_use}): {e}"
+                f"Ошибка при генерации ответа с помощью OpenAI ({model_to_use}): {e}",
+                exc_info=True,
             )
-            error_message = str(e)
-            return f"Ошибка генерации: {error_message}"
+            return f"Ошибка генерации: {str(e)}"
 
     def get_available_models(self) -> List[str]:
-        """Получение списка доступных моделей OpenAI."""
         default_model = self.get_default_model()
         known_models = ["gpt-4", "gpt-4-turbo", "gpt-3.5-turbo"]
         if default_model and default_model not in known_models:
@@ -414,12 +420,17 @@ class AnthropicProvider(BaseProvider):
                     f"Ответ от Anthropic не содержит ожидаемых данных: {response}"
                 )
                 return "Ошибка генерации: Не получен корректный ответ от API."
+        except self.anthropic.APIError as e:
+            logger.error(
+                f"Anthropic API Error ({model_to_use}): Status={e.status_code}, Message={e.message}"
+            )
+            return f"Ошибка генерации (Anthropic API {e.status_code}): {e.message}"
         except Exception as e:
             logger.error(
-                f"Ошибка при генерации ответа с помощью Anthropic ({model_to_use}): {e}"
+                f"Ошибка при генерации ответа с помощью Anthropic ({model_to_use}): {e}",
+                exc_info=True,
             )
-            error_message = str(e)
-            return f"Ошибка генерации: {error_message}"
+            return f"Ошибка генерации: {str(e)}"
 
     def get_available_models(self) -> List[str]:
         known = [
@@ -507,12 +518,17 @@ class GroqProvider(BaseProvider):
                     f"Ответ от Groq не содержит ожидаемых данных: {response}"
                 )
                 return "Ошибка генерации: Не получен корректный ответ от API."
+        except self.groq.APIError as e:
+            logger.error(
+                f"Groq API Error ({model_to_use}): Status={e.status_code}, Message={e.message}"
+            )
+            return f"Ошибка генерации (Groq API {e.status_code}): {e.message}"
         except Exception as e:
             logger.error(
-                f"Ошибка при генерации ответа с помощью Groq ({model_to_use}): {e}"
+                f"Ошибка при генерации ответа с помощью Groq ({model_to_use}): {e}",
+                exc_info=True,
             )
-            error_message = str(e)
-            return f"Ошибка генерации: {error_message}"
+            return f"Ошибка генерации: {str(e)}"
 
     def get_available_models(self) -> List[str]:
         known = [
@@ -533,7 +549,6 @@ class LocalProvider(BaseProvider):
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         super().__init__(config)
         self.name = "local"
-        self._session = None
 
     def setup(self) -> None:
         if not self.endpoint:
@@ -547,14 +562,6 @@ class LocalProvider(BaseProvider):
             logger.warning(
                 "API ключ указан для LocalProvider, но обычно не используется."
             )
-
-    async def get_client_session(self) -> aiohttp.ClientSession:
-        if self._session is None or self._session.closed:
-            headers = {}
-            if self.api_key:
-                headers["Authorization"] = f"Bearer {self.api_key}"
-            self._session = aiohttp.ClientSession(headers=headers)
-        return self._session
 
     async def generate(
         self,
@@ -603,21 +610,27 @@ class LocalProvider(BaseProvider):
                         )
                         return "Ошибка генерации: Не получен корректный ответ от локального API."
                 else:
-                    error_message = response_data.get("error", {}).get(
-                        "message", await response.text()
-                    )
-                    logger.error(
-                        f"Ошибка при генерации ответа с локальной моделью ({model_to_use}, {response.status}): {error_message}"
-                    )
-                    return f"Ошибка генерации ({response.status}): {error_message}"
+                    response.raise_for_status()
+        except aiohttp.ClientResponseError as e:
+            error_message = e.message
+            try:
+                response_data = await e.response.json()
+                error_message = response_data.get("error", {}).get("message", e.message)
+            except Exception:
+                pass
+            logger.error(
+                f"Local API HTTP Error ({model_to_use}, {e.status}): {error_message}"
+            )
+            return f"Ошибка генерации ({e.status}): {error_message}"
         except aiohttp.ClientError as e:
             logger.error(f"Ошибка соединения с локальным API {self.endpoint}: {e}")
             return f"Ошибка генерации: Не удалось подключиться к локальному API ({e})"
         except Exception as e:
             logger.error(
-                f"Неожиданная ошибка при генерации ответа с локальной моделью ({model_to_use}): {e}"
+                f"Неожиданная ошибка при генерации ответа с локальной моделью ({model_to_use}): {e}",
+                exc_info=True,
             )
-            return f"Ошибка генерации: {e}"
+            return f"Ошибка генерации: {str(e)}"
 
     async def get_available_models(self) -> List[str]:
         api_url = f"{self.endpoint}/models"
@@ -639,17 +652,6 @@ class LocalProvider(BaseProvider):
         except Exception as e:
             logger.error(f"Ошибка при получении списка локальных моделей: {e}")
             return super().get_available_models()
-
-    async def close_session(self):
-        if self._session and not self._session.closed:
-            await self._session.close()
-            logger.info("Сессия LocalProvider закрыта.")
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, exc_type, exc, tb):
-        await self.close_session()
 
 
 class OllamaProvider(BaseProvider):
@@ -701,12 +703,6 @@ class OllamaProvider(BaseProvider):
             logger.info(f"Ollama настроен на использование REST API: {self.endpoint}")
 
     def get_client(self) -> Any:
-        """
-        Получение клиента API Ollama (только если используется SDK).
-
-        Returns:
-            Any: Клиент Ollama SDK или вызывает ошибку.
-        """
         if self.use_sdk and self._client:
             return self._client
         elif self.use_sdk and not self._client:
@@ -715,11 +711,6 @@ class OllamaProvider(BaseProvider):
             raise NotImplementedError(
                 "Метод get_client не применим при использовании Ollama через REST API. Используйте get_client_session."
             )
-
-    async def get_client_session(self) -> aiohttp.ClientSession:
-        if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession()
-        return self._session
 
     async def generate(
         self,
@@ -743,7 +734,6 @@ class OllamaProvider(BaseProvider):
         messages.append({"role": "user", "content": prompt})
 
         options = {"temperature": temperature_to_use}
-        options = {k: v for k, v in options.items() if v is not None}
 
         try:
             if self.use_sdk and self._client:
@@ -783,22 +773,28 @@ class OllamaProvider(BaseProvider):
                             )
                             return "Ошибка генерации: Не получен корректный ответ от Ollama REST API."
                     else:
-                        error_message = response_data.get(
-                            "error", await response.text()
-                        )
-                        logger.error(
-                            f"Ошибка при генерации ответа с помощью Ollama REST API ({model_to_use}, {response.status}): {error_message}"
-                        )
-                        return f"Ошибка генерации ({response.status}): {error_message}"
+                        response.raise_for_status()
 
+        except aiohttp.ClientResponseError as e:
+            error_message = e.message
+            try:
+                response_data = await e.response.json()
+                error_message = response_data.get("error", e.message)
+            except Exception:
+                pass
+            logger.error(
+                f"Ollama REST API HTTP Error ({model_to_use}, {e.status}): {error_message}"
+            )
+            return f"Ошибка генерации ({e.status}): {error_message}"
         except aiohttp.ClientError as e:
             logger.error(f"Ошибка соединения с Ollama REST API {self.endpoint}: {e}")
             return f"Ошибка генерации: Не удалось подключиться к Ollama REST API ({e})"
         except Exception as e:
             logger.error(
-                f"Ошибка при генерации ответа с помощью Ollama ({model_to_use}): {e}"
+                f"Ошибка при генерации ответа с помощью Ollama ({model_to_use}): {e}",
+                exc_info=True,
             )
-            return f"Ошибка генерации: {e}"
+            return f"Ошибка генерации: {str(e)}"
 
     async def get_available_models(self) -> List[str]:
         default_models = ["llama3", "mistral"]
@@ -826,26 +822,13 @@ class OllamaProvider(BaseProvider):
             logger.error(f"Ошибка при получении списка моделей Ollama: {e}")
             return default_models + super().get_available_models()
 
-    async def close_session(self):
-        if self._session and not self._session.closed:
-            await self._session.close()
-            logger.info("Сессия OllamaProvider (REST) закрыта.")
 
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, exc_type, exc, tb):
-        await self.close_session()
-
-
-# --- Новые провайдеры ---
 class OpenRouterProvider(BaseProvider):
     """Провайдер для OpenRouter (OpenAI-совместимый API)."""
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         super().__init__(config)
         self.name = "openrouter"
-        self._session = None
 
     def setup(self) -> None:
         if not self.endpoint:
@@ -866,16 +849,6 @@ class OpenRouterProvider(BaseProvider):
                 logger.info("API ключ для OpenRouter найден в переменной окружения.")
         else:
             logger.info("API ключ для OpenRouter найден в конфигурации.")
-
-    async def get_client_session(self) -> aiohttp.ClientSession:
-        if self._session is None or self._session.closed:
-            headers = (
-                {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
-            )
-            headers["HTTP-Referer"] = self.config.get("referer", "http://localhost")
-            headers["X-Title"] = self.config.get("title", "MCP-AI-App")
-            self._session = aiohttp.ClientSession(headers=headers)
-        return self._session
 
     async def generate(
         self,
@@ -929,32 +902,27 @@ class OpenRouterProvider(BaseProvider):
                         )
                         return "Ошибка генерации: Не получен корректный ответ от OpenRouter API."
                 else:
-                    error_message = response_data.get("error", {}).get(
-                        "message", await response.text()
-                    )
-                    logger.error(
-                        f"Ошибка при генерации ответа с OpenRouter ({model_to_use}, {response.status}): {error_message}"
-                    )
-                    return f"Ошибка генерации ({response.status}): {error_message}"
+                    response.raise_for_status()
+        except aiohttp.ClientResponseError as e:
+            error_message = e.message
+            try:
+                response_data = await e.response.json()
+                error_message = response_data.get("error", {}).get("message", e.message)
+            except Exception:
+                pass
+            logger.error(
+                f"OpenRouter API HTTP Error ({model_to_use}, {e.status}): {error_message}"
+            )
+            return f"Ошибка генерации ({e.status}): {error_message}"
         except aiohttp.ClientError as e:
             logger.error(f"Ошибка соединения с OpenRouter API {self.endpoint}: {e}")
             return f"Ошибка генерации: Не удалось подключиться к OpenRouter API ({e})"
         except Exception as e:
             logger.error(
-                f"Неожиданная ошибка при генерации ответа с OpenRouter ({model_to_use}): {e}"
+                f"Неожиданная ошибка при генерации ответа с OpenRouter ({model_to_use}): {e}",
+                exc_info=True,
             )
-            return f"Ошибка генерации: {e}"
-
-    async def close_session(self):
-        if self._session and not self._session.closed:
-            await self._session.close()
-            logger.info("Сессия OpenRouterProvider закрыта.")
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, exc_type, exc, tb):
-        await self.close_session()
+            return f"Ошибка генерации: {str(e)}"
 
 
 class CohereProvider(BaseProvider):
@@ -1029,12 +997,17 @@ class CohereProvider(BaseProvider):
                     f"Ответ от Cohere ({model_to_use}) не содержит ожидаемых данных: {response}"
                 )
                 return "Ошибка генерации: Не получен корректный ответ от Cohere API."
+        except self.cohere.CohereAPIError as e:
+            logger.error(
+                f"Cohere API Error ({model_to_use}): Status={e.http_status}, Message={e.message}"
+            )
+            return f"Ошибка генерации (Cohere API {e.http_status}): {e.message}"
         except Exception as e:
             logger.error(
-                f"Ошибка при генерации ответа с помощью Cohere ({model_to_use}): {e}"
+                f"Ошибка при генерации ответа с помощью Cohere ({model_to_use}): {e}",
+                exc_info=True,
             )
-            error_message = str(e)
-            return f"Ошибка генерации: {error_message}"
+            return f"Ошибка генерации: {str(e)}"
 
     def get_available_models(self) -> List[str]:
         known = ["command-r", "command-r-plus", "command", "command-light"]
@@ -1115,7 +1088,9 @@ class GeminiProvider(BaseProvider):
             generation_config["temperature"] = temperature_to_use
 
         contents = [prompt]
-        system_instruction = system_prompt if system_prompt else None
+        system_instruction_param = (
+            {"system_instruction": system_prompt} if system_prompt else {}
+        )
 
         try:
             model_client = self.get_client(model_to_use)
@@ -1126,7 +1101,7 @@ class GeminiProvider(BaseProvider):
                     if generation_config
                     else None
                 ),
-                system_instruction=system_instruction,
+                **system_instruction_param,
             )
 
             if response and hasattr(response, "text"):
@@ -1157,12 +1132,18 @@ class GeminiProvider(BaseProvider):
                 return (
                     f"Ошибка генерации: Не получен текст от Gemini API.{block_reason}"
                 )
+        except self.genai.types.generation_types.StopCandidateException as e:
+            logger.error(f"Gemini Generation Stopped ({model_to_use}): {e}")
+            return f"Ошибка генерации (Gemini Stop): {e}"
         except Exception as e:
+            error_detail = str(e)
+            if hasattr(e, "message"):
+                error_detail = e.message
             logger.error(
-                f"Ошибка при генерации ответа с помощью Gemini ({model_to_use}): {e}"
+                f"Ошибка при генерации ответа с помощью Gemini ({model_to_use}): {error_detail}",
+                exc_info=True,
             )
-            error_message = str(e)
-            return f"Ошибка генерации: {error_message}"
+            return f"Ошибка генерации: {error_detail}"
 
     def get_available_models(self) -> List[str]:
         known = ["gemini-1.5-pro-latest", "gemini-1.5-flash-latest", "gemini-pro"]
@@ -1178,28 +1159,23 @@ class TogetherProvider(BaseProvider):
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         super().__init__(config)
         self.name = "together"
-        self._client = None  # Клиент SDK
+        self._client = None
 
     def setup(self) -> None:
-        """Настройка клиента Together AI."""
-        if not Together:  # Проверяем, импортирована ли библиотека
+        if not Together:
             logger.error(
                 "Библиотека 'together' не установлена. TogetherProvider не может быть настроен."
             )
-            return  # Не можем продолжить настройку
+            return
 
-        # API ключ берется из конфига или переменной окружения
         self.api_key = self.config.get("api_key") or os.environ.get("TOGETHER_API_KEY")
         if not self.api_key:
             logger.error(
                 "API ключ для Together AI не найден ни в конфигурации, ни в TOGETHER_API_KEY."
             )
-            # Не создаем клиент без ключа
         else:
             logger.info("API ключ для Together AI найден.")
             try:
-                # Клиент Together SDK автоматически использует TOGETHER_API_KEY из env,
-                # но можно передать явно: api_key=self.api_key
                 self._client = Together(api_key=self.api_key)
                 logger.info("Together AI SDK настроен успешно.")
             except Exception as e:
@@ -1207,7 +1183,6 @@ class TogetherProvider(BaseProvider):
                 self._client = None
 
     def get_client(self) -> Any:
-        """Получение клиента API Together AI."""
         if not self._client:
             raise ValueError(
                 "Клиент Together AI SDK не инициализирован (проверьте API ключ и установку библиотеки)."
@@ -1222,7 +1197,6 @@ class TogetherProvider(BaseProvider):
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
     ) -> str:
-        """Генерация ответа с помощью Together AI SDK."""
         if not self._client:
             return "Ошибка генерации: Клиент Together AI SDK не инициализирован."
 
@@ -1270,12 +1244,12 @@ class TogetherProvider(BaseProvider):
             return f"Ошибка генерации (Together API): {e}"
         except Exception as e:
             logger.error(
-                f"Неожиданная ошибка при генерации ответа с Together AI SDK ({model_to_use}): {e}"
+                f"Неожиданная ошибка при генерации ответа с Together AI SDK ({model_to_use}): {e}",
+                exc_info=True,
             )
-            return f"Ошибка генерации: {e}"
+            return f"Ошибка генерации: {str(e)}"
 
     def get_available_models(self) -> List[str]:
-        """Получение списка доступных моделей Together AI (если возможно)."""
         if not self._client:
             logger.warning(
                 "Невозможно получить список моделей: клиент Together AI не инициализирован."
@@ -1296,19 +1270,15 @@ class CodestralProvider(BaseProvider):
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         super().__init__(config)
         self.name = "codestral"
-        self._client: Optional[MistralAsyncClient] = None  # Клиент SDK
+        self._client: Optional[MistralAsyncClient] = None
 
     def setup(self) -> None:
-        """Настройка клиента Mistral AI."""
-        if (
-            not MistralAsyncClient or not ChatMessage
-        ):  # Проверяем, импортированы ли компоненты
+        if not MistralAsyncClient or not ChatMessage:
             logger.error(
                 "Компоненты 'mistralai' (MistralAsyncClient, ChatMessage) не установлены или не импортированы. CodestralProvider не может быть настроен."
             )
-            return  # Не можем продолжить настройку
+            return
 
-        # API ключ берется из конфига или переменных окружения
         self.api_key = (
             self.config.get("api_key")
             or os.environ.get("MISTRAL_API_KEY")
@@ -1318,11 +1288,9 @@ class CodestralProvider(BaseProvider):
             logger.error(
                 "API ключ для Codestral/Mistral не найден ни в конфигурации, ни в MISTRAL_API_KEY/CODESTRAL_API_KEY."
             )
-            # Не создаем клиент без ключа
         else:
             logger.info("API ключ для Codestral/Mistral найден.")
             try:
-                # Инициализируем асинхронный клиент
                 self._client = MistralAsyncClient(api_key=self.api_key)
                 logger.info("Mistral AI AsyncClient настроен успешно.")
             except Exception as e:
@@ -1330,7 +1298,6 @@ class CodestralProvider(BaseProvider):
                 self._client = None
 
     def get_client(self) -> MistralAsyncClient:
-        """Получение клиента API Mistral AI."""
         if not self._client:
             raise ValueError(
                 "Клиент Mistral AI AsyncClient не инициализирован (проверьте API ключ и установку библиотеки)."
@@ -1345,7 +1312,6 @@ class CodestralProvider(BaseProvider):
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
     ) -> str:
-        """Генерация ответа с помощью Mistral AI SDK (chat endpoint)."""
         if not self._client or not ChatMessage:
             return "Ошибка генерации: Клиент Mistral AI SDK не инициализирован или компоненты не импортированы."
 
@@ -1387,22 +1353,15 @@ class CodestralProvider(BaseProvider):
                     "Ошибка генерации: Не получен корректный ответ от Mistral AI SDK."
                 )
 
-        except (
-            Exception
-        ) as e:  # Ловим общую ошибку, т.к. specific Mistral exceptions might vary
+        except Exception as e:
             logger.error(
-                f"Ошибка при генерации ответа с Mistral AI SDK ({model_to_use}): {e}"
+                f"Ошибка при генерации ответа с Mistral AI SDK ({model_to_use}): {e}",
+                exc_info=True,
             )
             error_message = str(e)
             if hasattr(e, "message"):
                 error_message = e.message
             return f"Ошибка генерации (Mistral API): {error_message}"
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, exc_type, exc, tb):
-        pass
 
 
 try:

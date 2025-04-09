@@ -11,7 +11,7 @@ import aiohttp
 # Используем функцию load_config из config.py
 from config import load_config
 from providers import BaseProvider, ProviderFactory
-from utils import log_message
+from utils import apply_request_delay, log_message  # Import apply_request_delay
 
 # Настройка логирования
 logging.basicConfig(
@@ -184,19 +184,26 @@ class AI2:
         provider_config = self.providers_config.get(self.role, {})
         provider_name = provider_config.get("name", "N/A")
         primary_provider = None
+        fallback_provider = None
 
         try:
             primary_provider = await self._get_provider_instance()
             logger.info(
                 f"Попытка генерации с основным провайдером '{primary_provider.name}' для роли '{self.role}'."
             )
-            return await primary_provider.generate(
+            result = await primary_provider.generate(
                 prompt=user_prompt,
                 system_prompt=system_prompt,
                 model=model or provider_config.get("model"),
                 max_tokens=max_tokens or self.ai_config.get("max_tokens"),
                 temperature=temperature or self.ai_config.get("temperature"),
             )
+            if isinstance(result, str) and result.startswith("Ошибка генерации"):
+                raise Exception(
+                    f"Primary provider '{primary_provider.name}' failed: {result}"
+                )
+            return result
+
         except Exception as e:
             primary_provider_name_for_log = (
                 primary_provider.name if primary_provider else provider_name
@@ -212,15 +219,29 @@ class AI2:
                 fallback_config_base = self.config.get("providers", {}).get(
                     self.fallback_provider_name, {}
                 )
-                fallback_config = {**fallback_config_base, **self.ai_config}
-                fallback_config.pop("provider", None)
-                fallback_config.pop("fallback_provider", None)
+                fallback_config = {
+                    **fallback_config_base,
+                    **{
+                        k: v
+                        for k, v in self.ai_config.items()
+                        if k
+                        not in [
+                            "executor",
+                            "tester",
+                            "documenter",
+                            "provider",
+                            "fallback_provider",
+                        ]
+                    },
+                }
 
                 fallback_provider = ProviderFactory.create_provider(
                     self.fallback_provider_name
                 )
 
-                return await fallback_provider.generate(
+                await apply_request_delay("ai2", self.role)
+
+                result = await fallback_provider.generate(
                     prompt=user_prompt,
                     system_prompt=system_prompt,
                     model=model
@@ -229,17 +250,37 @@ class AI2:
                     max_tokens=max_tokens or self.ai_config.get("max_tokens"),
                     temperature=temperature or self.ai_config.get("temperature"),
                 )
+                if isinstance(result, str) and result.startswith("Ошибка генерации"):
+                    raise Exception(
+                        f"Fallback provider '{self.fallback_provider_name}' also failed: {result}"
+                    )
+                return result
+
             except Exception as fallback_e:
                 logger.error(
                     f"Ошибка генерации с fallback провайдером '{self.fallback_provider_name}': {fallback_e}"
                 )
                 return f"Не удалось сгенерировать ответ ни основным, ни fallback провайдером. Ошибка fallback: {fallback_e}"
+        finally:
+            if (
+                primary_provider
+                and hasattr(primary_provider, "close_session")
+                and callable(primary_provider.close_session)
+            ):
+                await primary_provider.close_session()
+            if (
+                fallback_provider
+                and hasattr(fallback_provider, "close_session")
+                and callable(fallback_provider.close_session)
+            ):
+                await fallback_provider.close_session()
 
     async def generate_code(self, task: str, filename: str) -> str:
         """Генерация кода на основе описания задачи."""
         logger.info(f"Генерация кода для файла: {filename}")
         system_prompt = self.prompts[0].format(filename=filename)
         user_prompt = f"Task Description: {task}\n\nPlease generate the content for the file '{filename}' based on this task."
+        await apply_request_delay("ai2", self.role)
         return await self._generate_with_fallback(
             system_prompt=system_prompt, user_prompt=user_prompt
         )
@@ -249,6 +290,7 @@ class AI2:
         logger.info(f"Генерация тестов для файла: {filename}")
         system_prompt = self.prompts[1].format(filename=filename)
         user_prompt = f"Code for file '{filename}':\n```\n{code}\n```\n\nPlease generate unit tests for this code."
+        await apply_request_delay("ai2", self.role)
         return await self._generate_with_fallback(
             system_prompt=system_prompt, user_prompt=user_prompt
         )
@@ -258,6 +300,7 @@ class AI2:
         logger.info(f"Генерация документации для файла: {filename}")
         system_prompt = self.prompts[2].format(filename=filename)
         user_prompt = f"Code for file '{filename}':\n```\n{code}\n```\n\nPlease generate documentation (e.g., docstrings, comments) for this code."
+        await apply_request_delay("ai2", self.role)
         return await self._generate_with_fallback(
             system_prompt=system_prompt, user_prompt=user_prompt
         )

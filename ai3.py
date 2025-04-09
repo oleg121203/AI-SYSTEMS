@@ -14,8 +14,12 @@ from git import GitCommandError, Repo
 
 from config import load_config
 from providers import BaseProvider, ProviderFactory
-from utils import logger  # Assuming logger is setup in utils
-from utils import log_message, wait_for_service
+from utils import (
+    apply_request_delay,  # Import apply_request_delay
+    log_message,
+    logger,
+    wait_for_service,
+)
 
 logger = logging.getLogger(__name__)  # Use logger correctly
 
@@ -137,12 +141,19 @@ Do not include any explanatory text before or after the JSON block. Ensure the J
         )
         primary_provider: BaseProvider = ProviderFactory.create_provider(provider_name)
         try:
+            await apply_request_delay("ai3")  # Add delay before primary generation
             response_text = await primary_provider.generate(
                 prompt=prompt,
                 model=ai3_config.get("model"),
                 max_tokens=ai3_config.get("max_tokens"),
                 temperature=ai3_config.get("temperature"),
             )
+            if isinstance(response_text, str) and response_text.startswith(
+                "Ошибка генерации"
+            ):
+                raise Exception(
+                    f"Primary provider '{provider_name}' failed: {response_text}"
+                )
         finally:
             if hasattr(primary_provider, "close_session") and callable(
                 primary_provider.close_session
@@ -152,13 +163,6 @@ Do not include any explanatory text before or after the JSON block. Ensure the J
         log_message(
             f"[AI3] Raw response preview from '{provider_name}': {response_text[:200] if response_text else 'None'}"
         )
-
-        if isinstance(response_text, str) and response_text.startswith(
-            "Ошибка генерации"
-        ):
-            raise Exception(
-                f"Primary provider '{provider_name}' failed: {response_text}"
-            )
 
     except Exception as e:
         primary_provider_name_for_log = (
@@ -175,12 +179,21 @@ Do not include any explanatory text before or after the JSON block. Ensure the J
                     fallback_provider_name
                 )
                 try:
+                    await apply_request_delay(
+                        "ai3"
+                    )  # Add delay before fallback generation
                     response_text = await fallback_provider.generate(
                         prompt=prompt,
                         model=ai3_config.get("model"),
                         max_tokens=ai3_config.get("max_tokens"),
                         temperature=ai3_config.get("temperature"),
                     )
+                    if isinstance(response_text, str) and response_text.startswith(
+                        "Ошибка генерации"
+                    ):
+                        raise Exception(
+                            f"Fallback provider '{fallback_provider_name}' also failed: {response_text}"
+                        )
                 finally:
                     if hasattr(fallback_provider, "close_session") and callable(
                         fallback_provider.close_session
@@ -190,13 +203,6 @@ Do not include any explanatory text before or after the JSON block. Ensure the J
                 log_message(
                     f"[AI3] Raw response preview from fallback '{fallback_provider_name}': {response_text[:200] if response_text else 'None'}"
                 )
-
-                if isinstance(response_text, str) and response_text.startswith(
-                    "Ошибка генерации"
-                ):
-                    raise Exception(
-                        f"Fallback provider '{fallback_provider_name}' also failed: {response_text}"
-                    )
 
             except Exception as fallback_e:
                 log_message(
