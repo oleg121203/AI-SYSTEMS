@@ -6,6 +6,10 @@ docker-compose down
 # Remove all untagged images
 docker image prune -a -f
 
+# Remove contents of repo and logs directories
+sudo rm -rf /home/vscode/AI-SYSTEMS/repo/*
+sudo rm -rf /home/vscode/AI-SYSTEMS/logs/*
+
 # Remove Python cache files
 find . -name '__pycache__' -type d -exec rm -rf {} +
 
