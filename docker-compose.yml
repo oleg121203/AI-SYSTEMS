@@ -1,7 +1,7 @@
 services:
-  mcp-9:
+  ai-systems:
     build: .
-    container_name: mcp-9
+    container_name: ai-systems
     network_mode: host
     environment:
       - WEB_PORT=7860
