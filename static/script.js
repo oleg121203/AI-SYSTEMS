@@ -1,5 +1,5 @@
 // filepath: /workspaces/vscode-remote-try-python/static/script.js
-let taskChart, progressChart, gitChart, editor;
+let taskChart, progressChart, gitChart, editor, statusPieChart;
 let ws;
 const reconnectInterval = 5000; // Reconnect interval 5 seconds
 const maxReconnectAttempts = 10;
@@ -11,6 +11,7 @@ let aiButtons = {};
 let queueLists = {};
 let queueCounts = {};
 let statElements = {};
+let subtask_status = {}; // Add global status object
 
 // --- Monaco Editor Setup ---
 require.config({
@@ -77,6 +78,10 @@ function connectWebSocket() {
           if (data.log_line && logContent) {
             const logEntry = document.createElement("p");
             logEntry.textContent = data.log_line;
+            // Clear "Connecting..." message on first real log
+            if (logContent.innerHTML.includes("Connecting to server...")) {
+              logContent.innerHTML = "";
+            }
             logContent.appendChild(logEntry);
             logContent.scrollTop = logContent.scrollHeight; // Auto-scroll
           }
@@ -89,6 +94,37 @@ function connectWebSocket() {
         case "queue_update": // Specific queue update
           if (data.queues) {
             updateQueues(data.queues);
+          }
+          break;
+        case "specific_update": // Handle targeted updates
+          console.log("Handling specific update:", data);
+          if (data.queues) {
+            updateQueues(data.queues);
+          }
+          if (data.subtasks) {
+            // Update only specific subtask statuses
+            Object.assign(subtask_status, data.subtasks); // Merge updates
+            updateStatsFromSubtasks(subtask_status); // Recalculate stats
+          }
+          if (data.structure) {
+            updateFileStructure(data.structure);
+          }
+          if (data.processed_over_time) {
+            updateCharts({ processed_over_time: data.processed_over_time }); // Update specific chart data
+          }
+          if (data.task_status_distribution) {
+            updateCharts({
+              task_status_distribution: data.task_status_distribution,
+            });
+          }
+          if (data.log_line && logContent) {
+            const logEntry = document.createElement("p");
+            logEntry.textContent = data.log_line;
+            if (logContent.innerHTML.includes("Connecting to server...")) {
+              logContent.innerHTML = "";
+            }
+            logContent.appendChild(logEntry);
+            logContent.scrollTop = logContent.scrollHeight;
           }
           break;
         case "ping": // Ignore ping messages
@@ -159,18 +195,16 @@ function updateFullUI(data) {
     updateAllButtonStates(data.ai_status);
   }
   if (data.queues) {
-    // Assuming data.queues is { executor: [...], tester: [...], ... }
     updateQueues(data.queues);
   }
   // Update stats based on subtask statuses if available
   if (data.subtasks) {
-    updateStatsFromSubtasks(data.subtasks);
+    Object.assign(subtask_status, data.subtasks); // Merge all statuses
+    updateStatsFromSubtasks(subtask_status);
   } else if (data.processed !== undefined && data.efficiency !== undefined) {
-    // Fallback to older stats structure if subtasks not present
     updateStatsLegacy(data);
   }
 
-  // Update charts if data is present
   updateCharts(data); // Pass the whole data object
 
   if (data.structure) {
@@ -220,24 +254,41 @@ function updateQueues(queuesData) {
         return;
       }
       const li = document.createElement("li");
-      const status = task.status || "unknown"; // Default status
+      const status = task.status || subtask_status[task.id] || "unknown"; // Get status from task or global state
       li.setAttribute("data-status", status);
+
+      // --- Summary Row ---
+      const summaryDiv = document.createElement("div");
+      summaryDiv.className = "task-summary";
 
       const statusIcon = document.createElement("span");
       statusIcon.className = "status-icon";
-      statusIcon.innerHTML = getStatusIcon(status); // Use a helper for icons
+      statusIcon.innerHTML = getStatusIcon(status);
 
-      const taskText = document.createElement("span");
-      taskText.className = "task-text";
-      taskText.textContent = task.text;
+      const taskFilename = document.createElement("span");
+      taskFilename.className = "task-filename";
+      taskFilename.textContent =
+        task.filename || `Task ${task.id.substring(0, 8)}`; // Show filename or short ID
 
       const taskIdSpan = document.createElement("span");
       taskIdSpan.className = "task-id";
-      taskIdSpan.textContent = `(ID: ${task.id.substring(0, 8)})`; // Shorten ID display
+      taskIdSpan.textContent = `(ID: ${task.id.substring(0, 8)})`;
 
-      li.appendChild(statusIcon);
-      li.appendChild(taskText);
-      li.appendChild(taskIdSpan);
+      summaryDiv.appendChild(statusIcon);
+      summaryDiv.appendChild(taskFilename);
+      summaryDiv.appendChild(taskIdSpan);
+      li.appendChild(summaryDiv);
+
+      // --- Details Div (Hidden) ---
+      const detailsDiv = document.createElement("div");
+      detailsDiv.className = "task-details";
+      detailsDiv.textContent = task.text; // Full text here
+      li.appendChild(detailsDiv);
+
+      // --- Click Listener for Expansion ---
+      li.addEventListener("click", () => {
+        li.classList.toggle("expanded");
+      });
 
       ul.appendChild(li);
     });
@@ -405,6 +456,70 @@ function updateCharts(data) {
     gitChart.options.scales.x.ticks.color = getChartFontColor();
     gitChart.options.plugins.legend.labels.color = getChartFontColor();
     gitChart.update();
+  }
+
+  // Status Distribution Chart (Pie)
+  if (!statusPieChart) {
+    const ctx = document.getElementById("statusPieChart")?.getContext("2d");
+    if (ctx) {
+      statusPieChart = new Chart(ctx, {
+        type: "doughnut", // Or 'pie'
+        data: {
+          labels: ["Pending", "Processing", "Completed", "Failed", "Other"],
+          datasets: [
+            {
+              label: "Task Status Distribution",
+              data: [0, 0, 0, 0, 0], // Initial data
+              backgroundColor: [
+                "rgba(255, 159, 64, 0.7)", // Pending (Orange)
+                "rgba(54, 162, 235, 0.7)", // Processing (Blue)
+                "rgba(75, 192, 192, 0.7)", // Completed (Green)
+                "rgba(255, 99, 132, 0.7)", // Failed (Red)
+                "rgba(201, 203, 207, 0.7)", // Other (Grey)
+              ],
+              borderColor: [
+                "rgba(255, 159, 64, 1)",
+                "rgba(54, 162, 235, 1)",
+                "rgba(75, 192, 192, 1)",
+                "rgba(255, 99, 132, 1)",
+                "rgba(201, 203, 207, 1)",
+              ],
+              borderWidth: 1,
+            },
+          ],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: {
+              position: "top",
+              labels: { color: getChartFontColor() },
+            },
+            title: {
+              display: true,
+              text: "Task Statuses",
+              color: getChartFontColor(),
+            },
+          },
+        },
+      });
+      console.log("Status Pie chart initialized");
+    }
+  }
+  // Update pie chart data if available
+  if (statusPieChart && data.task_status_distribution) {
+    const dist = data.task_status_distribution;
+    statusPieChart.data.datasets[0].data = [
+      dist.pending || 0,
+      dist.processing || 0,
+      dist.completed || 0,
+      dist.failed || 0,
+      dist.other || 0,
+    ];
+    statusPieChart.options.plugins.legend.labels.color = getChartFontColor();
+    statusPieChart.options.plugins.title.color = getChartFontColor();
+    statusPieChart.update();
   }
 }
 
@@ -669,7 +784,7 @@ function setTheme(theme) {
 
   // Update chart colors if charts exist
   const chartColor = getChartFontColor();
-  [taskChart, progressChart, gitChart].forEach((chart) => {
+  [taskChart, progressChart, gitChart, statusPieChart].forEach((chart) => {
     if (chart) {
       chart.options.scales.y.ticks.color = chartColor;
       chart.options.scales.x.ticks.color = chartColor;

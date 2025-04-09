@@ -1087,10 +1087,10 @@ class GeminiProvider(BaseProvider):
         if temperature_to_use is not None:
             generation_config["temperature"] = temperature_to_use
 
-        contents = [prompt]
-        system_instruction_param = (
-            {"system_instruction": system_prompt} if system_prompt else {}
-        )
+        contents = []
+        if system_prompt:
+            contents.append(system_prompt)
+        contents.append(prompt)
 
         try:
             model_client = self.get_client(model_to_use)
@@ -1101,7 +1101,6 @@ class GeminiProvider(BaseProvider):
                     if generation_config
                     else None
                 ),
-                **system_instruction_param,
             )
 
             if response and hasattr(response, "text"):
@@ -1135,6 +1134,11 @@ class GeminiProvider(BaseProvider):
         except self.genai.types.generation_types.StopCandidateException as e:
             logger.error(f"Gemini Generation Stopped ({model_to_use}): {e}")
             return f"Ошибка генерации (Gemini Stop): {e}"
+        except TypeError as e:
+            logger.error(
+                f"TypeError при вызове Gemini API ({model_to_use}): {e}", exc_info=True
+            )
+            return f"Ошибка генерации (TypeError): {e}"
         except Exception as e:
             error_detail = str(e)
             if hasattr(e, "message"):
@@ -1374,3 +1378,25 @@ except ImportError:
     def load_config():
         logger.error("Функция load_config не импортирована.")
         return {}
+
+
+class Report:
+    def __init__(
+        self,
+        task_id,
+        file_path,
+        role,
+        message,
+        processing_time=None,
+        content=None,
+        error_message=None,
+    ):
+        self.task_id = task_id
+        self.file_path = file_path
+        self.role = role
+        self.message = message
+        self.processing_time = processing_time
+        self.content = content
+        self.error_message = error_message
+        # Добавить статус на основе наличия ошибки
+        self.status = "error" if error_message else "completed"

@@ -13,14 +13,8 @@ import aiofiles
 import git
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import (
-    BackgroundTasks,
-    FastAPI,
-    HTTPException,
-    Request,
-    WebSocket,
-    WebSocketDisconnect,
-)
+from fastapi import (BackgroundTasks, FastAPI, HTTPException, Request,
+                     WebSocket, WebSocketDisconnect)
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -80,6 +74,19 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)  # Use specific logger
 
+# Add a handler to send logs via WebSocket
+class WebSocketLogHandler(logging.Handler):
+    async def emit(self, record):
+        log_entry = self.format(record)
+        await broadcast_specific_update({"log_line": log_entry})
+
+# Configure the handler (do this after basicConfig)
+ws_log_handler = WebSocketLogHandler()
+ws_log_handler.setLevel(logging.INFO)  # Set desired level for WebSocket logs
+formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')  # Simpler format for UI
+ws_log_handler.setFormatter(formatter)
+logging.getLogger().addHandler(ws_log_handler)  # Add to root logger
+
 
 # --- FastAPI App Setup ---
 app = FastAPI()
@@ -115,6 +122,7 @@ processed_history = deque(
     maxlen=config.get("history_length", 20)
 )  # Track processed count over time
 collaboration_requests = []  # Store collaboration requests
+processed_tasks_count = 0  # Добавим счетчик обработанных задач
 
 # Global dictionary for AI status
 ai_status: Dict[str, bool] = {"ai1": False, "ai2": False, "ai3": False}
@@ -202,10 +210,28 @@ async def broadcast_status():
             active_connections.discard(client)
 
 
+async def broadcast_specific_update(update_data: dict):
+    """Broadcasts a specific update to all clients."""
+    if active_connections:
+        message = {"type": "specific_update", **update_data}
+        disconnected_clients = set()
+        for connection in list(active_connections):
+            try:
+                await connection.send_json(message)
+            except WebSocketDisconnect:
+                disconnected_clients.add(connection)
+            except Exception as e:
+                logger.error(f"Error sending specific update to {connection.client}: {e}")
+                disconnected_clients.add(connection)
+        for client in disconnected_clients:
+            active_connections.discard(client)
+
+
 async def write_and_commit_code(
     file_rel_path: str, content: str, subtask_id: Optional[str]
 ):
     """Helper function to write file content and commit changes."""
+    global processed_tasks_count  # Доступ к глобальному счетчику
     async with file_write_lock:  # Используем блокировку
         if not is_safe_path(repo_path, file_rel_path):
             logger.error(
@@ -235,6 +261,11 @@ async def write_and_commit_code(
                     if repo.is_dirty(index=True, working_tree=False):
                         repo.index.commit(commit_message)
                         logger.info(f"[API-Git] Committed changes for: {file_rel_path}")
+                        # Обновляем историю после успешного коммита
+                        processed_tasks_count += 1
+                        processed_history.append(processed_tasks_count)
+                        # Отправляем обновление истории коммитов
+                        await broadcast_specific_update({"processed_over_time": list(processed_history)})
                     else:
                         logger.info(
                             f"[API-Git] No changes staged for commit for: {file_rel_path}"
@@ -366,6 +397,12 @@ async def receive_subtask(data: dict):
     logger.info(
         f"Received subtask for {role}: '{text[:50]}...', ID: {subtask_id}, File: {filename}"
     )
+    # Broadcast queue update
+    await broadcast_specific_update({"queues": {
+         "executor": [t for t in executor_queue._queue],
+         "tester": [t for t in tester_queue._queue],
+         "documenter": [t for t in documenter_queue._queue],
+    }})
     return {"status": "subtask received", "id": subtask_id}
 
 
@@ -388,6 +425,13 @@ async def get_task_for_role(role: str):
         subtask = queue.get_nowait()
         logger.info(f"Providing task ID {subtask.get('id')} to {role} worker.")
         subtask_status[subtask.get("id")] = "processing"  # Mark as processing
+        # Broadcast status and queue update
+        await broadcast_specific_update({
+            "subtasks": {subtask.get("id"): "processing"},
+            "queues": {
+                role: [t for t in queue._queue]  # Отправляем обновленную очередь
+            }
+        })
         return {"subtask": subtask}
     except asyncio.QueueEmpty:
         logger.debug(f"No tasks available for role: {role}")
@@ -415,7 +459,8 @@ async def receive_structure(data: dict):
     logger.info(
         f"Project structure updated by AI3. Root keys: {list(current_structure.keys())}"
     )
-    # Optionally trigger WebSocket update here if structure changes frequently after initial setup
+    # Broadcast structure update
+    await broadcast_specific_update({"structure": current_structure})
     return {"status": "structure received"}
 
 
@@ -465,8 +510,12 @@ async def receive_report(
                     )
             elif report.type == "status_update":
                 subtask_status[report.subtask_id] = report.message or "updated"
-                if report.status:
+                if hasattr(report, "status") and report.status:
                     subtask_status[report.subtask_id] = report.status
+            # Broadcast status update after processing
+            if report.subtask_id:
+                await broadcast_specific_update({"subtasks": {report.subtask_id: subtask_status.get(report.subtask_id)}})
+
         return {"status": "report received"}
 
     except HTTPException as http_exc:
@@ -759,30 +808,75 @@ async def clear_state():
 async def broadcast_full_status():
     """Broadcasts detailed status to all connected clients."""
     if active_connections:
-        # Gather more detailed state. Include current_structure
+        # --- Aggregation for Pie Chart ---
+        status_counts = {"pending": 0, "processing": 0, "completed": 0, "failed": 0, "other": 0}
+        for status in subtask_status.values():
+            if status in ["accepted", "completed", "code_received", "tested"]:  # Consider these completed
+                status_counts["completed"] += 1
+            elif status == "pending":
+                status_counts["pending"] += 1
+            elif status == "processing":
+                status_counts["processing"] += 1
+            elif "Ошибка" in status or "failed" in status:  # Check for error strings
+                status_counts["failed"] += 1
+            else:
+                status_counts["other"] += 1
+        # --- End Aggregation ---
+
         state_data = {
             "type": "full_status_update",
             "ai_status": ai_status,
             "queues": {
-                "executor": [{"id": t["id"], "text": t["text"], "status": subtask_status.get(t["id"], "unknown")} for t in executor_queue._queue],
-                "tester": [{"id": t["id"], "text": t["text"], "status": subtask_status.get(t["id"], "unknown")} for t in tester_queue._queue],
-                "documenter": [{"id": t["id"], "text": t["text"], "status": subtask_status.get(t["id"], "unknown")} for t in documenter_queue._queue],
+                "executor": [
+                    {
+                        "id": t["id"],
+                        "filename": t.get("filename", "N/A"),  # Add filename for summary
+                        "text": t["text"],
+                        "status": subtask_status.get(t["id"], "unknown"),
+                    }
+                    for t in list(executor_queue._queue)  # Convert deque to list for iteration
+                ],
+                "tester": [
+                    {
+                        "id": t["id"],
+                        "filename": t.get("filename", "N/A"),
+                        "text": t["text"],
+                        "status": subtask_status.get(t["id"], "unknown"),
+                    }
+                    for t in list(tester_queue._queue)
+                ],
+                "documenter": [
+                    {
+                        "id": t["id"],
+                        "filename": t.get("filename", "N/A"),
+                        "text": t["text"],
+                        "status": subtask_status.get(t["id"], "unknown"),
+                    }
+                    for t in list(documenter_queue._queue)
+                ],
             },
-            "subtasks": subtask_status,  # Send all statuses
-            "structure": current_structure, # Send the file structure
-            "progress": { # Placeholder for progress data
+            "subtasks": subtask_status,
+            "structure": current_structure,
+            "progress": {  # Placeholder
                 "stages": ["Stage 1", "Stage 2", "Stage 3"],
-                "values": [30, 60, 10]
+                "values": [30, 60, 10],
             },
-            "processed_over_time": list(processed_history) # Placeholder for historical data
+            "processed_over_time": list(processed_history),
+            "task_status_distribution": status_counts  # Add aggregated data
         }
-        logger.info(f"Broadcasting full status update: {state_data}") # Log full status for debugging
+        logger.info(
+            f"Broadcasting full status update: {state_data}"
+        )  # Log full status for debugging
         for connection in active_connections:
             try:
                 await connection.send_json(state_data)
             except WebSocketDisconnect:
-                logger.info(f"Client {connection.client} disconnected during broadcast.")
-                active_connections.discard(connection) # Remove disconnected client immediately
+                logger.info(
+                    f"Client {connection.client} disconnected during broadcast."
+                )
+                active_connections.discard(
+                    connection
+                )  # Remove disconnected client immediately
             except Exception as e:
                 logger.error(f"Error sending status to {connection.client}: {e}")
 
@@ -807,7 +901,9 @@ async def websocket_endpoint(websocket: WebSocket):
                 )
                 break
             except Exception as e:
-                logger.error(f"Error sending ping to {websocket.client}: {e}")  # Log ping errors
+                logger.error(
+                    f"Error sending ping to {websocket.client}: {e}"
+                )  # Log ping errors
 
     except WebSocketDisconnect:
         logger.info(f"WebSocket disconnected by client {websocket.client}")

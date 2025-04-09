@@ -14,7 +14,7 @@
   },
   "mounts": [
     "source=my-app-data,target=/data,type=volume",
-    "source=${localWorkspaceFolder},target=/home/vscode/AI-SYSTEMS,type=bind,consistency=cached"
+    "source=${localWorkspaceFolder},target=/home/dev/vscode/AI-SYSTEMS,type=bind,consistency=cached"
   ],
   "customizations": {
     "vscode": {
@@ -66,5 +66,5 @@
     }
   },
   "postCreateCommand": "pip install --upgrade pip && pip install -r \"${containerWorkspaceFolder}/requirements.txt\" && if [ -f \"${containerWorkspaceFolder}/package.json\" ]; then cd \"${containerWorkspaceFolder}\" && npm install; else echo 'No package.json found, skipping npm install'; fi && git config --global user.name \"Oleg Kizyma\" && git config --global user.email \"oleg1203@gmail.com\" && echo 'Git user configured successfully'",
-  "workspaceFolder": "/home/vscode/AI-SYSTEMS"
+  "workspaceFolder": "/home/dev/vscode/AI-SYSTEMS"
 }
