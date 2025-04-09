@@ -658,97 +658,52 @@ async def update_config(data: dict):
 
 @app.post("/start_ai1")
 async def start_ai1():
-    if not ai_status["ai1"]:
-        logger.info("Starting AI1 process... (Placeholder)")
-        # Here should be the actual process start logic
-        # ai_processes["ai1"] = subprocess.Popen(["python", "ai1.py"]) # Example
-        ai_status["ai1"] = True
-        await broadcast_status()
-        return {"status": "AI1 started (placeholder)"}
-    logger.info("AI1 is already running.")
-    return {"status": "AI1 already running"}
+    ai_status["ai1"] = True
+    await broadcast_full_status()  # Update UI after AI status change
+    return {"status": "AI1 started (placeholder)"}
 
 
 @app.post("/stop_ai1")
 async def stop_ai1():
-    if ai_status["ai1"]:
-        logger.info("Stopping AI1 process... (Placeholder)")
-        # Here should be the actual process stop logic
-        # if ai_processes["ai1"]:
-        #     ai_processes["ai1"].terminate()
-        #     ai_processes["ai1"] = None
-        ai_status["ai1"] = False
-        await broadcast_status()
-        return {"status": "AI1 stopped (placeholder)"}
-    logger.info("AI1 is not running.")
-    return {"status": "AI1 not running"}
+    ai_status["ai1"] = False
+    await broadcast_full_status()  # Update UI after AI status change
+    return {"status": "AI1 stopped (placeholder)"}
 
 
 @app.post("/start_ai2")
 async def start_ai2():
-    if not ai_status["ai2"]:
-        logger.info("Starting AI2 process... (Placeholder)")
-        # ai_processes["ai2"] = subprocess.Popen(["python", "ai2.py"]) # Example
-        ai_status["ai2"] = True
-        await broadcast_status()
-        return {"status": "AI2 started (placeholder)"}
-    logger.info("AI2 is already running.")
-    return {"status": "AI2 already running"}
+    ai_status["ai2"] = True
+    await broadcast_full_status()  # Update UI after AI status change
+    return {"status": "AI2 started (placeholder)"}
 
 
 @app.post("/stop_ai2")
 async def stop_ai2():
-    if ai_status["ai2"]:
-        logger.info("Stopping AI2 process... (Placeholder)")
-        # if ai_processes["ai2"]:
-        #     ai_processes["ai2"].terminate()
-        #     ai_processes["ai2"] = None
-        ai_status["ai2"] = False
-        await broadcast_status()
-        return {"status": "AI2 stopped (placeholder)"}
-    logger.info("AI2 is not running.")
-    return {"status": "AI2 not running"}
+    ai_status["ai2"] = False
+    await broadcast_full_status()  # Update UI after AI status change
+    return {"status": "AI2 stopped (placeholder)"}
 
 
 @app.post("/start_ai3")
 async def start_ai3():
-    if not ai_status["ai3"]:
-        logger.info("Starting AI3 process... (Placeholder)")
-        # ai_processes["ai3"] = subprocess.Popen(["python", "ai3.py"]) # Example
-        ai_status["ai3"] = True
-        await broadcast_status()
-        return {"status": "AI3 started (placeholder)"}
-    logger.info("AI3 is already running.")
-    return {"status": "AI3 already running"}
+    ai_status["ai3"] = True
+    await broadcast_full_status()  # Update UI after AI status change
+    return {"status": "AI3 started (placeholder)"}
 
 
 @app.post("/stop_ai3")
 async def stop_ai3():
-    if ai_status["ai3"]:
-        logger.info("Stopping AI3 process... (Placeholder)")
-        # if ai_processes["ai3"]:
-        #     ai_processes["ai3"].terminate()
-        #     ai_processes["ai3"] = None
-        ai_status["ai3"] = False
-        await broadcast_status()
-        return {"status": "AI3 stopped (placeholder)"}
-    logger.info("AI3 is not running.")
-    return {"status": "AI3 not running"}
+    ai_status["ai3"] = False
+    await broadcast_full_status()  # Update UI after AI status change
+    return {"status": "AI3 stopped (placeholder)"}
 
 
 @app.post("/start_all")
 async def start_all():
-    logger.info("Received request to start all AI systems")
-    if not ai_status["ai1"]:
-        logger.info("Starting AI1 process... (Placeholder)")
-        ai_status["ai1"] = True
-    if not ai_status["ai2"]:
-        logger.info("Starting AI2 process... (Placeholder)")
-        ai_status["ai2"] = True
-    if not ai_status["ai3"]:
-        logger.info("Starting AI3 process... (Placeholder)")
-        ai_status["ai3"] = True
-    await broadcast_status()
+    ai_status["ai1"] = True
+    ai_status["ai2"] = True
+    ai_status["ai3"] = True
+    await broadcast_full_status()  # Update UI after AI status change
     return JSONResponse(
         {"status": "All AI systems started (Placeholder)", "ai_status": ai_status}
     )
@@ -756,17 +711,10 @@ async def start_all():
 
 @app.post("/stop_all")
 async def stop_all():
-    logger.info("Received request to stop all AI systems")
-    if ai_status["ai1"]:
-        logger.info("Stopping AI1 process... (Placeholder)")
-        ai_status["ai1"] = False
-    if ai_status["ai2"]:
-        logger.info("Stopping AI2 process... (Placeholder)")
-        ai_status["ai2"] = False
-    if ai_status["ai3"]:
-        logger.info("Stopping AI3 process... (Placeholder)")
-        ai_status["ai3"] = False
-    await broadcast_status()
+    ai_status["ai1"] = False
+    ai_status["ai2"] = False
+    ai_status["ai3"] = False
+    await broadcast_full_status()  # Update UI after AI status change
     return JSONResponse(
         {"status": "All AI systems stopped (Placeholder)", "ai_status": ai_status}
     )
@@ -808,29 +756,68 @@ async def clear_state():
     return {"status": "state cleared"}
 
 
+async def broadcast_full_status():
+    """Broadcasts detailed status to all connected clients."""
+    if active_connections:
+        # Gather more detailed state. Include current_structure
+        state_data = {
+            "type": "full_status_update",
+            "ai_status": ai_status,
+            "queues": {
+                "executor": [{"id": t["id"], "text": t["text"], "status": subtask_status.get(t["id"], "unknown")} for t in executor_queue._queue],
+                "tester": [{"id": t["id"], "text": t["text"], "status": subtask_status.get(t["id"], "unknown")} for t in tester_queue._queue],
+                "documenter": [{"id": t["id"], "text": t["text"], "status": subtask_status.get(t["id"], "unknown")} for t in documenter_queue._queue],
+            },
+            "subtasks": subtask_status,  # Send all statuses
+            "structure": current_structure, # Send the file structure
+            "progress": { # Placeholder for progress data
+                "stages": ["Stage 1", "Stage 2", "Stage 3"],
+                "values": [30, 60, 10]
+            },
+            "processed_over_time": list(processed_history) # Placeholder for historical data
+        }
+        logger.info(f"Broadcasting full status update: {state_data}") # Log full status for debugging
+        for connection in active_connections:
+            try:
+                await connection.send_json(state_data)
+            except WebSocketDisconnect:
+                logger.info(f"Client {connection.client} disconnected during broadcast.")
+                active_connections.discard(connection) # Remove disconnected client immediately
+            except Exception as e:
+                logger.error(f"Error sending status to {connection.client}: {e}")
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     active_connections.add(websocket)
-    print(f"WebSocket connection opened from {websocket.client}")  # Added for debugging
+    logger.info(
+        f"WebSocket connection opened from {websocket.client}. Total: {len(active_connections)}"
+    )
     try:
-        await websocket.send_json({"type": "initial_status", "ai_status": ai_status})
-        print(
-            f"Sent initial status to {websocket.client}: {ai_status}"
-        )  # Added for debugging
+        await broadcast_full_status()  # Send initial full status
+
         while True:
-            await asyncio.sleep(10)  # Prevent CPU overload in empty loop
+            await asyncio.sleep(30)
+            try:
+                await websocket.send_json({"type": "ping"})
+            except WebSocketDisconnect:
+                logger.info(
+                    f"WebSocket ping failed, client {websocket.client} likely disconnected."
+                )
+                break
+            except Exception as e:
+                logger.error(f"Error sending ping to {websocket.client}: {e}")  # Log ping errors
+
     except WebSocketDisconnect:
-        print(
-            f"WebSocket disconnected by client {websocket.client}"
-        )  # Added for debugging
+        logger.info(f"WebSocket disconnected by client {websocket.client}")
     except Exception as e:
-        print(f"WebSocket error for {websocket.client}: {e}")  # Added for debugging
+        logger.error(f"WebSocket error for {websocket.client}: {e}", exc_info=True)
     finally:
         active_connections.discard(websocket)
-        print(
-            f"WebSocket connection closed for {websocket.client}"
-        )  # Added for debugging
+        logger.info(
+            f"WebSocket connection closed for {websocket.client}. Total: {len(active_connections)}"
+        )
 
 
 @app.get("/health")
@@ -853,137 +840,6 @@ async def get_subtask_status(subtask_id: str):
 async def get_all_subtask_statuses():
     """Returns the status of all known subtasks."""
     return subtask_status
-
-
-async def broadcast_full_status():
-    """Broadcasts detailed status to all connected clients."""
-    if active_connections:
-        # Gather more detailed state
-        state_data = {
-            "type": "full_status_update",
-            "ai_status": ai_status,
-            "queues": {
-                "executor": executor_queue.qsize(),
-                "tester": tester_queue.qsize(),
-                "documenter": documenter_queue.qsize(),
-            },
-            "subtasks": subtask_status,  # Send all statuses
-            "structure_status": ai3_report.get("status", "unknown"),
-        }
-        logger.info(f"Broadcasting full status update...")
-        disconnected_clients = set()
-        current_connections = list(active_connections)
-        for connection in current_connections:
-            try:
-                await connection.send_json(state_data)
-            except WebSocketDisconnect:
-                logger.info(
-                    f"Client {connection.client} disconnected during broadcast."
-                )
-                disconnected_clients.add(connection)
-            except Exception as e:
-                logger.error(f"Error sending status to {connection.client}: {e}")
-
-        for client in disconnected_clients:
-            active_connections.discard(client)
-        logger.info(
-            f"Broadcast complete. Active connections: {len(active_connections)}"
-        )
-
-
-@app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    await websocket.accept()
-    active_connections.add(websocket)
-    logger.info(
-        f"WebSocket connection opened from {websocket.client}. Total: {len(active_connections)}"
-    )
-    try:
-        await broadcast_full_status()
-
-        while True:
-            await asyncio.sleep(30)
-            try:
-                await websocket.send_json({"type": "ping"})
-            except WebSocketDisconnect:
-                logger.info(
-                    f"WebSocket ping failed, client {websocket.client} likely disconnected."
-                )
-                break
-
-    except WebSocketDisconnect:
-        logger.info(f"WebSocket disconnected by client {websocket.client}")
-    except Exception as e:
-        logger.error(f"WebSocket error for {websocket.client}: {e}", exc_info=True)
-    finally:
-        active_connections.discard(websocket)
-        logger.info(
-            f"WebSocket connection closed for {websocket.client}. Total: {len(active_connections)}"
-        )
-
-
-@app.post("/start_ai1")
-async def start_ai1():
-    ai_status["ai1"] = True
-    await broadcast_full_status()
-    return {"status": "AI1 started (placeholder)"}
-
-
-@app.post("/stop_ai1")
-async def stop_ai1():
-    ai_status["ai1"] = False
-    await broadcast_full_status()
-    return {"status": "AI1 stopped (placeholder)"}
-
-
-@app.post("/start_ai2")
-async def start_ai2():
-    ai_status["ai2"] = True
-    await broadcast_full_status()
-    return {"status": "AI2 started (placeholder)"}
-
-
-@app.post("/stop_ai2")
-async def stop_ai2():
-    ai_status["ai2"] = False
-    await broadcast_full_status()
-    return {"status": "AI2 stopped (placeholder)"}
-
-
-@app.post("/start_ai3")
-async def start_ai3():
-    ai_status["ai3"] = True
-    await broadcast_full_status()
-    return {"status": "AI3 started (placeholder)"}
-
-
-@app.post("/stop_ai3")
-async def stop_ai3():
-    ai_status["ai3"] = False
-    await broadcast_full_status()
-    return {"status": "AI3 stopped (placeholder)"}
-
-
-@app.post("/start_all")
-async def start_all():
-    ai_status["ai1"] = True
-    ai_status["ai2"] = True
-    ai_status["ai3"] = True
-    await broadcast_full_status()
-    return JSONResponse(
-        {"status": "All AI systems started (Placeholder)", "ai_status": ai_status}
-    )
-
-
-@app.post("/stop_all")
-async def stop_all():
-    ai_status["ai1"] = False
-    ai_status["ai2"] = False
-    ai_status["ai3"] = False
-    await broadcast_full_status()
-    return JSONResponse(
-        {"status": "All AI systems stopped (Placeholder)", "ai_status": ai_status}
-    )
 
 
 # --- Main Execution ---
