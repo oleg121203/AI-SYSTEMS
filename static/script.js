@@ -490,7 +490,8 @@ function updateCharts(data) {
         },
         options: {
           responsive: true,
-          maintainAspectRatio: false,
+          maintainAspectRatio: false, // Важливо для контролю розміру
+          cutout: "60%", // Зробити кільце трохи товщим (стандартно близько 70-80%)
           plugins: {
             legend: {
               position: "top",
