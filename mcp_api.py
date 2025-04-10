@@ -15,11 +15,13 @@ import uvicorn
 from dotenv import load_dotenv
 from fastapi import (
     BackgroundTasks,
+    Depends,
     FastAPI,
     HTTPException,
     Request,
     WebSocket,
     WebSocketDisconnect,
+    status,
 )
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
@@ -526,6 +528,12 @@ async def dashboard(request: Request):
             "config": config,
         },
     )
+
+
+@app.get("/health", status_code=status.HTTP_200_OK)
+async def health_check():
+    """Простий ендпоінт для перевірки стану сервісу."""
+    return {"status": "ok"}
 
 
 if __name__ == "__main__":

@@ -36,6 +36,7 @@ function connectWebSocket() {
 
   ws = new WebSocket(wsUrl);
 
+  console.log("connectWebSocket called"); // ADDED LOGGING
   ws.onopen = function () {
     console.log("WebSocket connection established");
     if (logContent)
@@ -53,6 +54,7 @@ function connectWebSocket() {
 
       switch (data.type) {
         case "full_status_update":
+          console.log("Full status update received:", data); // ADDED LOGGING
           updateFullUI(data);
           break;
         case "status_update":
@@ -441,7 +443,7 @@ function getChartFontColor() {
 }
 
 function updateFileStructure(structureData) {
-  console.log("Updating file structure:", structureData);
+  console.log("Updating file structure:", structureData); // ADDED LOGGING
   const fileStructureDiv = document.getElementById("file-structure");
   if (!fileStructureDiv) return;
 
