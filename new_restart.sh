@@ -1,47 +1,27 @@
 #!/bin/bash
 
 # Stop and remove the existing container
-docker-compose down
+docker-compose down ai-systems
 
-# Remove all untagged images
-docker image prune -a -f
+# Remove the specific image for ai-systems (if it exists)
+docker rmi ai-systems 2>/dev/null || true
 
-# Remove contents of repo and logs directories
-sudo rm -rf /home/vscode/AI-SYSTEMS/repo/*
-sudo rm -rf /home/vscode/AI-SYSTEMS/logs/*
+# Set the working directory to match the Dockerfile
+WORK_DIR=/app
 
-# Remove Python cache files
-find . -name '__pycache__' -type d -exec rm -rf {} +
+# Remove contents of repo and logs directories created by the Dockerfile
+rm -rf ${WORK_DIR}/repo/*
+rm -rf ${WORK_DIR}/logs/*
 
-# Remove the repo directory
-rm -rf repo
+# Remove Python cache files in the working directory
+find ${WORK_DIR} -name '__pycache__' -type d -exec rm -rf {} +
 
-# Create the repo directory
-mkdir repo
+# Remove the repo directory and recreate it
+rm -rf ${WORK_DIR}/repo
+mkdir ${WORK_DIR}/repo
 
-# Change the ownership of the repo directory to the current user
-sudo chown -R $USER:$USER repo
-
-# Initialize a new Git repository
-git init
-
-# Set global Git user email and name using environment variables if provided,
-# otherwise use default values for automatic initialization on rebuild
-if [ -z "$GIT_USER_EMAIL" ]; then
-  git config --global user.email "oleg1203@gmail.com"
-else
-  git config --global user.email "$GIT_USER_EMAIL"
-fi
-
-if [ -z "$GIT_USER_NAME" ]; then
-  git config --global user.name "Oleg Kizyma"
-else
-  git config --global user.name "$GIT_USER_NAME"
-fi
-
-# Add and commit initial files
-git add .
-git commit -m "Initial commit"
+# Ensure the repo directory has the correct ownership
+chown -R $(id -u):$(id -g) ${WORK_DIR}/repo
 
 # Start the Docker container
-docker-compose up --build
+docker-compose up --build ai-systems

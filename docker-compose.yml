@@ -3,6 +3,8 @@ services:
     build: .
     container_name: ai-systems
     network_mode: host
+    env_file:
+      - /home/dev/vscode/AI-SYSTEMS/.env
     environment:
       - WEB_PORT=7860
       - DOCKER_ENV=true
@@ -10,6 +12,6 @@ services:
       - ./:/app
       - ./logs:/app/logs
       - ./repo:/app/repo
-      - ~/.ssh/id_rsa.pub:/root/.ssh/id_rsa.pub:ro
+      - ~/.ssh:/home/vscode/.ssh:ro
     restart: on-failure
     command: bash -c "bash /app/run_async_services.sh"

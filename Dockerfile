@@ -19,9 +19,6 @@ COPY requirements_async.txt .
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements_async.txt
 
-# Update websockets package
-RUN pip install --upgrade websockets>=10.0
-
 # Copy the rest of your application code into the container
 COPY . .
 
@@ -30,6 +27,12 @@ RUN mkdir -p logs repo && \
     dos2unix /app/run_async_services.sh && \
     chmod +x /app/run_async_services.sh && \
     git config --global --add safe.directory /app/repo
+
+# Set up SSH directory for user vscode
+RUN mkdir -p /home/vscode/.ssh && \
+    chmod 700 /home/vscode/.ssh && \
+    chown -R vscode:vscode /home/vscode/.ssh && \
+    chown -R vscode:vscode /app
 
 # Switch to user vscode
 USER vscode

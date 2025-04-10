@@ -1,0 +1,47 @@
+name: CI for Game Files
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      with:
+        fetch-depth: 2  # Отримуємо попередній коміт для порівняння
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements_async.txt
+        pip install --upgrade websockets>=10.0  # Додаємо для синхронізації з Dockerfile
+
+    - name: Find changed test files
+      id: changed-files
+      run: |
+        # Отримуємо змінені файли між поточним і попереднім комітом
+        CHANGED_FILES=$(git diff --name-only HEAD^ HEAD | grep '^test_.*\.py$\|^.*_test\.py$' || true)
+        echo "CHANGED_FILES=$CHANGED_FILES" >> $GITHUB_ENV
+
+    - name: Run tests for changed files
+      if: env.CHANGED_FILES != ''
+      run: |
+        echo "Running tests for changed files: $CHANGED_FILES"
+        pytest $CHANGED_FILES
+
+    - name: Run all tests if no specific test files changed
+      if: env.CHANGED_FILES == ''
+      run: |
+        echo "No specific test files changed, running all tests"
+        pytest
