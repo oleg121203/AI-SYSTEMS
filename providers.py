@@ -65,9 +65,34 @@ load_dotenv()
 class ProviderFactory:
     """Фабрика для создания экземпляров провайдеров AI."""
 
-    @staticmethod
+    _instance = None
+    _providers = {}
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super(ProviderFactory, cls).__new__(cls)
+            cls._instance._providers = {}
+        return cls._instance
+
+    @classmethod
+    async def close_all_providers(cls):
+        """Закрывает сессии всех созданных провайдеров."""
+        if not cls._instance:
+            return
+
+        for provider_name, provider in cls._instance._providers.items():
+            try:
+                await provider.close_session()
+                logger.info(f"Closed session for provider: {provider_name}")
+            except Exception as e:
+                logger.error(f"Error closing session for provider {provider_name}: {e}")
+
+        cls._instance._providers.clear()
+        logger.info("All provider sessions closed")
+
+    @classmethod
     def create_provider(
-        provider_name: str, config: Optional[Dict[str, Any]] = None
+        cls, provider_name: str, config: Optional[Dict[str, Any]] = None
     ) -> "BaseProvider":
         """
         Создает экземпляр провайдера AI по имени.
@@ -83,6 +108,9 @@ class ProviderFactory:
         Raises:
             ValueError: Если тип провайдера не поддерживается или конфигурация отсутствует
         """
+        if cls._instance is None:
+            cls._instance = ProviderFactory()
+
         # Загружаем общую конфигурацию
         try:
             from config import load_config
@@ -124,28 +152,34 @@ class ProviderFactory:
         )
 
         # Создаем экземпляр провайдера в зависимости от типа
+        provider = None
         if provider_type == "openai":
-            return OpenAIProvider(provider_config)
+            provider = OpenAIProvider(provider_config)
         elif provider_type == "anthropic":
-            return AnthropicProvider(provider_config)
+            provider = AnthropicProvider(provider_config)
         elif provider_type == "groq":
-            return GroqProvider(provider_config)
+            provider = GroqProvider(provider_config)
         elif provider_type == "local":
-            return LocalProvider(provider_config)
+            provider = LocalProvider(provider_config)
         elif provider_type == "ollama":
-            return OllamaProvider(provider_config)
+            provider = OllamaProvider(provider_config)
         elif provider_type == "openrouter":
-            return OpenRouterProvider(provider_config)
+            provider = OpenRouterProvider(provider_config)
         elif provider_type == "cohere":
-            return CohereProvider(provider_config)
+            provider = CohereProvider(provider_config)
         elif provider_type == "gemini":
-            return GeminiProvider(provider_config)
+            provider = GeminiProvider(provider_config)
         elif provider_type == "together":
-            return TogetherProvider(provider_config)
+            provider = TogetherProvider(provider_config)
         elif provider_type == "codestral":
-            return CodestralProvider(provider_config)
+            provider = CodestralProvider(provider_config)
         else:
             raise ValueError(f"Неподдерживаемый тип провайдера: {provider_type}")
+
+        # Сохраняем созданный провайдер для последующего закрытия сессии
+        storage_key = f"{provider_name}_{provider_type}"
+        cls._instance._providers[storage_key] = provider
+        return provider
 
 
 class BaseProvider(ABC):
@@ -216,9 +250,13 @@ class BaseProvider(ABC):
     async def close_session(self):
         """Closes the aiohttp client session if it exists."""
         if self._session and not self._session.closed:
-            await self._session.close()
-            logger.info(f"Closed aiohttp session for {self.name}")
-            self._session = None
+            try:
+                await self._session.close()
+                logger.info(f"Closed aiohttp session for {self.name}")
+            except Exception as e:
+                logger.error(f"Error while closing session for {self.name}: {e}")
+            finally:
+                self._session = None
 
     async def __aenter__(self):
         return self

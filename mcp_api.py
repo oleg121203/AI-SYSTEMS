@@ -12,6 +12,9 @@ from uuid import uuid4
 import aiofiles
 import git
 import uvicorn
+
+# from websockets import status  # закомментируем импорт status
+import websockets.typing
 from dotenv import load_dotenv
 from fastapi import (
     BackgroundTasks,
@@ -21,17 +24,15 @@ from fastapi import (
     Request,
     WebSocket,
     WebSocketDisconnect,
-    status,
 )
+from fastapi import status as fastapi_status
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field, ValidationError
 
-# add this import
-from websockets.typing import WebSocketState
-
 from providers import ProviderFactory
+from shutdown_handler import register_shutdown_handlers
 
 load_dotenv()
 
@@ -507,7 +508,7 @@ async def websocket_endpoint(websocket: WebSocket):
             await asyncio.sleep(30)  # Keepalive interval
             try:
                 # Check connection state before sending (optional but good practice)
-                if websocket.client_state == WebSocketState.CONNECTED:
+                if websocket.state == websockets.typing.State.OPEN:
                     await websocket.send_json({"type": "ping"})
                 else:
                     logger.warning(
@@ -561,13 +562,16 @@ async def dashboard(request: Request):
     )
 
 
-@app.get("/health", status_code=status.HTTP_200_OK)
+@app.get("/health", status_code=fastapi_status.HTTP_200_OK)
 async def health_check():
     """Простий ендпоінт для перевірки стану сервісу."""
     return {"status": "ok"}
 
 
 if __name__ == "__main__":
+    # Регистрируем обработчики сигналов для корректного завершения
+    register_shutdown_handlers()
+
     web_port = config.get("web_port", 7860)
     logger.info(f"Starting Uvicorn server on 0.0.0.0:{web_port}")
     uvicorn.run(app, host="0.0.0.0", port=web_port)

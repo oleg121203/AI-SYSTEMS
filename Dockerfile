@@ -16,6 +16,9 @@ COPY requirements_async.txt .
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements_async.txt
 
+# Update websockets package
+RUN pip install --upgrade websockets>=10.0
+
 # Copy the rest of your application code into the container
 COPY . .
 
