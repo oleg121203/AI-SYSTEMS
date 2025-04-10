@@ -1,10 +1,10 @@
-// filepath: /workspaces/vscode-remote-try-python/static/script.js
 let taskChart, progressChart, gitChart, editor, statusPieChart;
 let ws;
 const reconnectInterval = 5000;
 const maxReconnectAttempts = 10;
 let reconnectAttempts = 0;
 
+// Глобальні елементи DOM
 let logContent;
 let aiButtons = {};
 let queueLists = {};
@@ -12,6 +12,7 @@ let queueCounts = {};
 let statElements = {};
 let subtask_status = {};
 
+// Налаштування Monaco Editor
 require.config({
   paths: { vs: "https://unpkg.com/monaco-editor@0.34.0/min/vs" },
 });
@@ -27,16 +28,16 @@ require(["vs/editor/editor.main"], function () {
   });
 });
 
+// Підключення до WebSocket
 function connectWebSocket() {
   const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   const wsUrl = `${wsProtocol}//${window.location.host}/ws`;
-  console.log(`Connecting to WebSocket: ${wsUrl}`);
+  console.log(`Attempting to connect to WebSocket: ${wsUrl}`);
   if (logContent)
-    logContent.innerHTML += `<p><em>Connecting to WebSocket: ${wsUrl}</em></p>`;
+    logContent.innerHTML += `<p><em>Attempting to connect to WebSocket: ${wsUrl}</em></p>`;
 
   ws = new WebSocket(wsUrl);
 
-  console.log("connectWebSocket called"); // ADDED LOGGING
   ws.onopen = function () {
     console.log("WebSocket connection established");
     if (logContent)
@@ -44,7 +45,9 @@ function connectWebSocket() {
         "<p><em>WebSocket connection established</em></p>";
     showNotification("Connected to server", "success");
     reconnectAttempts = 0;
+    // Запит повного статусу після підключення
     ws.send(JSON.stringify({ action: "get_full_status" }));
+    console.log("Requested full status from server");
   };
 
   ws.onmessage = function (event) {
@@ -54,30 +57,24 @@ function connectWebSocket() {
 
       switch (data.type) {
         case "full_status_update":
-          console.log("Full status update received:", data); // ADDED LOGGING
+          console.log("Processing full status update:", data);
           updateFullUI(data);
           break;
         case "status_update":
+          console.log("Processing status update:", data.ai_status);
           if (data.ai_status) updateAllButtonStates(data.ai_status);
           break;
-        case "log_update":
-          if (data.log_line && logContent) {
-            const logEntry = document.createElement("p");
-            logEntry.textContent = data.log_line;
-            if (logContent.innerHTML.includes("Connecting to server..."))
-              logContent.innerHTML = "";
-            logContent.appendChild(logEntry);
-            logContent.scrollTop = logContent.scrollHeight;
-          }
-          break;
         case "specific_update":
-          console.log("Specific update:", data);
+          console.log("Processing specific update:", data);
           if (data.queues) updateQueues(data.queues);
           if (data.subtasks) {
             Object.assign(subtask_status, data.subtasks);
             updateStatsFromSubtasks(subtask_status);
           }
-          if (data.structure) updateFileStructure(data.structure);
+          if (data.structure) {
+            console.log("Received structure update:", data.structure);
+            updateFileStructure(data.structure);
+          }
           if (data.processed_over_time)
             updateCharts({ processed_over_time: data.processed_over_time });
           if (data.task_status_distribution)
@@ -91,6 +88,7 @@ function connectWebSocket() {
               logContent.innerHTML = "";
             logContent.appendChild(logEntry);
             logContent.scrollTop = logContent.scrollHeight;
+            console.log("Added log entry:", data.log_line);
           }
           break;
         case "ping":
@@ -107,22 +105,21 @@ function connectWebSocket() {
         event.data
       );
       if (logContent)
-        logContent.innerHTML += `<p><em><strong style="color:red;">Error: ${e}</strong></em></p>`;
+        logContent.innerHTML += `<p><em><strong style="color:red;">Error parsing message: ${e}</strong></em></p>`;
     }
   };
 
   ws.onerror = function (event) {
-    console.error("WebSocket error:", event);
+    console.error("WebSocket error occurred:", event);
     if (logContent)
-      logContent.innerHTML +=
-        '<p><em><strong style="color:red;">WebSocket error</strong></em></p>';
+      logContent.innerHTML += `<p><em><strong style="color:red;">WebSocket error</strong></em></p>`;
     showNotification("WebSocket error", "error");
   };
 
   ws.onclose = function (event) {
     console.log("WebSocket closed:", event.code, event.reason);
     if (logContent)
-      logContent.innerHTML += `<p><em>Reconnecting... (${
+      logContent.innerHTML += `<p><em>WebSocket closed. Reconnecting... (${
         reconnectAttempts + 1
       }/${maxReconnectAttempts})</em></p>`;
     showNotification("Disconnected. Reconnecting...", "warning");
@@ -132,14 +129,15 @@ function connectWebSocket() {
     } else {
       console.error("Max reconnection attempts reached");
       if (logContent)
-        logContent.innerHTML += `<p><em><strong style="color:red;">Failed to reconnect</strong></em></p>`;
+        logContent.innerHTML += `<p><em><strong style="color:red;">Failed to reconnect after ${maxReconnectAttempts} attempts</strong></em></p>`;
       showNotification("Failed to reconnect", "error");
     }
   };
 }
 
+// Оновлення повного UI
 function updateFullUI(data) {
-  console.log("Updating UI with full data:", data);
+  console.log("Updating full UI with data:", data);
   if (data.ai_status) updateAllButtonStates(data.ai_status);
   if (data.queues) updateQueues(data.queues);
   if (data.subtasks) {
@@ -150,36 +148,53 @@ function updateFullUI(data) {
   updateCharts(data);
 }
 
+// Оновлення статистики
 function updateStatsFromSubtasks(subtasks) {
   const total = Object.keys(subtasks).length;
   const completed = Object.values(subtasks).filter((s) =>
     ["accepted", "completed", "code_received", "tested"].includes(s)
   ).length;
+  const pending = Object.values(subtasks).filter((s) => s === "pending").length;
+  const processing = Object.values(subtasks).filter(
+    (s) => s === "processing"
+  ).length;
+  const failed = Object.values(subtasks).filter((s) => s === "failed").length;
   const efficiency = total > 0 ? ((completed / total) * 100).toFixed(1) : 0;
+
   console.log(
-    `Stats - Total: ${total}, Completed: ${completed}, Efficiency: ${efficiency}%`
+    `Stats - Total: ${total}, Completed: ${completed}, Pending: ${pending}, Processing: ${processing}, Failed: ${failed}, Efficiency: ${efficiency}%`
   );
 
   if (statElements.total) statElements.total.textContent = total;
   if (statElements.completed) statElements.completed.textContent = completed;
   if (statElements.efficiency)
     statElements.efficiency.textContent = `${efficiency}%`;
+  // Start: Update new stat elements
+  if (statElements.pending) statElements.pending.textContent = pending;
+  if (statElements.processing) statElements.processing.textContent = processing;
+  if (statElements.failed) statElements.failed.textContent = failed;
+  // End: Update new stat elements
 }
 
+// Оновлення черг
 function updateQueues(queuesData) {
   console.log("Updating queues:", queuesData);
   ["executor", "tester", "documenter"].forEach((role) => {
     const ul = queueLists[role];
     const countSpan = queueCounts[role];
-    if (!ul || !countSpan) return;
+    if (!ul || !countSpan) {
+      console.error(`Queue element missing for role: ${role}`);
+      return;
+    }
 
     ul.innerHTML = "";
     const tasks = queuesData[role] || [];
     countSpan.textContent = tasks.length;
+    console.log(`Queue ${role} updated with ${tasks.length} tasks`);
 
     tasks.forEach((task) => {
       if (!task || !task.id || !task.text) {
-        console.warn("Invalid task:", task);
+        console.warn("Invalid task object:", task);
         return;
       }
       const li = document.createElement("li");
@@ -232,10 +247,11 @@ function getStatusIcon(status) {
     case "failed":
       return "❌";
     default:
-      return "?";
+      return "❓";
   }
 }
 
+// Оновлення графіків
 function updateCharts(data) {
   console.log("Updating charts with data:", data);
 
@@ -284,6 +300,7 @@ function updateCharts(data) {
       (data.queues.documenter || []).length,
     ];
     taskChart.update();
+    console.log("Task chart updated:", taskChart.data.datasets[0].data);
   }
 
   if (
@@ -336,6 +353,7 @@ function updateCharts(data) {
     progressChart.data.labels = data.progress.stages;
     progressChart.data.datasets[0].data = data.progress.values;
     progressChart.update();
+    console.log("Progress chart updated:", progressChart.data.datasets[0].data);
   }
 
   if (!gitChart && data.processed_over_time) {
@@ -374,6 +392,7 @@ function updateCharts(data) {
     gitChart.data.labels = data.processed_over_time.map((_, i) => `T${i + 1}`);
     gitChart.data.datasets[0].data = data.processed_over_time;
     gitChart.update();
+    console.log("Git chart updated:", gitChart.data.datasets[0].data);
   }
 
   if (!statusPieChart) {
@@ -413,7 +432,7 @@ function updateCharts(data) {
             legend: { position: "top", labels: { color: getChartFontColor() } },
             title: {
               display: true,
-              text: "Task Statuses",
+              text: "Task Status Distribution",
               color: getChartFontColor(),
             },
           },
@@ -432,6 +451,10 @@ function updateCharts(data) {
       dist.other || 0,
     ];
     statusPieChart.update();
+    console.log(
+      "Status pie chart updated:",
+      statusPieChart.data.datasets[0].data
+    );
   }
 }
 
@@ -442,59 +465,134 @@ function getChartFontColor() {
     .trim();
 }
 
+// Оновлення структури файлів
 function updateFileStructure(structureData) {
-  console.log("Updating file structure:", structureData); // ADDED LOGGING
+  // Start: Added detailed logging
+  console.log(
+    "Attempting to update file structure. Received data:",
+    JSON.stringify(structureData, null, 2)
+  );
+  // End: Added detailed logging
   const fileStructureDiv = document.getElementById("file-structure");
-  if (!fileStructureDiv) return;
+  if (!fileStructureDiv) {
+    console.error("File structure div (#file-structure) not found in DOM!");
+    return;
+  }
+  // Start: Added check for visibility
+  const styles = window.getComputedStyle(fileStructureDiv);
+  if (styles.display === "none" || styles.visibility === "hidden") {
+    console.warn(
+      "File structure div (#file-structure) is currently hidden by CSS."
+    );
+  }
+  // End: Added check for visibility
 
-  fileStructureDiv.innerHTML = "";
-  if (!structureData || Object.keys(structureData).length === 0) {
+  fileStructureDiv.innerHTML = ""; // Очищення попереднього вмісту
+  if (
+    !structureData ||
+    typeof structureData !== "object" ||
+    Object.keys(structureData).length === 0
+  ) {
+    // Added type check
     fileStructureDiv.innerHTML =
-      "<p><em>No project structure available</em></p>";
+      "<p><em>No project structure available or data is invalid</em></p>";
+    console.warn("No valid structure data provided or data is empty/invalid."); // Changed log level
     return;
   }
 
   const rootUl = document.createElement("ul");
   fileStructureDiv.appendChild(rootUl);
+  console.log("Created root UL element and appended to #file-structure."); // Added log
 
   function renderNode(node, parentUl, currentPath = "") {
+    // Start: Added check for valid node
+    if (!node || typeof node !== "object") {
+      console.error(
+        "Invalid node data encountered during rendering:",
+        node,
+        "at path:",
+        currentPath
+      );
+      return;
+    }
+    // End: Added check for valid node
+
     const entries = Object.entries(node).sort(
       ([keyA, valueA], [keyB, valueB]) => {
         const isDirA = typeof valueA === "object" && valueA !== null;
         const isDirB = typeof valueB === "object" && valueB !== null;
-        return isDirA === isDirB ? keyA.localeCompare(keyB) : isDirA ? -1 : 1;
+        // Ensure consistent sorting: directories first, then files alphabetically
+        if (isDirA !== isDirB) {
+          return isDirA ? -1 : 1;
+        }
+        return keyA.localeCompare(keyB);
       }
     );
+    // Start: Added logging for entries
+    console.log(
+      `Rendering path: '${currentPath}'. Found ${entries.length} entries.`
+    );
+    // End: Added logging for entries
 
     for (const [key, value] of entries) {
       const li = document.createElement("li");
-      parentUl.appendChild(li);
       const isDirectory = typeof value === "object" && value !== null;
       const itemPath = currentPath ? `${currentPath}/${key}` : key;
+      // Start: Added detailed logging inside loop
+      console.log(
+        `  Processing entry: '${key}', Type: ${
+          isDirectory ? "Directory" : "File"
+        }, Path: '${itemPath}'`
+      );
+      // End: Added detailed logging inside loop
 
       if (isDirectory) {
         li.innerHTML = `<span class="folder"><i class="fas fa-folder"></i> ${key}</span>`;
         li.classList.add("folder-item");
         const subUl = document.createElement("ul");
         li.appendChild(subUl);
-        renderNode(value, subUl, itemPath);
-        li.querySelector(".folder").addEventListener("click", (e) => {
-          li.classList.toggle("expanded");
-          e.stopPropagation();
-        });
+        // Start: Added log before recursive call
+        console.log(`    Recursively rendering directory: '${key}'`);
+        // End: Added log before recursive call
+        renderNode(value, subUl, itemPath); // Recursive call
+        const folderSpan = li.querySelector(".folder");
+        if (folderSpan) {
+          folderSpan.addEventListener("click", (e) => {
+            li.classList.toggle("expanded");
+            e.stopPropagation();
+          });
+        } else {
+          console.error(`Could not find .folder span for directory ${key}`);
+        }
       } else {
         li.innerHTML = `<span class="file" data-path="${itemPath}"><i class="fas ${getFileIcon(
           key
         )}"></i> ${key}</span>`;
-        li.querySelector(".file").addEventListener("click", (e) => {
-          loadFileContent(e.currentTarget.getAttribute("data-path"));
-          e.stopPropagation();
-        });
+        const fileSpan = li.querySelector(".file");
+        if (fileSpan) {
+          fileSpan.addEventListener("click", (e) => {
+            loadFileContent(e.currentTarget.getAttribute("data-path"));
+            e.stopPropagation();
+          });
+        } else {
+          console.error(`Could not find .file span for file ${key}`);
+        }
       }
+      parentUl.appendChild(li);
+      // Start: Added log after appending
+      console.log(`    Appended LI for '${key}' to parent UL.`);
+      // End: Added log after appending
     }
   }
 
-  renderNode(structureData, rootUl);
+  try {
+    // Added try...catch around the main render call
+    renderNode(structureData, rootUl);
+    console.log("File structure rendering function completed.");
+  } catch (error) {
+    console.error("Error during file structure rendering:", error);
+    fileStructureDiv.innerHTML = `<p><em>Error rendering file structure: ${error.message}</em></p>`;
+  }
 }
 
 function getFileIcon(filename) {
@@ -524,7 +622,7 @@ async function loadFileContent(path) {
     showNotification("Editor not initialized", "warning");
     return;
   }
-  console.log("Loading file:", path);
+  console.log("Loading file content for:", path);
   editor.setValue(`// Loading ${path}...`);
 
   try {
@@ -539,17 +637,21 @@ async function loadFileContent(path) {
       monaco.editor.setModelLanguage(editor.getModel(), language);
       editor.setValue(content);
       showNotification(`Loaded ${path}`, "info");
+      console.log(`File ${path} loaded successfully`);
     } else {
       const errorText = await response.text();
       editor.setValue(
         `// Failed to load ${path}\n// Status: ${response.status}\n// ${errorText}`
       );
       showNotification(`Failed to load ${path} (${response.status})`, "error");
+      console.error(
+        `Failed to load ${path}: ${response.status} - ${errorText}`
+      );
     }
   } catch (error) {
     console.error("Error loading file:", error);
     editor.setValue(`// Error loading ${path}\n// ${error.message}`);
-    showNotification(`Error: ${error.message}`, "error");
+    showNotification(`Error loading file: ${error.message}`, "error");
   }
 }
 
@@ -580,6 +682,8 @@ function updateAllButtonStates(aiStatusData) {
       statusSpan.textContent = isRunning ? "On" : "Off";
       button.classList.toggle("on", isRunning);
       button.classList.toggle("off", !isRunning);
+    } else {
+      console.warn(`Button or status span not found for AI: ${aiId}`);
     }
   }
 }
@@ -628,7 +732,10 @@ async function sendRequest(endpoint, method = "POST", body = null) {
       options.body = JSON.stringify(body);
     }
     const response = await fetch(endpoint, options);
-    if (!response.ok) throw new Error(`Network error: ${response.status}`);
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Network error: ${response.status} - ${errorText}`);
+    }
     const contentType = response.headers.get("content-type");
     return contentType && contentType.includes("application/json")
       ? await response.json()
@@ -670,6 +777,7 @@ async function resetSystem() {
     logContent.innerHTML = "<p><em>System reset requested...</em></p>";
     updateQueues({ executor: [], tester: [], documenter: [] });
     updateStatsFromSubtasks({});
+    console.log("System reset completed");
   }
 }
 
@@ -677,6 +785,7 @@ async function clearLogs() {
   if (logContent) {
     logContent.innerHTML = "";
     showNotification("Logs cleared", "info");
+    console.log("Logs cleared locally");
   }
 }
 
@@ -691,12 +800,14 @@ async function saveConfig() {
     ],
     ai3_prompt: document.getElementById("ai3-prompt")?.value,
   };
+  console.log("Saving configuration:", configData);
   await sendRequest("/update_config", "POST", configData);
   showNotification("Configuration saved", "success");
 }
 
+// Ініціалізація
 document.addEventListener("DOMContentLoaded", () => {
-  console.log("DOM loaded");
+  console.log("DOM fully loaded");
   logContent = document.getElementById("log-content");
   aiButtons = {
     ai1: document.getElementById("ai1-button"),
@@ -717,6 +828,11 @@ document.addEventListener("DOMContentLoaded", () => {
     total: document.getElementById("total-tasks"),
     completed: document.getElementById("completed-tasks"),
     efficiency: document.getElementById("efficiency"),
+    // Start: Add new stat elements
+    pending: document.getElementById("pending-tasks"),
+    processing: document.getElementById("processing-tasks"),
+    failed: document.getElementById("failed-tasks"),
+    // End: Add new stat elements
   };
 
   const savedTheme = localStorage.getItem("theme") || "dark";
@@ -724,4 +840,5 @@ document.addEventListener("DOMContentLoaded", () => {
   connectWebSocket();
   updateQueues({ executor: [], tester: [], documenter: [] });
   updateStatsFromSubtasks({});
+  console.log("Initialization complete");
 });
