@@ -21,7 +21,8 @@ MCP_API_URL = config.get("mcp_api", "http://localhost:7860")
 class AI1:
     """
     AI1 - Координатор проекта
-    Формулирует задачи для AI2 на основе структуры проекта и следит за прогрессом
+    Формулирует задачи для AI2 на основе структуры проекта и следит за прогрессом,
+    при необходимости дробит задачи и управляет циклами доработки.
     """
 
     def __init__(self, target: str):
@@ -62,9 +63,15 @@ class AI1:
         self.files_to_document = []
         # Task statuses: pending, sending, sent, code_received, fetch_failed,
         #                tested, accepted, review_needed, failed_tests,
-        #                completed_by_ai2, failed_by_ai2, error_processing, skipped
-        self.task_status: Dict[str, Dict[str, str]] = {}
+        #                completed_by_ai2, failed_by_ai2, error_processing, skipped,
+        #                pending_refinement, refinement_sent
+        self.task_status: Dict[str, Dict[str, Any]] = (
+            {}
+        )  # Status can now hold more info
         self.active_tasks = set()  # Stores "filename::role::subtask_id"
+        self.original_task_text: Dict[str, Dict[str, str]] = (
+            {}
+        )  # Store original text for refinement
         self.api_session = None  # Initialize session
 
     async def _get_api_session(self) -> aiohttp.ClientSession:
@@ -214,13 +221,28 @@ class AI1:
     def initialize_task_status(self):
         """Инициализирует словарь статусов задач для всех файлов."""
         self.task_status = {}
+        self.original_task_text = {}
         for file_path in self.files_to_fill:
             self.task_status[file_path] = {
-                "executor": "pending",
-                # Mark as pending only if the file is in the test list
-                "tester": "pending" if file_path in self.files_to_test else "skipped",
-                "documenter": "pending",  # All files need documentation
+                "executor": {
+                    "status": "pending",
+                    "reason": None,
+                    "original_text": None,
+                },
+                "tester": {
+                    "status": (
+                        "pending" if file_path in self.files_to_test else "skipped"
+                    ),
+                    "reason": None,
+                    "original_text": None,
+                },
+                "documenter": {
+                    "status": "pending",
+                    "reason": None,
+                    "original_text": None,
+                },
             }
+            self.original_task_text[file_path] = {}  # Initialize inner dict
         log_message(f"[AI1] Task status initialized for {len(self.task_status)} files.")
 
     async def get_file_content(self, file_path: str) -> Optional[str]:
@@ -329,52 +351,86 @@ class AI1:
             log_message("[AI1] No statuses received from API to update local state.")
             return
 
-        # Iterate through active tasks (filename::role::subtask_id)
         tasks_to_remove = set()
-        for task_key in list(self.active_tasks):  # Iterate over a copy
+        for task_key in list(self.active_tasks):
             try:
                 filename, role, subtask_id = task_key.split("::")
-                api_status = api_statuses.get(subtask_id)
+                api_status_data = api_statuses.get(
+                    subtask_id
+                )  # API might return more than just status string
 
-                if api_status:
-                    local_status = self.task_status.get(filename, {}).get(role)
+                if api_status_data:
+                    # Assuming API returns a dict like {'status': '...', 'details': '...'} or just status string
+                    api_status = (
+                        api_status_data
+                        if isinstance(api_status_data, str)
+                        else api_status_data.get("status")
+                    )
+                    api_details = (
+                        None
+                        if isinstance(api_status_data, str)
+                        else api_status_data.get("details")
+                    )
+
+                    if not api_status:
+                        log_message(
+                            f"[AI1] Warning: No status found in API data for {subtask_id}: {api_status_data}"
+                        )
+                        continue  # Skip if status is missing
+
+                    local_task_entry = self.task_status.get(filename, {}).get(role)
+                    local_status = (
+                        local_task_entry.get("status") if local_task_entry else None
+                    )
+
                     # Define final states
                     final_states = [
                         "accepted",
                         "skipped",
-                        "failed_by_ai2",
-                        "error_processing",
-                        "review_needed",
+                        "failed_by_ai2",  # Considered final failure
+                        "error_processing",  # Considered final failure
                     ]
+                    # States indicating need for refinement
+                    refinement_needed_states = ["review_needed", "failed_tests"]
+
                     if api_status != local_status:
                         log_message(
                             f"[AI1] Updating status for {filename} ({role}) from '{local_status}' to '{api_status}' (Subtask: {subtask_id})"
                         )
-                        if (
-                            filename in self.task_status
-                            and role in self.task_status[filename]
-                        ):
-                            self.task_status[filename][role] = api_status
+                        if local_task_entry:
+                            local_task_entry["status"] = api_status
+                            local_task_entry["reason"] = (
+                                api_details  # Store reason if provided
+                            )
                             updated_count += 1
                         else:
                             log_message(
                                 f"[AI1] Warning: Cannot update status for non-existent local task {filename} ({role})"
                             )
 
+                    # If task needs refinement, mark it locally
+                    if api_status in refinement_needed_states and local_task_entry:
+                        local_task_entry["status"] = "pending_refinement"
+                        log_message(
+                            f"[AI1] Marked {filename} ({role}) as pending_refinement due to API status '{api_status}'. Reason: {api_details}"
+                        )
+                        tasks_to_remove.add(
+                            task_key
+                        )  # Remove original task from active set
+
                     # Remove from active tasks if it reached a final state
-                    if api_status in final_states:
+                    elif api_status in final_states:
                         tasks_to_remove.add(task_key)
                 else:
-                    # Subtask ID from active_tasks not found in API response - might be an issue
                     log_message(
                         f"[AI1] Warning: Active subtask {subtask_id} ({filename}::{role}) not found in API status response."
                     )
-                    # Decide whether to remove it or keep checking
-                    # tasks_to_remove.add(task_key) # Option: remove if not found after a while
+                    # Consider removing after a timeout or multiple misses
+                    # tasks_to_remove.add(task_key)
 
             except ValueError:
                 log_message(f"[AI1] Error parsing active task key: {task_key}")
-                tasks_to_remove.add(task_key)  # Remove malformed key
+                tasks_to_remove.add(task_key)
             except Exception as e:
                 log_message(
                     f"[AI1] Error processing active task {task_key} during status update: {e}"
@@ -386,87 +442,179 @@ class AI1:
         )
 
     async def manage_tasks(self):
-        """Основная логика управления задачами: создание и отслеживание."""
+        """Основная логика управления задачами: создание, отслеживание и доработка."""
         log_message("[AI1] Starting task management cycle...")
-
-        # Update local statuses from API first
         await self.update_local_task_statuses()
 
         tasks_to_send = []
+        refinement_tasks_to_send = []
 
-        for file_path, statuses in self.task_status.items():
+        for file_path, roles_status in self.task_status.items():
+            executor_status = roles_status["executor"]["status"]
+            tester_status = roles_status["tester"]["status"]
+            documenter_status = roles_status["documenter"]["status"]
+
             # Define conditions for triggering next steps
-            # Executor is considered 'done' if its status indicates completion or acceptance by API
             executor_done_statuses = [
                 "code_received",
                 "tested",
                 "accepted",
                 "completed_by_ai2",
-                "review_needed",
+                "skipped",  # Skipped executor means we can proceed
             ]
+            # Consider a task done if it's accepted or skipped
+            is_executor_done = (
+                executor_status in executor_done_statuses
+                or executor_status == "accepted"
+            )
+            is_tester_done = tester_status in ["accepted", "skipped"]
+            is_documenter_done = documenter_status in ["accepted", "skipped"]
 
+            # --- Handle Refinement First ---
+            for role, status_info in roles_status.items():
+                if status_info["status"] == "pending_refinement":
+                    log_message(
+                        f"[AI1] Preparing refinement task for {file_path} ({role}). Reason: {status_info.get('reason')}"
+                    )
+                    # Store original text if not already stored
+                    if not self.original_task_text.get(file_path, {}).get(role):
+                        # Attempt to retrieve original text (might need adjustment based on how it was stored)
+                        original_text = status_info.get(
+                            "original_text", f"Original task for {file_path} ({role})"
+                        )
+                        self.original_task_text[file_path][role] = original_text
+
+                    refinement_tasks_to_send.append(
+                        {
+                            "file_path": file_path,
+                            "role": role,
+                            "original_text": self.original_task_text[file_path][role],
+                            "reason": status_info.get("reason", "Unknown failure"),
+                        }
+                    )
+                    status_info["status"] = (
+                        "refinement_sending"  # Mark as being processed
+                    )
+
+            # --- Handle Regular Task Progression ---
             # 1. Executor tasks
-            if statuses["executor"] == "pending":
+            if executor_status == "pending":
+                task_text = f"Implement the required functionality in file: {file_path} based on the overall project goal: {self.target}"
+                self.original_task_text[file_path][
+                    "executor"
+                ] = task_text  # Store original text
                 tasks_to_send.append(
                     {
-                        "task_text": f"Implement the required functionality in file: {file_path} based on the overall project goal: {self.target}",
+                        "task_text": task_text,
                         "role": "executor",
                         "filename": file_path,
                         "code": None,
                     }
                 )
-                statuses["executor"] = "sending"
+                roles_status["executor"]["status"] = "sending"
 
-            # Check if executor task is done before proceeding
-            is_executor_done = statuses["executor"] in executor_done_statuses
-
-            # 2. Tester tasks
-            if is_executor_done and statuses["tester"] == "pending":
+            # 2. Tester tasks (only if executor is done and tester is pending)
+            if is_executor_done and tester_status == "pending":
                 code_content = await self.get_file_content(file_path)
                 if code_content is not None:
+                    task_text = f"Generate unit tests for the code in file: {file_path}"
+                    self.original_task_text[file_path][
+                        "tester"
+                    ] = task_text  # Store original text
                     tasks_to_send.append(
                         {
-                            "task_text": f"Generate unit tests for the code in file: {file_path}",
+                            "task_text": task_text,
                             "role": "tester",
                             "filename": file_path,
                             "code": code_content,
                         }
                     )
-                    statuses["tester"] = "sending"
+                    roles_status["tester"]["status"] = "sending"
                 else:
                     log_message(
                         f"[AI1] Failed to fetch content for {file_path} to create tester task. Will retry."
                     )
-                    statuses["tester"] = "fetch_failed"
+                    roles_status["tester"]["status"] = "fetch_failed"
 
-            # 3. Documenter tasks
-            if is_executor_done and statuses["documenter"] == "pending":
+            # 3. Documenter tasks (only if executor is done and documenter is pending)
+            if is_executor_done and documenter_status == "pending":
                 code_content = await self.get_file_content(file_path)
                 if code_content is not None:
+                    task_text = f"Generate documentation (e.g., docstrings, comments, README section) for the code in file: {file_path}"
+                    self.original_task_text[file_path][
+                        "documenter"
+                    ] = task_text  # Store original text
                     tasks_to_send.append(
                         {
-                            "task_text": f"Generate documentation (e.g., docstrings, comments, README section) for the code in file: {file_path}",
+                            "task_text": task_text,
                             "role": "documenter",
                             "filename": file_path,
                             "code": code_content,
                         }
                     )
-                    statuses["documenter"] = "sending"
+                    roles_status["documenter"]["status"] = "sending"
                 else:
                     log_message(
                         f"[AI1] Failed to fetch content for {file_path} to create documenter task. Will retry."
                     )
-                    statuses["documenter"] = "fetch_failed"
+                    roles_status["documenter"]["status"] = "fetch_failed"
 
             # Handle retrying failed fetches
-            elif statuses["tester"] == "fetch_failed":
+            elif tester_status == "fetch_failed":
                 log_message(f"[AI1] Retrying fetch for tester task: {file_path}")
-                statuses["tester"] = "pending"
-            elif statuses["documenter"] == "fetch_failed":
+                roles_status["tester"]["status"] = "pending"
+            elif documenter_status == "fetch_failed":
                 log_message(f"[AI1] Retrying fetch for documenter task: {file_path}")
-                statuses["documenter"] = "pending"
+                roles_status["documenter"]["status"] = "pending"
 
-        # Send collected tasks (existing logic remains similar)
+        # --- Send Refinement Tasks ---
+        if refinement_tasks_to_send:
+            log_message(
+                f"[AI1] Attempting to send {len(refinement_tasks_to_send)} refinement subtasks..."
+            )
+            refinement_results = await asyncio.gather(
+                *[
+                    self.create_refinement_subtask(**task_data)
+                    for task_data in refinement_tasks_to_send
+                ],
+                return_exceptions=True,
+            )
+            # Process refinement results (similar to regular tasks)
+            for i, result in enumerate(refinement_results):
+                task_data = refinement_tasks_to_send[i]
+                file_path = task_data["file_path"]
+                role = task_data["role"]
+                subtask_id = result if isinstance(result, str) else None
+
+                if isinstance(result, Exception) or result is False:
+                    error_msg = (
+                        result
+                        if isinstance(result, Exception)
+                        else "API returned failure"
+                    )
+                    log_message(
+                        f"[AI1] Failed to send refinement subtask for {file_path} ({role}): {error_msg}"
+                    )
+                    if (
+                        self.task_status[file_path][role]["status"]
+                        == "refinement_sending"
+                    ):
+                        self.task_status[file_path][role][
+                            "status"
+                        ] = "pending_refinement"  # Reset to retry refinement
+                elif subtask_id:
+                    task_key = f"{file_path}::{role}::{subtask_id}"
+                    self.active_tasks.add(task_key)
+                    log_message(
+                        f"[AI1] Refinement subtask {subtask_id} sent for {file_path} ({role}). Added to active tasks."
+                    )
+                    if (
+                        self.task_status[file_path][role]["status"]
+                        == "refinement_sending"
+                    ):
+                        self.task_status[file_path][role]["status"] = "refinement_sent"
+
+        # --- Send Regular Tasks ---
         if tasks_to_send:
             log_message(
                 f"[AI1] Attempting to send {len(tasks_to_send)} new subtasks..."
@@ -475,15 +623,12 @@ class AI1:
                 *[self.create_subtask(**task_data) for task_data in tasks_to_send],
                 return_exceptions=True,
             )
-
-            # Process results (update status based on API response)
+            # Process results
             for i, result in enumerate(results):
                 task_data = tasks_to_send[i]
                 file_path = task_data["filename"]
                 role = task_data["role"]
-                subtask_id = (
-                    result if isinstance(result, str) else None
-                )  # create_subtask now returns ID on success
+                subtask_id = result if isinstance(result, str) else None
 
                 if isinstance(result, Exception) or result is False:
                     error_msg = (
@@ -494,21 +639,48 @@ class AI1:
                     log_message(
                         f"[AI1] Failed to send subtask for {file_path} ({role}): {error_msg}"
                     )
-                    if self.task_status[file_path][role] == "sending":
-                        self.task_status[file_path][role] = "pending"  # Reset to retry
-                elif subtask_id:  # Successfully sent and got ID
-                    # Status is now 'sent', add to active tasks
+                    if self.task_status[file_path][role]["status"] == "sending":
+                        self.task_status[file_path][role][
+                            "status"
+                        ] = "pending"  # Reset to retry
+                elif subtask_id:
                     task_key = f"{file_path}::{role}::{subtask_id}"
                     self.active_tasks.add(task_key)
                     log_message(
                         f"[AI1] Subtask {subtask_id} sent for {file_path} ({role}). Added to active tasks."
                     )
-                    # Update local status immediately to 'sent'
-                    if self.task_status[file_path][role] == "sending":
-                        self.task_status[file_path][role] = "sent"
-
+                    if self.task_status[file_path][role]["status"] == "sending":
+                        self.task_status[file_path][role]["status"] = "sent"
         else:
-            log_message("[AI1] No new tasks to send in this cycle.")
+            log_message("[AI1] No new regular tasks to send in this cycle.")
+
+    async def create_refinement_subtask(
+        self, file_path: str, role: str, original_text: str, reason: str
+    ) -> Union[str, bool, Exception]:
+        """Creates a subtask specifically for refining a previous failed attempt."""
+        log_message(f"[AI1] Generating refinement task for {file_path} ({role})")
+
+        # Construct a new task text that includes the original goal and the reason for failure
+        refinement_prompt = f"The previous attempt for file '{file_path}' ({role}) needs refinement. Reason: '{reason}'.\nOriginal task: '{original_text}'.\nPlease provide the corrected content or perform the required action, addressing the feedback."
+
+        # Get code content if needed (e.g., for executor, tester, documenter roles)
+        code_content = None
+        if role in ["executor", "tester", "documenter"]:
+            code_content = await self.get_file_content(file_path)
+            if code_content is None:
+                log_message(
+                    f"[AI1] Warning: Could not fetch current content for refinement task {file_path} ({role}). Proceeding without it."
+                )
+                # Decide if you want to fail here or proceed without code
+                # return False # Option to fail if code is essential
+
+        # Use the existing create_subtask function with the new prompt
+        return await self.create_subtask(
+            task_text=refinement_prompt,
+            role=role,
+            filename=file_path,
+            code=code_content,
+        )
 
     async def create_subtask(
         self, task_text: str, role: str, filename: str, code: Optional[str] = None
@@ -580,20 +752,35 @@ class AI1:
             return False
 
         final_complete_statuses = ["accepted", "skipped"]
-        final_failed_statuses = [
+        # Consider tasks needing refinement or failed as NOT complete for the overall project goal
+        incomplete_statuses = [
+            "pending",
+            "sending",
+            "sent",
+            "code_received",
+            "tested",
+            "fetch_failed",
+            "pending_refinement",
+            "refinement_sending",
+            "refinement_sent",
+            "processing",
+            "review_needed",
+            "failed_tests",
             "failed_by_ai2",
             "error_processing",
-            "review_needed",
-        ]  # Consider these 'done' but not successful
+        ]  # Added refinement states
 
-        for file_path, statuses in self.task_status.items():
-            for role, status in statuses.items():
-                if (
-                    status not in final_complete_statuses
-                    and status not in final_failed_statuses
-                ):
-                    return False
-        log_message("[AI1] Completion check: All tasks are in a final state.")
+        for file_path, roles_status in self.task_status.items():
+            for role, status_info in roles_status.items():
+                status = status_info["status"]
+                if status not in final_complete_statuses:
+                    # Log the first incomplete task found for debugging
+                    # log_message(f"[AI1] Completion check: Task {file_path} ({role}) is not complete (Status: {status}).")
+                    return False  # Found an incomplete task
+
+        log_message(
+            "[AI1] Completion check: All tasks are in a final 'accepted' or 'skipped' state."
+        )
         return True
 
 

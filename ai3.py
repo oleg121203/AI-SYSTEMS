@@ -14,12 +14,8 @@ from git import GitCommandError, Repo
 
 from config import load_config
 from providers import BaseProvider, ProviderFactory
-from utils import (
-    apply_request_delay,  # Import apply_request_delay
-    log_message,
-    logger,
-    wait_for_service,
-)
+from utils import apply_request_delay  # Import apply_request_delay
+from utils import log_message, logger, wait_for_service
 
 logger = logging.getLogger(__name__)  # Use logger correctly
 
@@ -140,25 +136,20 @@ Do not include any explanatory text before or after the JSON block. Ensure the J
             f"[AI3] Attempting structure generation with provider: {provider_name}"
         )
         primary_provider: BaseProvider = ProviderFactory.create_provider(provider_name)
-        try:
-            await apply_request_delay("ai3")  # Add delay before primary generation
-            response_text = await primary_provider.generate(
-                prompt=prompt,
-                model=ai3_config.get("model"),
-                max_tokens=ai3_config.get("max_tokens"),
-                temperature=ai3_config.get("temperature"),
+        # Removed finally block with close_session
+        await apply_request_delay("ai3")  # Add delay before primary generation
+        response_text = await primary_provider.generate(
+            prompt=prompt,
+            model=ai3_config.get("model"),
+            max_tokens=ai3_config.get("max_tokens"),
+            temperature=ai3_config.get("temperature"),
+        )
+        if isinstance(response_text, str) and response_text.startswith(
+            "Ошибка генерации"
+        ):
+            raise Exception(
+                f"Primary provider '{provider_name}' failed: {response_text}"
             )
-            if isinstance(response_text, str) and response_text.startswith(
-                "Ошибка генерации"
-            ):
-                raise Exception(
-                    f"Primary provider '{provider_name}' failed: {response_text}"
-                )
-        finally:
-            if hasattr(primary_provider, "close_session") and callable(
-                primary_provider.close_session
-            ):
-                await primary_provider.close_session()
 
         log_message(
             f"[AI3] Raw response preview from '{provider_name}': {response_text[:200] if response_text else 'None'}"
@@ -178,27 +169,20 @@ Do not include any explanatory text before or after the JSON block. Ensure the J
                 fallback_provider: BaseProvider = ProviderFactory.create_provider(
                     fallback_provider_name
                 )
-                try:
-                    await apply_request_delay(
-                        "ai3"
-                    )  # Add delay before fallback generation
-                    response_text = await fallback_provider.generate(
-                        prompt=prompt,
-                        model=ai3_config.get("model"),
-                        max_tokens=ai3_config.get("max_tokens"),
-                        temperature=ai3_config.get("temperature"),
+                # Removed finally block with close_session
+                await apply_request_delay("ai3")  # Add delay before fallback generation
+                response_text = await fallback_provider.generate(
+                    prompt=prompt,
+                    model=ai3_config.get("model"),
+                    max_tokens=ai3_config.get("max_tokens"),
+                    temperature=ai3_config.get("temperature"),
+                )
+                if isinstance(response_text, str) and response_text.startswith(
+                    "Ошибка генерации"
+                ):
+                    raise Exception(
+                        f"Fallback provider '{fallback_provider_name}' also failed: {response_text}"
                     )
-                    if isinstance(response_text, str) and response_text.startswith(
-                        "Ошибка генерации"
-                    ):
-                        raise Exception(
-                            f"Fallback provider '{fallback_provider_name}' also failed: {response_text}"
-                        )
-                finally:
-                    if hasattr(fallback_provider, "close_session") and callable(
-                        fallback_provider.close_session
-                    ):
-                        await fallback_provider.close_session()
 
                 log_message(
                     f"[AI3] Raw response preview from fallback '{fallback_provider_name}': {response_text[:200] if response_text else 'None'}"
@@ -276,28 +260,50 @@ Do not include any explanatory text before or after the JSON block. Ensure the J
         return None
 
 
+# Global session for AI3
+ai3_api_session: Optional[aiohttp.ClientSession] = None
+
+
+async def get_ai3_api_session() -> aiohttp.ClientSession:
+    """Gets or creates the shared aiohttp session for AI3."""
+    global ai3_api_session
+    if ai3_api_session is None or ai3_api_session.closed:
+        ai3_api_session = aiohttp.ClientSession()
+        log_message("[AI3] Created new aiohttp ClientSession.")
+    return ai3_api_session
+
+
+async def close_ai3_api_session():
+    """Closes the shared aiohttp session if it exists."""
+    global ai3_api_session
+    if ai3_api_session and not ai3_api_session.closed:
+        await ai3_api_session.close()
+        ai3_api_session = None
+        log_message("[AI3] Closed aiohttp ClientSession.")
+
+
 async def send_structure_to_api(structure_obj: dict):
     api_url = f"{MCP_API_URL}/structure"
     log_message(f"[AI3 -> API] Sending structure object to {api_url}")
-    async with aiohttp.ClientSession() as client_session:
-        try:
-            async with client_session.post(
-                api_url, json={"structure": structure_obj}, timeout=30
-            ) as resp:
-                response_text = await resp.text()
-                if resp.status == 200:
-                    log_message(
-                        f"[AI3 -> API] Structure successfully sent. Response: {response_text}"
-                    )
-                    return True
-                else:
-                    log_message(
-                        f"[AI3 -> API] Error sending structure. Status: {resp.status}, Response: {response_text}"
-                    )
-                    return False
-        except Exception as e:
-            log_message(f"[AI3 -> API] Error sending structure: {str(e)}")
-            return False
+    client_session = await get_ai3_api_session()  # Use shared session
+    try:
+        async with client_session.post(
+            api_url, json={"structure": structure_obj}, timeout=30
+        ) as resp:
+            response_text = await resp.text()
+            if resp.status == 200:
+                log_message(
+                    f"[AI3 -> API] Structure successfully sent. Response: {response_text}"
+                )
+                return True
+            else:
+                log_message(
+                    f"[AI3 -> API] Error sending structure. Status: {resp.status}, Response: {response_text}"
+                )
+                return False
+    except Exception as e:
+        log_message(f"[AI3 -> API] Error sending structure: {str(e)}")
+        return False
 
 
 async def send_ai3_report(status: str, details: dict = None):
@@ -306,23 +312,23 @@ async def send_ai3_report(status: str, details: dict = None):
     if details:
         payload["details"] = details
     log_message(f"[AI3 -> API] Sending report to {api_url}: {payload}")
-    async with aiohttp.ClientSession() as session:
-        try:
-            async with session.post(api_url, json=payload, timeout=15) as resp:
-                response_text = await resp.text()
-                log_message(
-                    f"[AI3 -> API] Report sent. Status: {resp.status}, Response: {response_text}"
-                )
-                return resp.status == 200
-        except asyncio.TimeoutError:
-            log_message(f"[AI3 -> API] Timeout sending report: {status}")
-            return False
-        except aiohttp.ClientError as e:
-            log_message(f"[AI3 -> API] Connection error sending report: {str(e)}")
-            return False
-        except Exception as e:
-            log_message(f"[AI3 -> API] Unexpected error sending report: {str(e)}")
-            return False
+    session = await get_ai3_api_session()  # Use shared session
+    try:
+        async with session.post(api_url, json=payload, timeout=15) as resp:
+            response_text = await resp.text()
+            log_message(
+                f"[AI3 -> API] Report sent. Status: {resp.status}, Response: {response_text}"
+            )
+            return resp.status == 200
+    except asyncio.TimeoutError:
+        log_message(f"[AI3 -> API] Timeout sending report: {status}")
+        return False
+    except aiohttp.ClientError as e:
+        log_message(f"[AI3 -> API] Connection error sending report: {str(e)}")
+        return False
+    except Exception as e:
+        log_message(f"[AI3 -> API] Unexpected error sending report: {str(e)}")
+        return False
 
 
 async def initiate_collaboration(error: str, context: str):
@@ -331,29 +337,25 @@ async def initiate_collaboration(error: str, context: str):
     log_message(
         f"[AI3 -> API] Initiating collaboration via {api_url}: {collaboration_request}"
     )
-    async with aiohttp.ClientSession() as session:
-        try:
-            async with session.post(
-                api_url, json=collaboration_request, timeout=20
-            ) as resp:
-                response_text = await resp.text()
-                log_message(
-                    f"[AI3 -> API] Collaboration request sent. Status: {resp.status}, Response: {response_text}"
-                )
-                return resp.status == 200
-        except asyncio.TimeoutError:
-            log_message(f"[AI3 -> API] Timeout initiating collaboration.")
-            return False
-        except aiohttp.ClientError as e:
+    session = await get_ai3_api_session()  # Use shared session
+    try:
+        async with session.post(
+            api_url, json=collaboration_request, timeout=20
+        ) as resp:
+            response_text = await resp.text()
             log_message(
-                f"[AI3 -> API] Connection error initiating collaboration: {str(e)}"
+                f"[AI3 -> API] Collaboration request sent. Status: {resp.status}, Response: {response_text}"
             )
-            return False
-        except Exception as e:
-            log_message(
-                f"[AI3 -> API] Unexpected error initiating collaboration: {str(e)}"
-            )
-            return False
+            return resp.status == 200
+    except asyncio.TimeoutError:
+        log_message(f"[AI3 -> API] Timeout initiating collaboration.")
+        return False
+    except aiohttp.ClientError as e:
+        log_message(f"[AI3 -> API] Connection error initiating collaboration: {str(e)}")
+        return False
+    except Exception as e:
+        log_message(f"[AI3 -> API] Unexpected error initiating collaboration: {str(e)}")
+        return False
 
 
 async def create_files_from_structure(structure_obj: dict, repo: Repo):
@@ -589,22 +591,23 @@ async def main():
         log_message(
             f"[AI3] CRITICAL: Failed to initialize repository. Exiting. Error: {e}"
         )
+        await close_ai3_api_session()  # Ensure session is closed on early exit
         return
 
     structure_obj = None
     try:
         api_url = f"{MCP_API_URL}/structure"
-        async with aiohttp.ClientSession() as session:
-            async with session.get(api_url, timeout=10) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    if (
-                        data
-                        and isinstance(data.get("structure"), dict)
-                        and data["structure"]
-                    ):
-                        structure_obj = data["structure"]
-                        log_message("[AI3] Found existing structure from API.")
+        session = await get_ai3_api_session()  # Get shared session
+        async with session.get(api_url, timeout=10) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                if (
+                    data
+                    and isinstance(data.get("structure"), dict)
+                    and data["structure"]
+                ):
+                    structure_obj = data["structure"]
+                    log_message("[AI3] Found existing structure from API.")
     except Exception as e:
         log_message(f"[AI3] Could not check for existing structure: {e}")
 
@@ -638,6 +641,8 @@ async def main():
         log_message("[AI3] Main task cancelled.")
     except Exception as e:
         log_message(f"[AI3] Monitoring stopped unexpectedly: {e}")
+    finally:
+        await close_ai3_api_session()  # Ensure session is closed when monitoring stops or main exits
 
     log_message("[AI3] Exiting.")
 
@@ -646,4 +651,12 @@ if __name__ == "__main__":
     log_dir = os.path.dirname(LOG_FILE_PATH)
     if log_dir:
         os.makedirs(log_dir, exist_ok=True)
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        log_message("[AI3] Received KeyboardInterrupt, shutting down.")
+    finally:
+        # Ensure session is closed even if asyncio.run exits unexpectedly
+        # This might require a more robust shutdown handler in a real application
+        # but for now, try closing it here.
+        asyncio.run(close_ai3_api_session())

@@ -28,6 +28,9 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field, ValidationError
 
+# add this import
+from websockets.typing import WebSocketState
+
 from providers import ProviderFactory
 
 load_dotenv()
@@ -496,14 +499,42 @@ async def websocket_endpoint(websocket: WebSocket):
     active_connections.add(websocket)
     logger.info(f"WebSocket connected: {websocket.client}")
     try:
-        await broadcast_full_status()
+        # Send initial full status upon connection
+        await broadcast_full_status()  # Consider sending only to the new client if needed
+
+        # Keep connection alive with pings and handle potential disconnects
         while True:
-            await asyncio.sleep(30)
-            await websocket.send_json({"type": "ping"})
+            await asyncio.sleep(30)  # Keepalive interval
+            try:
+                # Check connection state before sending (optional but good practice)
+                if websocket.client_state == WebSocketState.CONNECTED:
+                    await websocket.send_json({"type": "ping"})
+                else:
+                    logger.warning(
+                        f"WebSocket {websocket.client} state is not CONNECTED, skipping ping."
+                    )
+                    break  # Exit loop if not connected
+            except (WebSocketDisconnect, RuntimeError) as e:
+                # Catch disconnect or runtime error if send is attempted on closed socket
+                logger.warning(
+                    f"WebSocket {websocket.client} disconnected or error during ping: {e}"
+                )
+                break  # Exit the loop to allow cleanup
     except WebSocketDisconnect:
-        logger.info(f"WebSocket disconnected: {websocket.client}")
+        # This catches disconnects that happen outside the ping loop (e.g., during accept or initial broadcast)
+        logger.info(
+            f"WebSocket disconnected: {websocket.client} (during main loop or initial phase)"
+        )
+    except Exception as e:
+        # Catch any other unexpected errors
+        logger.error(
+            f"Unexpected error in WebSocket handler for {websocket.client}: {e}",
+            exc_info=True,
+        )
     finally:
+        # Ensure the connection is removed from the active set on any exit path
         active_connections.discard(websocket)
+        logger.info(f"WebSocket connection cleanup for {websocket.client}")
 
 
 @app.get("/")
