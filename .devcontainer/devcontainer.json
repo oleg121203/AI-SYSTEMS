@@ -12,7 +12,6 @@
   "runArgs": ["--add-host=host.docker.internal:host-gateway", "--network=host"],
   "containerEnv": {
     "OLLAMA_HOST": "http://localhost:11434",
-    "OLLAMA_API": "http://localhost:11434",
     "TZ": "Europe/Kyiv"
   },
   "mounts": [
@@ -44,9 +43,7 @@
         "GitHub.copilot",
         "GitHub.copilot-chat",
         "batisteo.vscode-django",
-        "openai.openai-chatgpt-adhoc",
         "donjayamanne.python-environment-manager",
-        "donjayamanne.python-extension-manager",
         "foxundermoon.shell-format",
         "timonwong.shellcheck",
         "yzhang.markdown-all-in-one",
@@ -55,7 +52,8 @@
         "rust-lang.rust-analyzer",
         "editorconfig.editorconfig",
         "DavidAnson.vscode-markdownlint",
-        "SonarSource.sonarlint-vscode"
+        "SonarSource.sonarlint-vscode",
+        "ciiqr.note"
       ]
     }
   },
@@ -78,6 +76,5 @@
       "onAutoForward": "notify"
     }
   },
-  "postCreateCommand": "sudo apt-get update && sudo apt-get install -y shfmt shellcheck && pip install --upgrade pip && pip install flake8==7.1.1 black==24.8.0 isort==5.13.2 pytest==8.3.3 httpx==0.27.2 pydantic==2.9.2 && if [ -f \"${containerWorkspaceFolder}/package.json\" ]; then cd \"${containerWorkspaceFolder}\" && npm install; fi && if [ -f \"${containerWorkspaceFolder}/Cargo.toml\" ]; then cargo build; fi && git config --global user.name \"Oleg Kizyma\" && git config --global user.email \"oleg1203@gmail.com\" && echo 'Setup completed successfully'",
-  "workspaceFolder": "/home/dev/vscode/AI-SYSTEMS"
+  "postCreateCommand": "sudo apt-get update && sudo apt-get install -y shfmt shellcheck && pip install --upgrade pip && pip install flake8==7.1.1 black==24.8.0 isort==5.13.2 pytest==8.3.3 httpx==0.27.2 pydantic==2.9.2 && npm install -g markdownlint-cli && if [ -f \"${localWorkspaceFolder}/package.json\" ]; then cd \"${localWorkspaceFolder}\" && npm install; fi && if [ -f \"${localWorkspaceFolder}/Cargo.toml\" ]; then cd \"${localWorkspaceFolder}\" && cargo build; fi && set -a && . \"${localWorkspaceFolder}/.env\" && git config --global user.name \"$GIT_USER_NAME\" && git config --global user.email \"$GIT_USER_EMAIL\" && mkdir -p ~/.ssh && echo \"$GIT_SSH_KEY\" > ~/.ssh/id_rsa && chmod 600 ~/.ssh/id_rsa && ssh-keyscan github.com >> ~/.ssh/known_hosts && cd \"${localWorkspaceFolder}\" && if [ ! -d .git ]; then git init && git checkout -b \"$MAIN_BRANCH\" && echo \"$REPO_SUBFOLDER/\" > .gitignore && echo \".env\" >> .gitignore && git add .gitignore && git commit -m \"Initial commit with .gitignore\" && git remote add origin \"git@github.com:oleg1203/AI-SYSTEMS.git\" && git push -u origin \"$MAIN_BRANCH\"; else git checkout \"$MAIN_BRANCH\" || git checkout -b \"$MAIN_BRANCH\"; fi && mkdir -p \"${localWorkspaceFolder}/$REPO_SUBFOLDER/$GAME_SUBFOLDER\" && cd \"${localWorkspaceFolder}/$REPO_SUBFOLDER/$GAME_SUBFOLDER\" && if [ ! -d .git ]; then git init && git checkout -b \"$GAME_BRANCH\" && echo 'Initial game files version control' > README.md && git add README.md && git commit -m \"Initial commit for game files\"; fi && echo 'Setup completed successfully'"
 }

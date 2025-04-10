@@ -3,9 +3,12 @@ FROM python:3.11-slim
 
 # Install system dependencies
 RUN apt-get update && \
-    apt-get install -y git dos2unix procps curl && \
+    apt-get install -y git dos2unix procps curl sudo && \
     rm -rf /var/lib/apt/lists/* && \
     pip install --upgrade pip
+
+# Create user vscode with UID 1000
+RUN useradd -m -u 1000 -s /bin/bash vscode
 
 # Set the working directory in the container
 WORKDIR /app
@@ -27,3 +30,6 @@ RUN mkdir -p logs repo && \
     dos2unix /app/run_async_services.sh && \
     chmod +x /app/run_async_services.sh && \
     git config --global --add safe.directory /app/repo
+
+# Switch to user vscode
+USER vscode
