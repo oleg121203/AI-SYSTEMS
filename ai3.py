@@ -8,9 +8,11 @@ import subprocess
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Dict, List, Optional
 
 import aiohttp
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from git import GitCommandError, Repo
 
 from config import load_config
@@ -24,6 +26,9 @@ config = load_config()
 MCP_API_URL = config.get("mcp_api", "http://localhost:7860")
 REPO_DIR = config.get("repo_dir", "repo")
 LOG_FILE_PATH = config.get("log_file", "logs/mcp.log")  # Still needed for general logs
+
+# Инициализация FastAPI приложения
+app = FastAPI()
 
 
 def _init_or_open_repo(repo_path: str) -> Repo:
