@@ -30,7 +30,7 @@
     },
     "ai2": {
       "executor": "ollama",
-      "tester": "groq",
+      "tester": "ollama",
       "documenter": "groq",
       "fallback_provider": "openrouter-qwen",
       "max_tokens": 4096,
