@@ -268,7 +268,7 @@ ai3_api_session: Optional[aiohttp.ClientSession] = None
 async def get_ai3_api_session() -> aiohttp.ClientSession:
     """Gets or creates the shared aiohttp session for AI3."""
     global ai3_api_session
-    if ai3_api_session is None or ai3_api_session.closed:
+    if (ai3_api_session is None) or ai3_api_session.closed:
         ai3_api_session = aiohttp.ClientSession()
         log_message("[AI3] Created new aiohttp ClientSession.")
     return ai3_api_session
@@ -482,6 +482,452 @@ async def simple_log_monitor():
         await asyncio.sleep(config.get("ai3_log_monitor_interval", 10))
 
 
+async def monitor_idle_workers():
+    """
+    Функция "дозора", которая отслеживает простаивающих работников и
+    запрашивает новые задачи для них у API, если они долго не заняты.
+    """
+    idle_threshold = config.get(
+        "idle_threshold_seconds", 60
+    )  # Период бездействия, после которого считаем работника простаивающим
+    monitoring_interval = config.get(
+        "worker_monitoring_interval", 15
+    )  # Интервал проверки статуса работников
+
+    log_message("[AI3-Monitor] Начат мониторинг простаивающих работников")
+
+    # Словарь для отслеживания времени последней активности каждого работника
+    last_activity = {"executor": None, "tester": None, "documenter": None}
+    idle_workers = set()
+
+    # Количество последовательных сообщений о бездействии для каждого работника
+    idle_messages_count = {"executor": 0, "tester": 0, "documenter": 0}
+    # Максимальное количество сообщений перед запросом на создание новой задачи
+    max_idle_messages = 3
+
+    while True:
+        try:
+            session = await get_ai3_api_session()
+            current_time = time.time()
+
+            # Проверяем логи каждого работника
+            for role in ["executor", "tester", "documenter"]:
+                log_path = f"logs/ai2_{role}.log"
+                try:
+                    # Проверяем время последнего изменения лог-файла
+                    if os.path.exists(log_path):
+                        last_modified = os.path.getmtime(log_path)
+                        elapsed_time = current_time - last_modified
+
+                        # Проверяем содержимое последних строк логов на наличие сообщений об отсутствии задач
+                        has_empty_queue = False
+                        with open(log_path, "r", encoding="utf-8") as f:
+                            last_lines = deque(f, 10)  # Читаем последние 10 строк
+                            for line in last_lines:
+                                if "Очередь для роли" in line and "пуста" in line:
+                                    has_empty_queue = True
+                                    break
+
+                        # Если очередь пуста и прошло достаточно времени
+                        if has_empty_queue and elapsed_time > idle_threshold:
+                            if role not in idle_workers:
+                                idle_workers.add(role)
+                                log_message(
+                                    f"[AI3-Monitor] Обнаружен простаивающий работник: {role}, бездействует {elapsed_time:.1f} секунд"
+                                )
+
+                            idle_messages_count[role] += 1
+
+                            # Если достигнут порог сообщений, запрашиваем новую задачу
+                            if idle_messages_count[role] >= max_idle_messages:
+                                await request_new_task_for_worker(role)
+                                idle_messages_count[role] = 0  # Сбрасываем счетчик
+                        else:
+                            if role in idle_workers:
+                                idle_workers.remove(role)
+                                idle_messages_count[role] = 0
+                                log_message(
+                                    f"[AI3-Monitor] Работник {role} больше не простаивает"
+                                )
+                except Exception as e:
+                    log_message(
+                        f"[AI3-Monitor] Ошибка при проверке логов работника {role}: {e}"
+                    )
+
+            # Отправляем общий отчет, если есть простаивающие работники
+            if idle_workers:
+                log_message(
+                    f"[AI3-Monitor] Текущие простаивающие работники: {', '.join(idle_workers)}"
+                )
+
+            await asyncio.sleep(monitoring_interval)
+        except asyncio.CancelledError:
+            log_message("[AI3-Monitor] Мониторинг работников остановлен")
+            break
+        except Exception as e:
+            log_message(f"[AI3-Monitor] Ошибка в цикле мониторинга: {e}")
+            await asyncio.sleep(monitoring_interval)  # Продолжаем после ошибки
+
+
+async def request_new_task_for_worker(role):
+    """
+    Запрашивает новую задачу для простаивающего работника через API.
+    """
+    log_message(
+        f"[AI3-Monitor] Запрос новой задачи для простаивающего работника: {role}"
+    )
+
+    try:
+        session = await get_ai3_api_session()
+        api_url = f"{MCP_API_URL}/request_task_for_idle_worker"
+
+        async with session.post(
+            api_url, json={"role": role, "reason": "worker_idle"}, timeout=30
+        ) as resp:
+            response_text = await resp.text()
+            if resp.status == 200:
+                log_message(
+                    f"[AI3-Monitor] Успешно запрошена новая задача для {role}. Ответ: {response_text}"
+                )
+                return True
+            else:
+                log_message(
+                    f"[AI3-Monitor] Ошибка запроса новой задачи для {role}. Статус: {resp.status}, Ответ: {response_text}"
+                )
+                return False
+    except Exception as e:
+        log_message(f"[AI3-Monitor] Не удалось запросить новую задачу для {role}: {e}")
+        return False
+
+
+async def scan_for_errors_in_logs():
+    """
+    Сканирует логи на наличие ошибок и запрашивает задачи на исправление.
+    """
+    scan_interval = config.get("error_scan_interval", 30)  # Интервал сканирования логов
+    log_message("[AI3-Monitor] Начато сканирование логов на наличие ошибок")
+
+    # Регулярное выражение для поиска ошибок в логах
+    error_pattern = re.compile(
+        r".*(ERROR|CRITICAL|Exception|failed test|test failed).*", re.IGNORECASE
+    )
+
+    # Словарь для хранения последних позиций чтения файлов
+    file_positions = {}
+
+    # Словарь для хранения уже отправленных ошибок, чтобы не дублировать
+    reported_errors = {}
+
+    while True:
+        try:
+            # Проверяем все лог-файлы в директории logs
+            log_dir = "logs"
+            if os.path.exists(log_dir):
+                for filename in os.listdir(log_dir):
+                    if filename.endswith(".log"):
+                        log_path = os.path.join(log_dir, filename)
+
+                        # Инициализируем позицию чтения, если файл новый
+                        if log_path not in file_positions:
+                            file_positions[log_path] = 0
+
+                        try:
+                            current_size = os.path.getsize(log_path)
+
+                            # Если файл уменьшился, начинаем чтение с начала
+                            if current_size < file_positions[log_path]:
+                                file_positions[log_path] = 0
+
+                            if current_size > file_positions[log_path]:
+                                with open(log_path, "r", encoding="utf-8") as file:
+                                    file.seek(file_positions[log_path])
+                                    new_content = file.read()
+                                    file_positions[log_path] = file.tell()
+
+                                    for line in new_content.splitlines():
+                                        if error_pattern.search(line):
+                                            # Создаем хеш для этой ошибки, чтобы не дублировать отчеты
+                                            error_hash = hash(line)
+
+                                            # Проверяем, не сообщали ли мы уже об этой ошибке
+                                            if (
+                                                error_hash not in reported_errors
+                                                or (
+                                                    time.time()
+                                                    - reported_errors[error_hash]
+                                                )
+                                                > 3600
+                                            ):  # 1 час между повторными отчетами
+                                                log_message(
+                                                    f"[AI3-Monitor] Обнаружена ошибка в {filename}: {line}"
+                                                )
+                                                reported_errors[error_hash] = (
+                                                    time.time()
+                                                )
+
+                                                # Определяем роль из имени файла
+                                                role = None
+                                                if "ai2_executor" in filename:
+                                                    role = "executor"
+                                                elif "ai2_tester" in filename:
+                                                    role = "tester"
+                                                elif "ai2_documenter" in filename:
+                                                    role = "documenter"
+
+                                                # Запрашиваем исправление ошибки
+                                                await request_error_fix(
+                                                    line, filename, role
+                                                )
+                        except Exception as e:
+                            log_message(
+                                f"[AI3-Monitor] Ошибка при чтении лог-файла {log_path}: {e}"
+                            )
+
+            await asyncio.sleep(scan_interval)
+        except asyncio.CancelledError:
+            log_message("[AI3-Monitor] Сканирование ошибок остановлено")
+            break
+        except Exception as e:
+            log_message(f"[AI3-Monitor] Ошибка в цикле сканирования: {e}")
+            await asyncio.sleep(scan_interval)
+
+
+async def request_error_fix(error_line, log_file, role=None):
+    """
+    Запрашивает задачу на исправление обнаруженной ошибки.
+    """
+    log_message(
+        f"[AI3-Monitor] Запрос исправления ошибки из {log_file}{' для роли '+role if role else ''}"
+    )
+
+    try:
+        session = await get_ai3_api_session()
+        api_url = f"{MCP_API_URL}/request_error_fix"
+
+        payload = {"error_text": error_line, "log_file": log_file, "role": role}
+
+        async with session.post(api_url, json=payload, timeout=30) as resp:
+            response_text = await resp.text()
+            if resp.status == 200:
+                log_message(
+                    f"[AI3-Monitor] Успешно запрошено исправление ошибки. Ответ: {response_text}"
+                )
+                return True
+            else:
+                log_message(
+                    f"[AI3-Monitor] Ошибка запроса исправления. Статус: {resp.status}, Ответ: {response_text}"
+                )
+                return False
+    except Exception as e:
+        log_message(f"[AI3-Monitor] Не удалось запросить исправление ошибки: {e}")
+        return False
+
+
+async def monitor_github_actions():
+    """
+    Функция мониторинга результатов GitHub Actions.
+    Отслеживает результаты запуска тестов и предоставляет рекомендации AI1.
+    """
+    log_message("[AI3-GitHub] Начат мониторинг результатов GitHub Actions")
+    check_interval = config.get(
+        "github_check_interval", 30
+    )  # Интервал проверки в секундах
+
+    github_api_token = config.get("github_token", os.environ.get("GITHUB_TOKEN"))
+    repo_owner = config.get("github_repo_owner", "owner")
+    repo_name = config.get("github_repo_name", "AI-SYSTEMS")
+
+    # URL для API GitHub Actions
+    github_api_url = (
+        f"https://api.github.com/repos/{repo_owner}/{repo_name}/actions/runs"
+    )
+
+    # Хранение состояния последних проверенных runs
+    last_checked_runs = set()
+
+    while True:
+        try:
+            if not github_api_token:
+                log_message(
+                    "[AI3-GitHub] Ошибка: отсутствует токен GitHub API. Мониторинг приостановлен."
+                )
+                await asyncio.sleep(check_interval * 2)
+                continue
+
+            headers = {
+                "Authorization": f"token {github_api_token}",
+                "Accept": "application/vnd.github.v3+json",
+            }
+
+            # Получаем последние workflow runs
+            session = await get_ai3_api_session()
+            async with session.get(github_api_url, headers=headers) as response:
+                if response.status != 200:
+                    log_message(
+                        f"[AI3-GitHub] Ошибка при получении данных GitHub Actions: {response.status}"
+                    )
+                    await asyncio.sleep(check_interval)
+                    continue
+
+                data = await response.json()
+                workflow_runs = data.get("workflow_runs", [])
+
+                # Проверяем новые runs
+                for run in workflow_runs:
+                    run_id = run.get("id")
+
+                    # Пропускаем уже проверенные runs
+                    if run_id in last_checked_runs:
+                        continue
+
+                    run_status = run.get("status")
+                    run_conclusion = run.get("conclusion")
+
+                    # Обрабатываем только завершенные runs
+                    if run_status == "completed":
+                        last_checked_runs.add(run_id)
+
+                        # Определяем, какие файлы были протестированы
+                        commit_sha = run.get("head_sha")
+                        test_files = await get_tested_files(
+                            session, repo_owner, repo_name, commit_sha, headers
+                        )
+
+                        # Создаем отчет для AI1
+                        recommendation = await create_test_recommendation(
+                            run_id, run_conclusion, test_files, run.get("html_url")
+                        )
+
+                        # Отправляем рекомендацию в API
+                        await send_test_recommendation(recommendation)
+
+                # Ограничиваем размер множества проверенных runs
+                if len(last_checked_runs) > 100:
+                    last_checked_runs = set(list(last_checked_runs)[-50:])
+
+            await asyncio.sleep(check_interval)
+        except asyncio.CancelledError:
+            log_message("[AI3-GitHub] Мониторинг GitHub Actions остановлен")
+            break
+        except Exception as e:
+            log_message(f"[AI3-GitHub] Ошибка в цикле мониторинга GitHub Actions: {e}")
+            await asyncio.sleep(check_interval)
+
+
+async def get_tested_files(session, repo_owner, repo_name, commit_sha, headers):
+    """
+    Определяет, какие файлы были протестированы в конкретном коммите.
+    """
+    try:
+        # Получаем изменения в коммите
+        commit_url = f"https://api.github.com/repos/{repo_owner}/{repo_name}/commits/{commit_sha}"
+        async with session.get(commit_url, headers=headers) as response:
+            if response.status != 200:
+                return []
+
+            data = await response.json()
+            files = data.get("files", [])
+
+            # Фильтруем тестовые файлы
+            test_files = []
+            for file in files:
+                filename = file.get("filename", "")
+                if filename.startswith("test_") or filename.endswith("_test.py"):
+                    # Проверяем связанные исходные файлы
+                    source_file = await find_source_file_for_test(filename)
+                    if source_file:
+                        test_files.append(
+                            {"test_file": filename, "source_file": source_file}
+                        )
+
+            return test_files
+    except Exception as e:
+        log_message(f"[AI3-GitHub] Ошибка при получении протестированных файлов: {e}")
+        return []
+
+
+async def find_source_file_for_test(test_filename):
+    """
+    Находит исходный файл, который тестируется данным тестом.
+    """
+    try:
+        # Удаляем префикс test_ или суффикс _test.py
+        if test_filename.startswith("test_"):
+            source_name = test_filename[5:]  # Удаляем "test_"
+        elif test_filename.endswith("_test.py"):
+            source_name = test_filename[:-8] + ".py"  # Заменяем "_test.py" на ".py"
+        else:
+            return None
+
+        # Проверяем, существует ли такой файл
+        repo_path = os.path.join(REPO_DIR)
+        potential_paths = [
+            os.path.join(repo_path, source_name),
+            os.path.join(repo_path, "src", source_name),
+            os.path.join(repo_path, "backend", source_name),
+        ]
+
+        for path in potential_paths:
+            if os.path.exists(path):
+                return os.path.relpath(path, repo_path)
+
+        return None
+    except Exception as e:
+        log_message(f"[AI3-GitHub] Ошибка при поиске исходного файла: {e}")
+        return None
+
+
+async def create_test_recommendation(run_id, conclusion, test_files, html_url):
+    """
+    Создает рекомендацию на основе результатов тестов.
+    """
+    recommendation = {
+        "run_id": run_id,
+        "result": conclusion,
+        "files": test_files,
+        "url": html_url,
+        "timestamp": datetime.now().isoformat(),
+        "recommendation": "accept" if conclusion == "success" else "rework",
+    }
+
+    # Добавляем детальные комментарии
+    if conclusion == "success":
+        recommendation["comments"] = [
+            "Все тесты успешно пройдены",
+            "Код соответствует требованиям",
+        ]
+    else:
+        recommendation["comments"] = [
+            "Тесты завершились с ошибками",
+            "Рекомендуется исправить ошибки и отправить код на доработку",
+        ]
+
+    return recommendation
+
+
+async def send_test_recommendation(recommendation):
+    """
+    Отправляет рекомендацию в API для обработки AI1.
+    """
+    api_url = f"{MCP_API_URL}/test_recommendation"
+    session = await get_ai3_api_session()
+    try:
+        async with session.post(api_url, json=recommendation, timeout=30) as response:
+            if response.status == 200:
+                log_message(
+                    f"[AI3-GitHub] Рекомендация успешно отправлена. Run ID: {recommendation['run_id']}"
+                )
+                return True
+            else:
+                log_message(
+                    f"[AI3-GitHub] Ошибка отправки рекомендации. Статус: {response.status}"
+                )
+                return False
+    except Exception as e:
+        log_message(f"[AI3-GitHub] Ошибка отправки рекомендации: {e}")
+        return False
+
+
 def install_missing_modules(module_name):
     try:
         importlib.import_module(module_name)
@@ -573,6 +1019,8 @@ class AI3:
 async def main():
     install_missing_modules("together")
     install_missing_modules("mistralai")
+    # Добавим импорт коллекций для deque
+    from collections import deque
 
     target = config.get("target")
     if not target:
@@ -635,13 +1083,32 @@ async def main():
             log_message("[AI3] Failed to generate structure. Cannot create files.")
             await send_ai3_report("structure_generation_failed")
 
-    log_message("[AI3] Starting simplified log monitoring.")
+    # Запускаем все мониторинговые задачи параллельно
+    log_message("[AI3] Starting all monitoring tasks...")
+    monitoring_tasks = [
+        asyncio.create_task(simple_log_monitor()),
+        asyncio.create_task(monitor_idle_workers()),
+        asyncio.create_task(scan_for_errors_in_logs()),
+        asyncio.create_task(
+            monitor_github_actions()
+        ),  # Добавляем мониторинг GitHub Actions
+    ]
+
+    log_message("[AI3] All monitoring tasks started successfully")
+
+    # Ждем завершения любой из задач или исключения
     try:
-        await simple_log_monitor()
+        await asyncio.gather(*monitoring_tasks)
     except asyncio.CancelledError:
-        log_message("[AI3] Main task cancelled.")
+        log_message("[AI3] Main task cancelled, stopping all monitoring tasks...")
+        for task in monitoring_tasks:
+            if not task.done():
+                task.cancel()
+        # Ждем завершения отмененных задач
+        await asyncio.gather(*monitoring_tasks, return_exceptions=True)
+        log_message("[AI3] All monitoring tasks stopped.")
     except Exception as e:
-        log_message(f"[AI3] Monitoring stopped unexpectedly: {e}")
+        log_message(f"[AI3] Error in monitoring tasks: {e}")
     finally:
         await close_ai3_api_session()  # Ensure session is closed when monitoring stops or main exits
 
@@ -661,3 +1128,287 @@ if __name__ == "__main__":
         # This might require a more robust shutdown handler in a real application
         # but for now, try closing it here.
         asyncio.run(close_ai3_api_session())
+
+
+@app.post("/consultation")
+async def provide_consultation(request: Request) -> JSONResponse:
+    """
+    Эндпоинт для AI3 (дозора), который обрабатывает запросы на консультацию от AI1.
+    AI3 анализирует задачи или микрозадачи и предлагает рекомендации.
+    """
+    try:
+        data = await request.json()
+        consultation_type = data.get("consultation_type", "")
+        target = data.get("target", "")
+        consultation_data = data.get("data", {})
+
+        if not consultation_type or not consultation_data:
+            log_message(
+                "[AI3-Консультация] Получен некорректный запрос на консультацию"
+            )
+            return JSONResponse(
+                status_code=400,
+                content={"status": "error", "message": "Invalid consultation request"},
+            )
+
+        log_message(
+            f"[AI3-Консультация] Получен запрос на консультацию типа: {consultation_type}"
+        )
+
+        # Используем LLM для анализа задач и генерации рекомендаций
+        if consultation_type == "task_structure":
+            recommendations = await analyze_task_structure(consultation_data, target)
+        elif consultation_type == "subtasks":
+            recommendations = await analyze_subtasks(consultation_data, target)
+        else:
+            log_message(
+                f"[AI3-Консультация] Неизвестный тип консультации: {consultation_type}"
+            )
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "status": "error",
+                    "message": f"Unknown consultation type: {consultation_type}",
+                },
+            )
+
+        log_message(
+            f"[AI3-Консультация] Генерация рекомендаций завершена: {len(recommendations.get('recommendations', []))} пунктов"
+        )
+        return JSONResponse(content=recommendations)
+
+    except Exception as e:
+        log_message(
+            f"[AI3-Консультация] Ошибка при обработке запроса на консультацию: {e}"
+        )
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "message": f"Internal error: {str(e)}"},
+        )
+
+
+async def analyze_task_structure(task_structure: Dict, target: str) -> Dict:
+    """
+    Анализирует структуру задач и генерирует рекомендации по улучшению.
+
+    Args:
+        task_structure: Структура задач
+        target: Цель проекта
+
+    Returns:
+        Dict с рекомендациями и улучшенной структурой
+    """
+    log_message("[AI3-Консультация] Анализ структуры задач...")
+
+    # Базовая структура ответа
+    result = {"recommendations": [], "improved_structure": task_structure.copy()}
+
+    try:
+        # Готовим промпт для LLM
+        prompt = f"""
+        Анализ структуры задач и предложения по улучшению.
+        
+        Цель проекта: {target}
+        
+        Текущая структура задач:
+        {json.dumps(task_structure, indent=2, ensure_ascii=False)}
+        
+        Проанализируй структуру задач и предложи улучшения. Рассмотри:
+        1. Оптимальна ли группировка задач?
+        2. Правильно ли расставлены приоритеты?
+        3. Есть ли логические зависимости между задачами, которые не учтены?
+        4. Нет ли пропущенных компонентов или задач?
+        
+        Ответь в формате JSON, который содержит:
+        1. "recommendations" - список строк с рекомендациями
+        2. "improved_structure" - улучшенная структура задач (опционально)
+        """
+
+        # Получаем ответ от LLM
+        ai_config = config.get("ai_config", {}).get("ai3", {})
+        provider_name = ai_config.get("provider", "openai")
+        provider = ProviderFactory.create_provider(provider_name)
+
+        await apply_request_delay("ai3")  # Добавляем задержку перед запросом
+        response = await provider.generate(
+            prompt=prompt,
+            model=ai_config.get("model"),
+            max_tokens=ai_config.get("max_tokens", 2000),
+            temperature=ai_config.get("temperature", 0.7),
+        )
+
+        # Извлекаем JSON из ответа
+        try:
+            json_match = re.search(
+                r"```(?:json)?\s*(\{.*?\})\s*```", response, re.DOTALL
+            )
+            if json_match:
+                json_str = json_match.group(1)
+            else:
+                # Если нет явного JSON блока, пробуем весь текст
+                json_str = response.strip()
+
+            llm_result = json.loads(json_str)
+
+            # Проверяем структуру ответа
+            if "recommendations" in llm_result:
+                result["recommendations"] = llm_result["recommendations"]
+
+            if "improved_structure" in llm_result:
+                # Проверяем, что структура валидная
+                if (
+                    isinstance(llm_result["improved_structure"], dict)
+                    and "main_tasks" in llm_result["improved_structure"]
+                ):
+                    result["improved_structure"] = llm_result["improved_structure"]
+
+            log_message(
+                f"[AI3-Консультация] Анализ завершен, получено {len(result['recommendations'])} рекомендаций"
+            )
+
+        except json.JSONDecodeError:
+            log_message("[AI3-Консультация] Не удалось извлечь JSON из ответа LLM")
+            # Извлекаем рекомендации из текста
+            recommendations = extract_recommendations_from_text(response)
+            result["recommendations"] = recommendations
+
+    except Exception as e:
+        log_message(f"[AI3-Консультация] Ошибка при анализе структуры задач: {e}")
+        result["recommendations"] = [
+            "Рекомендуется начать с ключевых компонентов системы",
+            "Уделите особое внимание базовой инфраструктуре",
+            "Разделите задачи на фронтенд и бэкенд",
+        ]
+
+    return result
+
+
+async def analyze_subtasks(subtasks_data: Dict, target: str) -> Dict:
+    """
+    Анализирует микрозадачи и генерирует рекомендации по улучшению.
+
+    Args:
+        subtasks_data: Данные о микрозадачах
+        target: Цель проекта
+
+    Returns:
+        Dict с рекомендациями и улучшенными микрозадачами
+    """
+    log_message("[AI3-Консультация] Анализ микрозадач...")
+
+    main_task_id = subtasks_data.get("main_task_id", "")
+    subtasks = subtasks_data.get("subtasks", [])
+
+    # Базовая структура ответа
+    result = {"recommendations": [], "improved_subtasks": subtasks.copy()}
+
+    try:
+        # Готовим промпт для LLM
+        prompt = f"""
+        Анализ микрозадач и предложения по улучшению.
+        
+        Цель проекта: {target}
+        
+        Текущие микрозадачи для задачи ID {main_task_id}:
+        {json.dumps(subtasks, indent=2, ensure_ascii=False)}
+        
+        Проанализируй микрозадачи и предложи улучшения. Рассмотри:
+        1. Достаточно ли детализированы микрозадачи?
+        2. Правильно ли определены шаги для каждой микрозадачи?
+        3. Нужны ли дополнительные шаги для какой-либо микрозадачи?
+        4. Есть ли зависимости между микрозадачами, которые стоит учесть?
+        
+        Ответь в формате JSON, который содержит:
+        1. "recommendations" - список строк с рекомендациями
+        2. "improved_subtasks" - улучшенный список микрозадач (опционально)
+        """
+
+        # Получаем ответ от LLM
+        ai_config = config.get("ai_config", {}).get("ai3", {})
+        provider_name = ai_config.get("provider", "openai")
+        provider = ProviderFactory.create_provider(provider_name)
+
+        await apply_request_delay("ai3")  # Добавляем задержку перед запросом
+        response = await provider.generate(
+            prompt=prompt,
+            model=ai_config.get("model"),
+            max_tokens=ai_config.get("max_tokens", 2000),
+            temperature=ai_config.get("temperature", 0.7),
+        )
+
+        # Извлекаем JSON из ответа
+        try:
+            json_match = re.search(
+                r"```(?:json)?\s*(\{.*?\})\s*```", response, re.DOTALL
+            )
+            if json_match:
+                json_str = json_match.group(1)
+            else:
+                # Если нет явного JSON блока, пробуем весь текст
+                json_str = response.strip()
+
+            llm_result = json.loads(json_str)
+
+            # Проверяем структуру ответа
+            if "recommendations" in llm_result:
+                result["recommendations"] = llm_result["recommendations"]
+
+            if "improved_subtasks" in llm_result:
+                # Проверяем, что список задач валидный
+                if isinstance(llm_result["improved_subtasks"], list):
+                    result["improved_subtasks"] = llm_result["improved_subtasks"]
+
+            log_message(
+                f"[AI3-Консультация] Анализ микрозадач завершен, получено {len(result['recommendations'])} рекомендаций"
+            )
+
+        except json.JSONDecodeError:
+            log_message("[AI3-Консультация] Не удалось извлечь JSON из ответа LLM")
+            # Извлекаем рекомендации из текста
+            recommendations = extract_recommendations_from_text(response)
+            result["recommendations"] = recommendations
+
+    except Exception as e:
+        log_message(f"[AI3-Консультация] Ошибка при анализе микрозадач: {e}")
+        result["recommendations"] = [
+            "Разбейте каждую микрозадачу на более мелкие шаги",
+            "Добавьте тестирование для каждой микрозадачи",
+            "Укажите зависимости между микрозадачами",
+        ]
+
+    return result
+
+
+def extract_recommendations_from_text(text: str) -> List[str]:
+    """
+    Извлекает рекомендации из текстового ответа LLM.
+
+    Args:
+        text: Текст ответа LLM
+
+    Returns:
+        Список строк с рекомендациями
+    """
+    recommendations = []
+
+    # Ищем пронумерованные пункты
+    numbered_points = re.findall(r"^\s*\d+\.\s*(.*?)$", text, re.MULTILINE)
+    if numbered_points:
+        recommendations.extend(numbered_points)
+
+    # Ищем маркированные пункты
+    bullet_points = re.findall(r"^\s*[\*\-\•]\s*(.*?)$", text, re.MULTILINE)
+    if bullet_points:
+        recommendations.extend(bullet_points)
+
+    # Если ничего не нашли, разбиваем текст по строкам
+    if not recommendations:
+        lines = [line.strip() for line in text.split("\n") if line.strip()]
+        # Фильтруем строки, которые могут быть рекомендациями
+        recommendations = [line for line in lines if len(line) > 20 and len(line) < 200]
+
+    # Ограничиваем количество рекомендаций
+    if len(recommendations) > 10:
+        recommendations = recommendations[:10]
+
+    return recommendations

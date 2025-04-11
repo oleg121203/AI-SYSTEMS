@@ -92,12 +92,18 @@ class AI1:
         self.status = "waiting_for_structure"
 
         try:
+            # Получаем структуру проекта
             await self.ensure_structure_received()
             if not self.project_structure:
                 log_message("[AI1] Failed to obtain project structure. Exiting.")
                 self.status = "error"
                 return
 
+            # Строим структуру задач и консультируемся с дозором (AI3)
+            log_message("[AI1] Начинаю построение структуры задач...")
+            await self.build_task_structure()
+
+            # Инициализируем статусы задач
             self.initialize_task_status()
             self.status = "processing_tasks"
 
@@ -228,6 +234,7 @@ class AI1:
                     "status": "pending",
                     "reason": None,
                     "original_text": None,
+                    "failure_count": 0,  # Счетчик неудачных попыток
                 },
                 "tester": {
                     "status": (
@@ -235,11 +242,13 @@ class AI1:
                     ),
                     "reason": None,
                     "original_text": None,
+                    "failure_count": 0,  # Счетчик неудачных попыток
                 },
                 "documenter": {
                     "status": "pending",
                     "reason": None,
                     "original_text": None,
+                    "failure_count": 0,  # Счетчик неудачных попыток
                 },
             }
             self.original_task_text[file_path] = {}  # Initialize inner dict
@@ -387,11 +396,15 @@ class AI1:
                     final_states = [
                         "accepted",
                         "skipped",
-                        "failed_by_ai2",  # Considered final failure
-                        "error_processing",  # Considered final failure
                     ]
-                    # States indicating need for refinement
-                    refinement_needed_states = ["review_needed", "failed_tests"]
+
+                    # Ошибки, которые требуют исправления (не считаются "финальными")
+                    refinement_needed_states = [
+                        "review_needed",
+                        "failed_tests",
+                        "failed_by_ai2",  # Теперь это не финальная ошибка, а состояние, требующее исправления
+                        "error_processing",  # Теперь это не финальная ошибка, а состояние, требующее исправления
+                    ]
 
                     if api_status != local_status:
                         log_message(
@@ -408,7 +421,7 @@ class AI1:
                                 f"[AI1] Warning: Cannot update status for non-existent local task {filename} ({role})"
                             )
 
-                    # If task needs refinement, mark it locally
+                    # Если задача требует доработки, отмечаем её локально для повторного выполнения
                     if api_status in refinement_needed_states and local_task_entry:
                         local_task_entry["status"] = "pending_refinement"
                         log_message(
@@ -418,7 +431,7 @@ class AI1:
                             task_key
                         )  # Remove original task from active set
 
-                    # Remove from active tasks if it reached a final state
+                    # Удаляем из активных задач только если достигнуто финальное состояние
                     elif api_status in final_states:
                         tasks_to_remove.add(task_key)
                 else:
@@ -660,21 +673,115 @@ class AI1:
         """Creates a subtask specifically for refining a previous failed attempt."""
         log_message(f"[AI1] Generating refinement task for {file_path} ({role})")
 
-        # Construct a new task text that includes the original goal and the reason for failure
-        refinement_prompt = f"The previous attempt for file '{file_path}' ({role}) needs refinement. Reason: '{reason}'.\nOriginal task: '{original_text}'.\nPlease provide the corrected content or perform the required action, addressing the feedback."
+        # Получаем код файла, если он существует
+        code_content = await self.get_file_content(file_path)
 
-        # Get code content if needed (e.g., for executor, tester, documenter roles)
-        code_content = None
-        if role in ["executor", "tester", "documenter"]:
-            code_content = await self.get_file_content(file_path)
-            if code_content is None:
+        # Определяем, нужно ли разбить задачу на более мелкие подзадачи
+        should_decompose = False
+        failure_count = (
+            self.task_status.get(file_path, {}).get(role, {}).get("failure_count", 0)
+        )
+
+        # Увеличиваем счетчик неудач
+        if file_path in self.task_status and role in self.task_status[file_path]:
+            self.task_status[file_path][role]["failure_count"] = failure_count + 1
+
+            # Если было больше 2 неудачных попыток, пробуем разбить задачу
+            if failure_count >= 2:
+                should_decompose = True
                 log_message(
-                    f"[AI1] Warning: Could not fetch current content for refinement task {file_path} ({role}). Proceeding without it."
+                    f"[AI1] Task for {file_path} ({role}) has failed {failure_count} times. Attempting to decompose into smaller subtasks."
                 )
-                # Decide if you want to fail here or proceed without code
-                # return False # Option to fail if code is essential
 
-        # Use the existing create_subtask function with the new prompt
+        # Создаем основной или декомпозиционный промпт в зависимости от количества неудач
+        if should_decompose:
+            # Промпт для разбиения задачи на более мелкие
+            if role == "executor":
+                refinement_prompt = f"""
+                Задача для файла '{file_path}' не прошла тесты несколько раз. 
+                Причина: '{reason}'.
+                
+                Оригинальная задача: '{original_text}'.
+                
+                Текущий код:
+                ```
+                {code_content if code_content else 'Файл еще не создан или не доступен'}
+                ```
+                
+                Разбейте эту сложную задачу на несколько меньших шагов:
+                1. Опишите основные компоненты, которые нужно реализовать
+                2. Исправьте все указанные проблемы
+                3. Предоставьте полностью обновленную реализацию, которая учитывает все требования и проходит тесты
+                
+                Будьте особенно внимательны к:
+                - Тестам, которые не проходят
+                - Логике, которая может быть неверна
+                - Пограничным случаям, которые могли быть не учтены
+                """
+            elif role == "tester":
+                refinement_prompt = f"""
+                Тесты для файла '{file_path}' не работают должным образом. 
+                Причина: '{reason}'.
+                
+                Оригинальная задача: '{original_text}'.
+                
+                Код, который нужно тестировать:
+                ```
+                {code_content if code_content else 'Файл не доступен'}
+                ```
+                
+                Пожалуйста, создайте более тщательные тесты:
+                1. Напишите тесты для каждой отдельной функции/метода
+                2. Включите тесты для граничных случаев
+                3. Проверьте обработку ошибок
+                4. Убедитесь, что тесты соответствуют ожидаемому поведению кода
+                """
+            elif role == "documenter":
+                refinement_prompt = f"""
+                Документация для файла '{file_path}' требует улучшения. 
+                Причина: '{reason}'.
+                
+                Оригинальная задача: '{original_text}'.
+                
+                Код, который нужно документировать:
+                ```
+                {code_content if code_content else 'Файл не доступен'}
+                ```
+                
+                Пожалуйста, улучшите документацию:
+                1. Детально опишите каждую функцию/метод/класс
+                2. Уточните параметры и возвращаемые значения
+                3. Добавьте примеры использования, где это уместно
+                4. Документируйте все возможные исключения/ошибки
+                """
+            else:
+                # Общий случай для других ролей
+                refinement_prompt = f"""
+                Задача для файла '{file_path}' ({role}) требует улучшения после нескольких неудачных попыток. 
+                Причина: '{reason}'.
+                
+                Оригинальная задача: '{original_text}'.
+                
+                Разбейте эту задачу на меньшие компоненты и решите каждый по отдельности.
+                Обратите особое внимание на указанные проблемы и предоставьте улучшенное решение.
+                """
+        else:
+            # Стандартный промпт исправления
+            refinement_prompt = f"""
+            Требуется доработка для файла '{file_path}' ({role}).
+            Причина: '{reason}'.
+            
+            Оригинальная задача: '{original_text}'.
+            
+            Текущее содержимое (если доступно):
+            ```
+            {code_content if code_content else 'Файл еще не создан или не доступен'}
+            ```
+            
+            Пожалуйста, исправьте указанные проблемы и предоставьте обновленное решение.
+            """
+
+        # Используем существующую функцию create_subtask с новым промптом
         return await self.create_subtask(
             task_text=refinement_prompt,
             role=role,
@@ -782,6 +889,446 @@ class AI1:
             "[AI1] Completion check: All tasks are in a final 'accepted' or 'skipped' state."
         )
         return True
+
+    async def build_task_structure(self):
+        """
+        Строит первоначальную структуру задач на основе цели проекта и структуры файлов.
+        Консультируется с AI3 (дозором) для улучшения структуры задач.
+        """
+        log_message("[AI1] Начинаю построение структуры задач на основе цели проекта")
+
+        try:
+            # 1. Создаем базовую структуру задач на основе имеющихся файлов
+            task_structure = {
+                "main_tasks": [],  # Основные задачи
+                "dependencies": {},  # Зависимости между задачами
+                "priority": {},  # Приоритеты задач
+            }
+
+            # Сначала сгруппируем файлы по типам/компонентам
+            component_groups = self._group_files_by_component()
+
+            # Создаем основные задачи на основе компонентов
+            for component, files in component_groups.items():
+                main_task = {
+                    "id": str(uuid.uuid4()),
+                    "name": f"Реализация компонента: {component}",
+                    "description": f"Разработка функциональности для компонента {component}",
+                    "files": files,
+                    "subtasks": [],  # Будет заполнено позже
+                }
+
+                task_structure["main_tasks"].append(main_task)
+
+                # Определяем приоритет для основной задачи
+                if "backend" in component.lower() or "core" in component.lower():
+                    task_structure["priority"][main_task["id"]] = "high"
+                elif "frontend" in component.lower() or "ui" in component.lower():
+                    task_structure["priority"][main_task["id"]] = "medium"
+                else:
+                    task_structure["priority"][main_task["id"]] = "normal"
+
+            # 2. Консультируемся с AI3 (дозором) для улучшения структуры
+            improved_structure = await self._consult_with_overseer(task_structure)
+
+            # 3. Сохраняем финальную структуру задач
+            self.task_structure = improved_structure
+            log_message(
+                f"[AI1] Структура задач построена: {len(improved_structure['main_tasks'])} основных задач"
+            )
+
+            # 4. Разбиваем каждую основную задачу на микрозадачи
+            await self._decompose_main_tasks()
+
+            return True
+        except Exception as e:
+            log_message(f"[AI1] Ошибка при построении структуры задач: {e}")
+            return False
+
+    def _group_files_by_component(self) -> Dict[str, List[str]]:
+        """
+        Группирует файлы по компонентам проекта для создания основных задач.
+        """
+        component_groups = {}
+
+        # Определяем ключевые директории/компоненты
+        components = {
+            "Backend": ["backend", "api", "server"],
+            "Frontend": ["frontend", "ui", "web"],
+            "Database": ["db", "database", "models"],
+            "Auth": ["auth", "login", "security"],
+            "Utils": ["utils", "helpers", "common"],
+            "Tests": ["tests", "spec", "test"],
+            "Docs": ["docs", "documentation", "wiki"],
+        }
+
+        # Распределяем файлы по компонентам
+        for file_path in self.files_to_fill:
+            assigned = False
+            for component, keywords in components.items():
+                if any(keyword in file_path.lower() for keyword in keywords):
+                    if component not in component_groups:
+                        component_groups[component] = []
+                    component_groups[component].append(file_path)
+                    assigned = True
+                    break
+
+            # Если не удалось определить компонент, добавляем в "Misc" (Разное)
+            if not assigned:
+                if "Misc" not in component_groups:
+                    component_groups["Misc"] = []
+                component_groups["Misc"].append(file_path)
+
+        return component_groups
+
+    async def _consult_with_overseer(self, task_structure: Dict) -> Dict:
+        """
+        Консультируется с AI3 (дозором) для улучшения структуры задач.
+        Отправляет запрос AI3 и получает рекомендации.
+        """
+        log_message("[AI1] Консультируюсь с AI3 (дозором) по структуре задач")
+
+        try:
+            api_url = f"{MCP_API_URL}/consult_task_structure"
+            session = await self._get_api_session()
+
+            request_data = {"task_structure": task_structure, "target": self.target}
+
+            async with session.post(api_url, json=request_data, timeout=60) as response:
+                if response.status == 200:
+                    result = await response.json()
+                    improved_structure = result.get(
+                        "improved_structure", task_structure
+                    )
+                    recommendations = result.get("recommendations", [])
+
+                    log_message(
+                        f"[AI1] Получены рекомендации от AI3: {len(recommendations)} пунктов"
+                    )
+                    for i, rec in enumerate(recommendations, 1):
+                        log_message(f"[AI1] Рекомендация {i}: {rec}")
+
+                    return improved_structure
+                else:
+                    log_message(
+                        f"[AI1] Ошибка при консультации с AI3: {response.status}, {await response.text()}"
+                    )
+                    return task_structure
+        except Exception as e:
+            log_message(f"[AI1] Ошибка при консультации с AI3: {e}")
+            return task_structure
+
+    async def _decompose_main_tasks(self):
+        """
+        Разбивает каждую основную задачу на микрозадачи и консультируется с AI3.
+        """
+        if not hasattr(self, "task_structure") or not self.task_structure.get(
+            "main_tasks"
+        ):
+            log_message("[AI1] Ошибка: структура задач не создана")
+            return
+
+        log_message("[AI1] Начинаю разбиение основных задач на микрозадачи")
+
+        for main_task in self.task_structure["main_tasks"]:
+            log_message(f"[AI1] Разбиваю задачу: {main_task['name']}")
+
+            # Создаем микрозадачи для файлов в этой основной задаче
+            subtasks = []
+            for file_path in main_task["files"]:
+                subtask = {
+                    "id": str(uuid.uuid4()),
+                    "name": f"Реализация файла: {file_path}",
+                    "description": f"Разработка функциональности для {file_path}",
+                    "file_path": file_path,
+                    "main_task_id": main_task["id"],
+                    "steps": [
+                        {
+                            "id": str(uuid.uuid4()),
+                            "name": "Разработка базовой структуры",
+                            "role": "executor",
+                            "status": "pending",
+                        },
+                        {
+                            "id": str(uuid.uuid4()),
+                            "name": "Написание тестов",
+                            "role": "tester",
+                            "status": "pending",
+                        },
+                        {
+                            "id": str(uuid.uuid4()),
+                            "name": "Создание документации",
+                            "role": "documenter",
+                            "status": "pending",
+                        },
+                    ],
+                }
+                subtasks.append(subtask)
+
+            # Консультируемся с AI3 по микрозадачам
+            main_task["subtasks"] = await self._consult_subtasks(
+                main_task["id"], subtasks
+            )
+
+            log_message(
+                f"[AI1] Задача {main_task['name']} разбита на {len(main_task['subtasks'])} микрозадач"
+            )
+
+        log_message("[AI1] Завершено разбиение всех основных задач на микрозадачи")
+
+    async def _consult_subtasks(
+        self, main_task_id: str, subtasks: List[Dict]
+    ) -> List[Dict]:
+        """
+        Консультируется с AI3 по структуре микрозадач для конкретной основной задачи.
+        """
+        log_message(
+            f"[AI1] Консультируюсь с AI3 по микрозадачам для задачи {main_task_id}"
+        )
+
+        try:
+            api_url = f"{MCP_API_URL}/consult_subtasks"
+            session = await self._get_api_session()
+
+            request_data = {
+                "main_task_id": main_task_id,
+                "subtasks": subtasks,
+                "target": self.target,
+            }
+
+            async with session.post(api_url, json=request_data, timeout=60) as response:
+                if response.status == 200:
+                    result = await response.json()
+                    improved_subtasks = result.get("improved_subtasks", subtasks)
+                    recommendations = result.get("recommendations", [])
+
+                    log_message(
+                        f"[AI1] Получены рекомендации от AI3 по микрозадачам: {len(recommendations)} пунктов"
+                    )
+                    for i, rec in enumerate(recommendations, 1):
+                        log_message(f"[AI1] Рекомендация {i}: {rec}")
+
+                    return improved_subtasks
+                else:
+                    log_message(
+                        f"[AI1] Ошибка при консультации с AI3 по микрозадачам: {response.status}, {await response.text()}"
+                    )
+                    return subtasks
+        except Exception as e:
+            log_message(f"[AI1] Ошибка при консультации с AI3 по микрозадачам: {e}")
+            return subtasks
+
+    async def handle_test_result(self, test_data):
+        """
+        Обрабатывает результаты тестов из GitHub Actions и принимает решение
+        на основе рекомендаций AI3 (дозор).
+
+        Args:
+            test_data: Данные о результатах тестов
+        """
+        run_id = test_data.get("run_id")
+        result = test_data.get("result")
+        files = test_data.get("files", [])
+        ai3_recommendation = test_data.get("recommendation", "")
+        comments = test_data.get("comments", [])
+
+        log_message(
+            f"[AI1] Получены результаты тестов от GitHub Actions: run_id={run_id}"
+        )
+        log_message(f"[AI1] Результат тестов: {result}")
+        log_message(f"[AI1] Рекомендация AI3 (дозор): {ai3_recommendation}")
+
+        if not files:
+            log_message(
+                "[AI1] Предупреждение: в данных о тестах отсутствует информация о файлах"
+            )
+            return
+
+        # Определяем задачи, связанные с протестированными файлами
+        affected_tasks = []
+        for file_info in files:
+            source_file = file_info.get("source_file")
+            test_file = file_info.get("test_file")
+
+            if source_file:
+                # Находим задачи, связанные с этим файлом
+                tasks = self.find_tasks_by_filename(source_file)
+                affected_tasks.extend(tasks)
+
+                # Логируем информацию о файле и результате теста
+                log_message(
+                    f"[AI1] Файл: {source_file}, тест: {test_file}, результат: {result}"
+                )
+
+        # Принимаем решение на основе результата и рекомендации AI3
+        decision = self.decide_on_test_results(result, ai3_recommendation, comments)
+
+        # Применяем решение к затронутым задачам
+        for task in affected_tasks:
+            task_id = task.get("id")
+
+            if decision == "accept":
+                # Принимаем задачу
+                log_message(
+                    f"[AI1] Принимаю задачу {task_id} после успешного тестирования"
+                )
+                self.mark_task_as_accepted(task_id)
+            elif decision == "rework":
+                # Отправляем задачу на доработку
+                log_message(
+                    f"[AI1] Отправляю задачу {task_id} на доработку из-за ошибок в тестах"
+                )
+                self.mark_task_for_rework(task_id, comments)
+
+        # Обновляем отслеживание прогресса
+        self.update_progress_tracking()
+
+    def decide_on_test_results(self, result, ai3_recommendation, comments):
+        """
+        Принимает решение на основе результатов тестов и рекомендации AI3.
+
+        Args:
+            result: Результат запуска тестов (success/failure)
+            ai3_recommendation: Рекомендация от AI3 (accept/rework)
+            comments: Комментарии от AI3
+
+        Returns:
+            Строка с решением ("accept" или "rework")
+        """
+        # По умолчанию следуем рекомендации AI3
+        decision = ai3_recommendation
+
+        # Если тесты успешны, но нет явной рекомендации, принимаем
+        if result == "success" and not decision:
+            decision = "accept"
+
+        # Если тесты неуспешны, но нет явной рекомендации, требуем доработки
+        if result != "success" and not decision:
+            decision = "rework"
+
+        # Логируем принятое решение и его основания
+        if decision == "accept":
+            log_message(
+                f"[AI1] Решение: принять задачу. Основание: {result}, рекомендация AI3: {ai3_recommendation}"
+            )
+        else:
+            log_message(
+                f"[AI1] Решение: отправить на доработку. Основание: {result}, рекомендация AI3: {ai3_recommendation}"
+            )
+            if comments:
+                log_message(f"[AI1] Комментарии AI3: {', '.join(comments)}")
+
+        return decision
+
+    def find_tasks_by_filename(self, filename):
+        """
+        Находит задачи, связанные с указанным файлом.
+
+        Args:
+            filename: Путь к файлу
+
+        Returns:
+            Список задач, связанных с файлом
+        """
+        matching_tasks = []
+
+        # Ищем во всех задачах
+        for task_list in [self.main_tasks, self.subtasks]:
+            for task in task_list:
+                if task.get("filename") == filename:
+                    matching_tasks.append(task)
+
+                # Также проверяем, есть ли этот файл в списке related_files
+                related_files = task.get("related_files", [])
+                if filename in related_files:
+                    matching_tasks.append(task)
+
+        return matching_tasks
+
+    def mark_task_as_accepted(self, task_id):
+        """
+        Отмечает задачу как принятую после успешного тестирования.
+
+        Args:
+            task_id: ID задачи
+        """
+        # Обновляем статус задачи
+        for task in self.subtasks:
+            if task.get("id") == task_id:
+                task["status"] = "accepted"
+                task["completed_at"] = datetime.now().isoformat()
+                break
+
+        # Отправляем обновление статуса в API
+        asyncio.create_task(self.update_task_status(task_id, "accepted"))
+
+    def mark_task_for_rework(self, task_id, comments=None):
+        """
+        Отмечает задачу для доработки после неудачного тестирования.
+
+        Args:
+            task_id: ID задачи
+            comments: Комментарии с описанием проблем
+        """
+        # Находим задачу
+        task_to_rework = None
+        for task in self.subtasks:
+            if task.get("id") == task_id:
+                task_to_rework = task
+                task["status"] = "needs_rework"
+                task["rework_reason"] = "Неудачное тестирование"
+                if comments:
+                    task["rework_comments"] = comments
+                break
+
+        if not task_to_rework:
+            log_message(
+                f"[AI1] Предупреждение: задача {task_id} не найдена для отправки на доработку"
+            )
+            return
+
+        # Создаем новую подзадачу для доработки
+        filename = task_to_rework.get("filename")
+        if filename:
+            rework_task = {
+                "id": str(uuid.uuid4()),
+                "parent_id": task_to_rework.get("parent_id"),
+                "filename": filename,
+                "role": "executor",  # Всегда назначаем исполнителю
+                "text": self.generate_rework_description(task_to_rework, comments),
+                "status": "pending",
+                "created_at": datetime.now().isoformat(),
+                "priority": "high",  # Высокий приоритет для доработок
+                "original_task_id": task_id,  # Ссылка на исходную задачу
+            }
+
+            # Добавляем задачу в список и отправляем в API
+            self.subtasks.append(rework_task)
+            asyncio.create_task(self.submit_subtask(rework_task))
+            log_message(
+                f"[AI1] Создана новая задача для доработки: {rework_task['id']} для файла {filename}"
+            )
+
+    def generate_rework_description(self, original_task, comments=None):
+        """
+        Генерирует описание задачи на доработку.
+
+        Args:
+            original_task: Исходная задача
+            comments: Комментарии от тестов
+
+        Returns:
+            Строка с описанием задачи на доработку
+        """
+        filename = original_task.get("filename", "")
+        description = f"ДОРАБОТКА: Исправьте ошибки в файле {filename} после неудачного тестирования."
+
+        if comments:
+            description += "\n\nПроблемы, которые нужно исправить:\n"
+            for i, comment in enumerate(comments, 1):
+                description += f"{i}. {comment}\n"
+
+        return description
 
 
 async def main():

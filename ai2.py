@@ -432,26 +432,65 @@ class AI2:
         api_url = f"{MCP_API_URL}/task/{self.role}"
         try:
             session = await self._get_api_session()
-            logger.debug(f"Запрос задачи с {api_url}")
+            # Добавляем дополнительное логирование для отслеживания запросов задач
+            logger.info(f"Запрос задачи для роли {self.role} с {api_url}")
+
             async with session.get(api_url, timeout=30) as response:
                 if response.status == 200:
                     data = await response.json()
+
+                    # Более подробное логирование ответа
+                    if "empty" in data and data["empty"]:
+                        logger.warning(
+                            f"Очередь для роли {self.role} пуста. Ответ API: {data}"
+                        )
+                        return None
+
                     if data and "subtask" in data and data["subtask"]:
                         logger.info(
-                            f"Получена задача: ID={data['subtask'].get('id')}, File={data['subtask'].get('filename')}"
+                            f"Получена задача для роли {self.role}: ID={data['subtask'].get('id')}, File={data['subtask'].get('filename')}"
                         )
+                        # Добавляем дополнительную информацию о коде, если это задача тестера или документатора
+                        if self.role in ["tester", "documenter"]:
+                            file_path = data["subtask"].get("filename")
+                            if file_path:
+                                try:
+                                    # Получаем код файла для тестирования или документирования
+                                    file_content_url = (
+                                        f"{MCP_API_URL}/file_content?path={file_path}"
+                                    )
+                                    async with session.get(
+                                        file_content_url, timeout=30
+                                    ) as file_response:
+                                        if file_response.status == 200:
+                                            file_content = await file_response.text()
+                                            data["subtask"]["code"] = file_content
+                                            logger.info(
+                                                f"Получен код для задачи {data['subtask'].get('id')} файла {file_path}"
+                                            )
+                                        else:
+                                            logger.error(
+                                                f"Не удалось получить код файла {file_path}: {file_response.status}"
+                                            )
+                                except Exception as e:
+                                    logger.error(
+                                        f"Ошибка при получении кода файла {file_path}: {e}"
+                                    )
+
                         return data["subtask"]
                     elif data and "message" in data:
-                        logger.debug(f"Нет доступных задач: {data['message']}")
+                        logger.debug(
+                            f"Нет доступных задач для {self.role}: {data['message']}"
+                        )
                         return None
                     else:
                         logger.warning(
-                            f"Неожиданный ответ от API при запросе задачи: {data}"
+                            f"Неожиданный ответ от API при запросе задачи для {self.role}: {data}"
                         )
                         return None
                 else:
                     logger.error(
-                        f"Ошибка при запросе задачи: Статус {response.status}, Ответ: {await response.text()}"
+                        f"Ошибка при запросе задачи для {self.role}: Статус {response.status}, Ответ: {await response.text()}"
                     )
                     return None
         except asyncio.TimeoutError:
@@ -461,7 +500,9 @@ class AI2:
             logger.error(f"Ошибка соединения при запросе задачи с {api_url}: {e}")
             return None
         except Exception as e:
-            logger.exception(f"Неожиданная ошибка при запросе задачи: {e}")
+            logger.exception(
+                f"Неожиданная ошибка при запросе задачи для {self.role}: {e}"
+            )
             return None
 
     async def send_report(self, report_data: Dict[str, Any]):

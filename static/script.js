@@ -52,8 +52,11 @@ function connectWebSocket() {
 
   ws.onmessage = function (event) {
     try {
+      // Start: Added raw message logging
+      console.log("Raw WebSocket message received:", event.data);
+      // End: Added raw message logging
       const data = JSON.parse(event.data);
-      console.log("Received WebSocket data:", data);
+      console.log("Parsed WebSocket data:", data); // Changed log message
 
       switch (data.type) {
         case "full_status_update":
@@ -72,7 +75,10 @@ function connectWebSocket() {
             updateStatsFromSubtasks(subtask_status);
           }
           if (data.structure) {
-            console.log("Received structure update:", data.structure);
+            console.log(
+              "Received structure update, keys:",
+              Object.keys(data.structure)
+            );
             updateFileStructure(data.structure);
           }
           if (data.processed_over_time)

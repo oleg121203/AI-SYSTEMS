@@ -6,7 +6,7 @@ import subprocess
 from collections import deque
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Union
+from typing import Any, Dict, List, Optional, Set, Union
 from uuid import uuid4
 
 import aiofiles
@@ -127,6 +127,9 @@ ai_processes: Dict[str, Optional[subprocess.Popen]] = {
 active_connections: Set[WebSocket] = set()
 file_write_lock = asyncio.Lock()
 
+structure_files = []  # Список файлов из текущей структуры
+AI1_API_URL = config.get("ai1_api_url", "http://127.0.0.1:8001")  # URL для API AI1
+
 
 # --- Helper Functions ---
 def is_safe_path(basedir, path_str):
@@ -177,7 +180,22 @@ async def broadcast_status():
 async def broadcast_specific_update(update_data: dict):
     if active_connections:
         message = {"type": "specific_update", **update_data}
-        logger.debug(f"Broadcasting specific update: {message}")
+        # Avoid logging the full structure if it's too large
+        log_message_content = message.copy()
+        if "structure" in log_message_content and isinstance(
+            log_message_content["structure"], dict
+        ):
+            log_message_content["structure"] = (
+                f"Structure with {len(log_message_content['structure'])} keys"
+            )
+        if "log_line" in log_message_content:
+            # Don't log the log line itself excessively here, it's already logged
+            pass
+        else:
+            logger.debug(
+                f"Broadcasting specific update to {len(active_connections)} clients: {log_message_content}"
+            )
+
         disconnected_clients = set()
         for connection in list(active_connections):
             try:
@@ -239,6 +257,77 @@ def process_test_results(test_data: Report, subtask_id: str):
     return metrics
 
 
+def add_task_to_queue(role: str, task: Dict):
+    """
+    Добавляет задачу в очередь для указанной роли.
+    """
+    queue = {
+        "executor": executor_queue,
+        "tester": tester_queue,
+        "documenter": documenter_queue,
+    }.get(role)
+
+    if not queue:
+        logger.error(f"Invalid role for task queue: {role}")
+        return False
+
+    # Добавляем задачу в очередь
+    queue.put_nowait(task)
+    subtask_status[task["id"]] = "pending"
+
+    # Обновляем UI через WebSocket
+    asyncio.create_task(
+        broadcast_specific_update(
+            {
+                "queues": {
+                    "executor": list(executor_queue._queue),
+                    "tester": list(tester_queue._queue),
+                    "documenter": list(documenter_queue._queue),
+                },
+                "subtasks": {task["id"]: "pending"},
+            }
+        )
+    )
+
+    logger.info(
+        f"Added task {task['id']} to {role} queue for file {task.get('filename')}"
+    )
+    return True
+
+
+def get_all_tasks() -> List[Dict]:
+    """
+    Возвращает список всех задач (активных и завершенных).
+    """
+    tasks = []
+    # Собираем задачи из очередей
+    for role, queue in [
+        ("executor", executor_queue),
+        ("tester", tester_queue),
+        ("documenter", documenter_queue),
+    ]:
+        for task in list(queue._queue):
+            task_copy = task.copy()
+            task_copy["status"] = subtask_status.get(task["id"], "unknown")
+            task_copy["role"] = role
+            tasks.append(task_copy)
+
+    # Добавляем задачи, которых нет в очередях, но есть в статусах
+    for subtask_id, status in subtask_status.items():
+        # Проверяем, есть ли уже эта задача в списке
+        if not any(t.get("id") == subtask_id for t in tasks):
+            # Это задача, которая уже не в очереди (выполнена или извлечена)
+            tasks.append(
+                {
+                    "id": subtask_id,
+                    "status": status,
+                    # Другие поля могут быть недоступны, так как задача не в очереди
+                }
+            )
+
+    return tasks
+
+
 # --- API Endpoints ---
 @app.get("/file_content", response_class=PlainTextResponse)
 async def get_file_content(path: str):
@@ -285,9 +374,26 @@ async def receive_subtask(data: dict):
         "tester": tester_queue,
         "documenter": documenter_queue,
     }[role]
+
+    # Добавляем логирование информации о добавляемой задаче
+    logger.info(
+        f"Добавление в очередь {role} задачи: ID {subtask_id}, Файл: {filename}"
+    )
+
+    # Проверяем содержимое очередей после добавления
     await queue.put(subtask)
     subtask_status[subtask_id] = "pending"
-    logger.info(f"Received subtask for {role}: ID {subtask_id}, File: {filename}")
+
+    # Получаем размеры всех очередей для логирования
+    executor_size = executor_queue.qsize()
+    tester_size = tester_queue.qsize()
+    documenter_size = documenter_queue.qsize()
+
+    logger.info(
+        f"Состояние очередей: executor({executor_size}), tester({tester_size}), documenter({documenter_size})"
+    )
+    logger.info(f"Subtask added to {role} queue: ID {subtask_id}, File: {filename}")
+
     await broadcast_specific_update(
         {
             "queues": {
@@ -309,8 +415,14 @@ async def get_task_for_role(role: str):
         "documenter": documenter_queue,
     }.get(role)
     if not queue:
+        logger.error(f"Invalid role: {role}")
         raise HTTPException(status_code=400, detail="Invalid role")
     try:
+        # Проверяем, есть ли задачи в очереди
+        if queue.empty():
+            logger.warning(f"Очередь для роли {role} пуста")
+            return {"message": f"No tasks available for {role}", "empty": True}
+
         subtask = queue.get_nowait()
         subtask_id = subtask.get("id")
         subtask_status[subtask_id] = "processing"
@@ -327,7 +439,8 @@ async def get_task_for_role(role: str):
         )
         return {"subtask": subtask}
     except asyncio.QueueEmpty:
-        return {"message": f"No tasks available for {role}"}
+        logger.warning(f"Очередь для роли {role} пуста (QueueEmpty)")
+        return {"message": f"No tasks available for {role}", "empty": True}
 
 
 @app.post("/structure")
@@ -339,6 +452,10 @@ async def receive_structure(data: dict):
         raise HTTPException(status_code=400, detail="Expected a JSON object")
     current_structure = structure_obj
     logger.info(f"Structure updated by AI3: {list(current_structure.keys())}")
+
+    # Обновляем список файлов из структуры
+    update_structure_files()
+
     await broadcast_specific_update({"structure": current_structure})
     return {"status": "structure received"}
 
@@ -566,6 +683,707 @@ async def dashboard(request: Request):
 async def health_check():
     """Простий ендпоінт для перевірки стану сервісу."""
     return {"status": "ok"}
+
+
+@app.post("/request_task_for_idle_worker")
+async def request_task_for_idle_worker(request: Request) -> JSONResponse:
+    """
+    Обрабатывает запрос на создание новой задачи для простаивающего работника.
+    Этот эндпоинт вызывается AI3, когда он обнаруживает, что работник простаивает.
+    """
+    try:
+        data = await request.json()
+        role = data.get("role")
+        reason = data.get("reason", "worker_idle")
+
+        if not role:
+            logger.warning("Received request for idle worker but no role specified")
+            return JSONResponse(
+                status_code=400,
+                content={"status": "error", "message": "Role is required"},
+            )
+
+        if role not in ["executor", "tester", "documenter"]:
+            logger.warning(f"Received request for invalid role: {role}")
+            return JSONResponse(
+                status_code=400,
+                content={"status": "error", "message": f"Invalid role: {role}"},
+            )
+
+        logger.info(
+            f"Received request to create task for idle {role}. Reason: {reason}"
+        )
+
+        # Проверяем, есть ли файлы, ожидающие обработки этой ролью
+        if role == "executor":
+            # Для исполнителя проверяем, есть ли файлы в ожидании
+            pending_files = get_pending_files_for_role("executor")
+            if pending_files:
+                # Берем первый файл из ожидающих
+                file_to_process = pending_files[0]
+                # Создаем задачу для этого файла
+                task_details = create_task_for_file(file_to_process, role)
+                return JSONResponse(
+                    content={
+                        "status": "success",
+                        "message": f"Created task for idle {role}",
+                        "task": task_details,
+                    }
+                )
+        elif role == "tester":
+            # Для тестировщика ищем файлы, готовые для тестирования
+            completed_files = get_completed_files_without_tests()
+            if completed_files:
+                file_to_test = completed_files[0]
+                task_details = create_task_for_file(file_to_test, role)
+                return JSONResponse(
+                    content={
+                        "status": "success",
+                        "message": f"Created testing task for {file_to_test}",
+                        "task": task_details,
+                    }
+                )
+        elif role == "documenter":
+            # Для документатора ищем файлы, готовые для документирования
+            completed_files = get_completed_files_without_docs()
+            if completed_files:
+                file_to_document = completed_files[0]
+                task_details = create_task_for_file(file_to_document, role)
+                return JSONResponse(
+                    content={
+                        "status": "success",
+                        "message": f"Created documentation task for {file_to_document}",
+                        "task": task_details,
+                    }
+                )
+
+        # Если не нашли подходящих задач, возвращаем информацию
+        logger.info(f"No pending tasks for idle {role} worker")
+        return JSONResponse(
+            content={
+                "status": "info",
+                "message": f"No pending tasks for idle {role} worker",
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Error handling request for idle worker: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "message": f"Internal error: {str(e)}"},
+        )
+
+
+@app.post("/request_error_fix")
+async def request_error_fix(request: Request) -> JSONResponse:
+    """
+    Обрабатывает запрос на исправление ошибки, обнаруженной AI3 в логах.
+    """
+    try:
+        data = await request.json()
+        error_text = data.get("error_text")
+        log_file = data.get("log_file")
+        role = data.get("role")
+
+        if not error_text:
+            return JSONResponse(
+                status_code=400,
+                content={"status": "error", "message": "Error text is required"},
+            )
+
+        logger.info(
+            f"Received request to fix error from {log_file}{' for '+role if role else ''}"
+        )
+
+        # Извлекаем подробности об ошибке из текста лога
+        error_details = extract_error_details(error_text, log_file)
+
+        # Если смогли определить файл, связанный с ошибкой
+        if error_details.get("file"):
+            file_to_fix = error_details["file"]
+            task_details = create_error_fix_task(file_to_fix, error_text, role)
+            # Отправляем запрос в AI1 для создания задачи на исправление
+            await notify_ai1_about_error(error_details)
+            return JSONResponse(
+                content={
+                    "status": "success",
+                    "message": f"Created error fix task for {file_to_fix}",
+                    "task": task_details,
+                }
+            )
+        else:
+            logger.warning(
+                f"Could not determine file associated with error: {error_text}"
+            )
+            return JSONResponse(
+                content={
+                    "status": "warning",
+                    "message": "Could not determine file associated with error",
+                }
+            )
+
+    except Exception as e:
+        logger.error(f"Error handling error fix request: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "message": f"Internal error: {str(e)}"},
+        )
+
+
+def get_pending_files_for_role(role: str) -> List[str]:
+    """
+    Возвращает список файлов, ожидающих обработки указанной ролью.
+    """
+    pending_files = []
+    try:
+        if role == "executor":
+            # Логика поиска файлов для исполнителя
+            # Пример: файлы из структуры, по которым еще нет задач
+            for file_path in structure_files:
+                if file_path not in [
+                    task["filename"]
+                    for task in get_all_tasks()
+                    if task.get("role") == "executor"
+                ]:
+                    pending_files.append(file_path)
+        elif role == "tester":
+            # Логика поиска файлов для тестировщика
+            pending_files = get_completed_files_without_tests()
+        elif role == "documenter":
+            # Логика поиска файлов для документатора
+            pending_files = get_completed_files_without_docs()
+
+        logger.debug(
+            f"Found {len(pending_files)} pending files for role {role}: {pending_files[:5]}"
+        )
+        return pending_files
+    except Exception as e:
+        logger.error(f"Error getting pending files for {role}: {e}")
+        return []
+
+
+def get_completed_files_without_tests() -> List[str]:
+    """
+    Возвращает список файлов, для которых код готов, но тесты еще не созданы.
+    """
+    try:
+        all_tasks = get_all_tasks()
+        completed_executor_files = [
+            task["filename"]
+            for task in all_tasks
+            if task.get("role") == "executor"
+            and task.get("status") in ["completed", "code_received", "accepted"]
+        ]
+
+        tested_files = [
+            task["filename"]
+            for task in all_tasks
+            if task.get("role") == "tester"
+            and task.get("status") in ["completed", "accepted"]
+        ]
+
+        return [file for file in completed_executor_files if file not in tested_files]
+    except Exception as e:
+        logger.error(f"Error getting files without tests: {e}")
+        return []
+
+
+def get_completed_files_without_docs() -> List[str]:
+    """
+    Возвращает список файлов, для которых код готов, но документация еще не создана.
+    """
+    try:
+        all_tasks = get_all_tasks()
+        completed_executor_files = [
+            task["filename"]
+            for task in all_tasks
+            if task.get("role") == "executor"
+            and task.get("status") in ["completed", "code_received", "accepted"]
+        ]
+
+        documented_files = [
+            task["filename"]
+            for task in all_tasks
+            if task.get("role") == "documenter"
+            and task.get("status") in ["completed", "accepted"]
+        ]
+
+        return [
+            file for file in completed_executor_files if file not in documented_files
+        ]
+    except Exception as e:
+        logger.error(f"Error getting files without docs: {e}")
+        return []
+
+
+def create_task_for_file(file_path: str, role: str) -> Dict[str, Any]:
+    """
+    Создает новую задачу для указанного файла и роли.
+    """
+    task_id = str(uuid.uuid4())
+    task = {
+        "id": task_id,
+        "filename": file_path,
+        "role": role,
+    }
+
+    if role == "executor":
+        task["text"] = (
+            f"Implement the required functionality in file: {file_path} based on the project goals."
+        )
+    elif role == "tester":
+        task["text"] = f"Generate unit tests for the code in file: {file_path}."
+    elif role == "documenter":
+        task["text"] = f"Generate documentation for the code in file: {file_path}."
+
+    # Получаем код файла для тестировщика и документатора
+    if role in ["tester", "documenter"]:
+        file_content = get_file_content(file_path)
+        if file_content:
+            task["code"] = file_content
+
+    # Добавляем задачу в соответствующую очередь
+    add_task_to_queue(role, task)
+    logger.info(
+        f"Created new task for idle {role} worker: {task_id} for file {file_path}"
+    )
+
+    return task
+
+
+def extract_error_details(error_text: str, log_file: str) -> Dict[str, Any]:
+    """
+    Извлекает детали об ошибке из текста лога.
+    """
+    details = {
+        "log_file": log_file,
+        "error_text": error_text,
+        "timestamp": datetime.now().isoformat(),
+    }
+
+    # Ищем имя файла в тексте ошибки
+    file_pattern = re.compile(r'file[:\s]+[\'"](.*?)[\'"]', re.IGNORECASE)
+    file_match = file_pattern.search(error_text)
+
+    if file_match:
+        details["file"] = file_match.group(1)
+    else:
+        # Пробуем другой паттерн
+        file_pattern2 = re.compile(
+            r'[\'"]([^\'"\s]+\.(py|js|ts|html|css|json))[\'"]', re.IGNORECASE
+        )
+        file_match2 = file_pattern2.search(error_text)
+        if file_match2:
+            details["file"] = file_match2.group(1)
+
+    # Определяем тип ошибки
+    if "test failed" in error_text.lower() or "failed test" in error_text.lower():
+        details["error_type"] = "test_failure"
+    elif "error" in error_text.lower():
+        details["error_type"] = "runtime_error"
+    elif "warning" in error_text.lower():
+        details["error_type"] = "warning"
+    else:
+        details["error_type"] = "unknown"
+
+    return details
+
+
+def create_error_fix_task(
+    file_path: str, error_text: str, role: str = None
+) -> Dict[str, Any]:
+    """
+    Создает задачу на исправление ошибки.
+    """
+    task_id = str(uuid.uuid4())
+    assigned_role = (
+        role if role else "executor"
+    )  # По умолчанию назначаем ошибку исполнителю
+
+    task = {
+        "id": task_id,
+        "filename": file_path,
+        "role": assigned_role,
+        "text": f"Fix error in file {file_path}. Error details: {error_text}",
+        "priority": "high",  # Задачам исправления ошибок даем высокий приоритет
+        "error_fix": True,
+    }
+
+    # Получаем текущий код файла
+    file_content = get_file_content(file_path)
+    if file_content:
+        task["code"] = file_content
+
+    # Добавляем задачу в соответствующую очередь
+    add_task_to_queue(assigned_role, task)
+
+    logger.info(
+        f"Created error fix task {task_id} for file {file_path}, assigned to {assigned_role}"
+    )
+
+    return task
+
+
+async def notify_ai1_about_error(error_details: Dict[str, Any]):
+    """
+    Уведомляет AI1 о необходимости создать задачу на исправление ошибки.
+    """
+    try:
+        api_url = (
+            f"{AI1_API_URL}/error_notification"
+            if AI1_API_URL
+            else "http://127.0.0.1:8001/error_notification"
+        )
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                api_url, json=error_details, timeout=10
+            ) as response:
+                if response.status == 200:
+                    logger.info(
+                        f"Successfully notified AI1 about error in {error_details.get('file')}"
+                    )
+                    return True
+                else:
+                    logger.warning(
+                        f"Failed to notify AI1 about error. Status: {response.status}"
+                    )
+                    return False
+    except Exception as e:
+        logger.error(f"Error notifying AI1 about error: {e}")
+        return False
+
+
+# Добавим функцию для обновления списка файлов из структуры
+def update_structure_files():
+    """
+    Обновляет список файлов на основе текущей структуры проекта.
+    """
+    global structure_files
+    structure_files = []
+
+    def extract_files(struct, prefix=""):
+        if isinstance(struct, dict):
+            for key, value in struct.items():
+                path = f"{prefix}/{key}" if prefix else key
+                if isinstance(value, dict):
+                    extract_files(value, path)
+                elif value is None:  # Это файл
+                    structure_files.append(path)
+
+    extract_files(current_structure)
+    logger.info(f"Updated structure files list: {len(structure_files)} files found")
+    return structure_files
+
+
+@app.post("/consult_task_structure")
+async def consult_task_structure(request: Request) -> JSONResponse:
+    """
+    Эндпоинт для консультации AI1 с AI3 (дозором) по структуре задач.
+    AI3 рассматривает структуру задач и предлагает улучшения.
+    """
+    try:
+        data = await request.json()
+        task_structure = data.get("task_structure", {})
+        target = data.get("target", "")
+
+        if not task_structure:
+            logger.warning("Received empty task structure for consultation")
+            return JSONResponse(
+                status_code=400,
+                content={"status": "error", "message": "Task structure is required"},
+            )
+
+        logger.info(
+            f"AI1 запрашивает консультацию по структуре задач: {len(task_structure.get('main_tasks', []))} основных задач"
+        )
+
+        # Отправляем запрос к AI3 для анализа структуры задач
+        recommendations = await request_ai3_consultation(
+            task_structure, target, "task_structure"
+        )
+
+        # Базовое улучшение структуры
+        improved_structure = task_structure.copy()
+
+        # Если AI3 предоставил рекомендации по улучшению структуры, применяем их
+        if recommendations.get("improved_structure"):
+            improved_structure = recommendations.get("improved_structure")
+            logger.info(f"Структура задач улучшена на основе рекомендаций AI3")
+
+        return JSONResponse(
+            content={
+                "status": "success",
+                "improved_structure": improved_structure,
+                "recommendations": recommendations.get("recommendations", []),
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Ошибка при консультации по структуре задач: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "message": f"Internal error: {str(e)}"},
+        )
+
+
+@app.post("/consult_subtasks")
+async def consult_subtasks(request: Request) -> JSONResponse:
+    """
+    Эндпоинт для консультации AI1 с AI3 (дозором) по микрозадачам.
+    AI3 анализирует микрозадачи и предлагает улучшения.
+    """
+    try:
+        data = await request.json()
+        main_task_id = data.get("main_task_id", "")
+        subtasks = data.get("subtasks", [])
+        target = data.get("target", "")
+
+        if not subtasks:
+            logger.warning("Received empty subtasks list for consultation")
+            return JSONResponse(
+                status_code=400,
+                content={"status": "error", "message": "Subtasks are required"},
+            )
+
+        logger.info(
+            f"AI1 запрашивает консультацию по микрозадачам для основной задачи {main_task_id}: {len(subtasks)} микрозадач"
+        )
+
+        # Отправляем запрос к AI3 для анализа микрозадач
+        recommendations = await request_ai3_consultation(
+            {"main_task_id": main_task_id, "subtasks": subtasks}, target, "subtasks"
+        )
+
+        # Базовое улучшение (если AI3 не предоставил улучшений)
+        improved_subtasks = subtasks
+
+        # Если AI3 предоставил улучшенные микрозадачи, используем их
+        if recommendations.get("improved_subtasks"):
+            improved_subtasks = recommendations.get("improved_subtasks")
+            logger.info(f"Микрозадачи улучшены на основе рекомендаций AI3")
+
+        return JSONResponse(
+            content={
+                "status": "success",
+                "improved_subtasks": improved_subtasks,
+                "recommendations": recommendations.get("recommendations", []),
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Ошибка при консультации по микрозадачам: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "message": f"Internal error: {str(e)}"},
+        )
+
+
+async def request_ai3_consultation(
+    data: Dict, target: str, consultation_type: str
+) -> Dict:
+    """
+    Отправляет запрос к AI3 для получения рекомендаций по улучшению задач или микрозадач.
+
+    Args:
+        data: Данные для анализа (структура задач или микрозадачи)
+        target: Цель проекта
+        consultation_type: Тип консультации ("task_structure" или "subtasks")
+
+    Returns:
+        Dict с рекомендациями и улучшенной структурой
+    """
+    try:
+        ai3_api_url = (
+            f"{config.get('ai3_api_url', 'http://localhost:8003')}/consultation"
+        )
+
+        request_data = {
+            "consultation_type": consultation_type,
+            "data": data,
+            "target": target,
+        }
+
+        logger.info(f"Отправка запроса консультации к AI3: {consultation_type}")
+
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                ai3_api_url, json=request_data, timeout=60
+            ) as response:
+                if response.status == 200:
+                    result = await response.json()
+                    logger.info(
+                        f"Получен ответ от AI3 с {len(result.get('recommendations', []))} рекомендациями"
+                    )
+                    return result
+                else:
+                    logger.warning(
+                        f"Ошибка при получении рекомендаций от AI3: Статус {response.status}"
+                    )
+                    # Если нет доступа к AI3, предоставляем базовые рекомендации
+                    return generate_basic_recommendations(data, consultation_type)
+    except Exception as e:
+        logger.error(f"Ошибка при запросе рекомендаций от AI3: {e}")
+        # В случае ошибки, возвращаем базовые рекомендации
+        return generate_basic_recommendations(data, consultation_type)
+
+
+def generate_basic_recommendations(data: Dict, consultation_type: str) -> Dict:
+    """
+    Генерирует базовые рекомендации, если AI3 недоступен.
+
+    Args:
+        data: Данные для анализа
+        consultation_type: Тип консультации
+
+    Returns:
+        Dict с базовыми рекомендациями
+    """
+    result = {"recommendations": []}
+
+    if consultation_type == "task_structure":
+        # Базовые рекомендации для структуры задач
+        result["recommendations"] = [
+            "Рекомендуется начать с разработки основных компонентов системы",
+            "Обратите внимание на зависимости между компонентами",
+            "Сначала реализуйте базовую инфраструктуру, затем бизнес-логику",
+        ]
+    elif consultation_type == "subtasks":
+        # Базовые рекомендации для микрозадач
+        result["recommendations"] = [
+            "Разбейте работу над файлом на отдельные логические блоки",
+            "Тестируйте каждый блок отдельно перед интеграцией",
+            "Документируйте интерфейсы и API для облегчения интеграции",
+        ]
+
+    logger.info(
+        f"Сгенерированы базовые рекомендации для {consultation_type} из-за недоступности AI3"
+    )
+    return result
+
+
+@app.post("/test_recommendation")
+async def receive_test_recommendation(request: Request) -> JSONResponse:
+    """
+    Принимает рекомендации от AI3 по результатам тестов GitHub Actions.
+    Перенаправляет рекомендации к AI1 для принятия окончательного решения.
+    """
+    try:
+        data = await request.json()
+
+        run_id = data.get("run_id")
+        result = data.get("result")
+        files = data.get("files", [])
+        recommendation = data.get("recommendation")
+
+        if not run_id or not result:
+            logger.error("Получены некорректные данные о результатах тестов")
+            return JSONResponse(
+                status_code=400,
+                content={"status": "error", "message": "Некорректные данные о тестах"},
+            )
+
+        logger.info(
+            f"Получены результаты тестов GitHub Actions: run_id={run_id}, результат={result}"
+        )
+        logger.info(f"Рекомендация AI3: {recommendation}")
+
+        # Отправляем информацию о тестах к AI1 для принятия решения
+        await forward_test_results_to_ai1(data)
+
+        # Обновляем статусы задач на основе результатов тестов
+        for file_info in files:
+            source_file = file_info.get("source_file")
+            test_file = file_info.get("test_file")
+
+            if source_file:
+                test_status = "passed" if result == "success" else "failed"
+                await update_file_test_status(source_file, test_status, run_id)
+
+        # Отправляем обновление клиентам через WebSocket
+        await broadcast_specific_update(
+            {
+                "test_result": {
+                    "run_id": run_id,
+                    "result": result,
+                    "files": [f["source_file"] for f in files if "source_file" in f],
+                    "timestamp": datetime.now().isoformat(),
+                }
+            }
+        )
+
+        return JSONResponse(
+            content={"status": "success", "message": "Рекомендация по тестам получена"}
+        )
+
+    except Exception as e:
+        logger.error(f"Ошибка при обработке рекомендации по тестам: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "message": f"Внутренняя ошибка: {str(e)}"},
+        )
+
+
+async def update_file_test_status(file_path: str, status: str, run_id: str):
+    """
+    Обновляет статус теста для файла.
+    """
+    try:
+        # Находим все задачи, связанные с этим файлом
+        all_tasks = get_all_tasks()
+        for task in all_tasks:
+            if task.get("filename") == file_path and task.get("role") == "tester":
+                subtask_id = task.get("id")
+                if subtask_id:
+                    old_status = subtask_status.get(subtask_id, "unknown")
+
+                    # Устанавливаем новый статус на основе результата теста
+                    new_status = "completed" if status == "passed" else "failed_tests"
+
+                    logger.info(
+                        f"Обновление статуса задачи {subtask_id} для файла {file_path}: {old_status} -> {new_status}"
+                    )
+                    subtask_status[subtask_id] = new_status
+
+                    # Добавляем информацию о запуске GitHub Actions
+                    if not hasattr(task, "test_runs"):
+                        task["test_runs"] = []
+
+                    task["test_runs"].append(
+                        {
+                            "run_id": run_id,
+                            "status": status,
+                            "timestamp": datetime.now().isoformat(),
+                        }
+                    )
+
+                    # Отправляем обновление клиентам
+                    await broadcast_specific_update(
+                        {"subtasks": {subtask_id: new_status}}
+                    )
+
+    except Exception as e:
+        logger.error(f"Ошибка при обновлении статуса теста для {file_path}: {e}")
+
+
+async def forward_test_results_to_ai1(test_data: Dict):
+    """
+    Отправляет результаты тестов в AI1 для принятия решения.
+    """
+    try:
+        api_url = f"{AI1_API_URL}/test_result"
+        async with aiohttp.ClientSession() as session:
+            async with session.post(api_url, json=test_data, timeout=30) as response:
+                if response.status == 200:
+                    logger.info(f"Результаты тестов успешно отправлены в AI1")
+                    return True
+                else:
+                    logger.error(
+                        f"Ошибка отправки результатов тестов в AI1. Статус: {response.status}"
+                    )
+                    return False
+    except Exception as e:
+        logger.error(f"Ошибка при пересылке результатов тестов в AI1: {e}")
+        return False
 
 
 if __name__ == "__main__":
