@@ -44,33 +44,13 @@ git config --global --add safe.directory "/home/dev/vscode/AI-SYSTEMS"
 if [ ! -d .git ]; then
     git init
     git checkout -b "$MAIN_BRANCH"
-    echo "$REPO_SUBFOLDER/" >.gitignore
-    echo ".env" >>.gitignore
+    echo ".env" >.gitignore
     git add .gitignore
     git commit -m "Initial commit with .gitignore"
     git remote add origin "git@github.com:oleg1203/AI-SYSTEMS.git"
     git push -u origin "$MAIN_BRANCH"
 else
     git checkout "$MAIN_BRANCH" || git checkout -b "$MAIN_BRANCH"
-fi
-
-# Створення підпапки для ігрової програми
-mkdir -p "/home/dev/vscode/AI-SYSTEMS/$REPO_SUBFOLDER/$GAME_PROGRAM_SUBFOLDER"
-chmod -R 755 "/home/dev/vscode/AI-SYSTEMS"
-chown -R $(id -u):$(id -g) "/home/dev/vscode/AI-SYSTEMS"
-
-# Ініціалізація Git-репозиторію для ігрової програми
-cd "/home/dev/vscode/AI-SYSTEMS/$REPO_SUBFOLDER/$GAME_PROGRAM_SUBFOLDER"
-# Додавання підкаталогу гри до безпечних директорій Git
-git config --global --add safe.directory "/home/dev/vscode/AI-SYSTEMS/$REPO_SUBFOLDER/$GAME_PROGRAM_SUBFOLDER"
-if [ ! -d .git ]; then
-    git init
-    git checkout -b "$GAME_PROGRAM"
-    echo 'Initial game files version control' >README.md
-    git add README.md
-    git commit -m "Initial commit for game files"
-    git remote add origin "$GAME_PROGRAM_REPO_URL"
-    git push -u origin "$GAME_PROGRAM"
 fi
 
 # Підтвердження завершення
