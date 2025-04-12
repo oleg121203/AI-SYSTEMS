@@ -7,6 +7,8 @@ import asyncio
 import os
 from datetime import datetime
 
+import os
+token = os.environ.get("GITHUB_TOKEN")
 
 async def test_github_token():
     """Проверяет доступность токена GitHub и выводит информацию о нем."""
