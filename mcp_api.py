@@ -16,6 +16,43 @@ import aiohttp
 import git
 import uvicorn
 import websockets
+from fastapi import (
+    BackgroundTasks,
+    FastAPI,
+    HTTPException,
+    Request,
+    WebSocket,
+    WebSocketDisconnect,
+)
+from fastapi import status as fastapi_status
+from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel, Field
+
+
+# Определяем функцию log_message в начале файла
+def log_message(message: str):
+    """Логирование сообщения в консоль и файл"""
+    logger.info(message)
+
+
+def terminate_process(process):
+    """Безопасное завершение процесса"""
+    if process and process.poll() is None:
+        try:
+            process.terminate()
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+
+
+import aiofiles
+import aiohttp
+import git
+import uvicorn
+import websockets
 from dotenv import load_dotenv
 from fastapi import (
     BackgroundTasks,
@@ -84,7 +121,7 @@ class WebSocketLogHandler(logging.Handler):
 
 ws_log_handler = WebSocketLogHandler()
 ws_log_handler.setLevel(logging.INFO)
-formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+formatter = logging.Formatter("%(asctime)s - %(levellevelname)s - %(message)s")
 ws_log_handler.setFormatter(formatter)
 logging.getLogger().addHandler(ws_log_handler)
 
@@ -619,7 +656,98 @@ async def websocket_endpoint(websocket: WebSocket):
     logger.info(f"WebSocket connected: {websocket.client}")
     try:
         # Send initial full status upon connection
-        await broadcast_full_status()  # Consider sending only to the new client if needed
+        await broadcast_full_status()
+
+        # Обработка входящих сообщений от клиента
+        while True:
+            try:
+                message = await websocket.receive_json()
+                logger.debug(f"Received WebSocket message: {message}")
+
+                action = message.get("action", "")
+
+                if action == "get_full_status":
+                    # Отправляем полный статус системы
+                    await broadcast_full_status()
+
+                elif action == "get_status":
+                    # Отправляем только статус AI
+                    await websocket.send_json(
+                        {"type": "specific_update", "ai_status": ai_status}
+                    )
+
+                elif action == "get_queues":
+                    # Отправляем данные о очередях задач
+                    await websocket.send_json(
+                        {
+                            "type": "specific_update",
+                            "queues": {
+                                "executor": [
+                                    {
+                                        "id": t["id"],
+                                        "filename": t.get("filename", "N/A"),
+                                        "text": t["text"],
+                                        "status": subtask_status.get(
+                                            t["id"], "unknown"
+                                        ),
+                                    }
+                                    for t in list(executor_queue._queue)
+                                ],
+                                "tester": [
+                                    {
+                                        "id": t["id"],
+                                        "filename": t.get("filename", "N/A"),
+                                        "text": t["text"],
+                                        "status": subtask_status.get(
+                                            t["id"], "unknown"
+                                        ),
+                                    }
+                                    for t in list(tester_queue._queue)
+                                ],
+                                "documenter": [
+                                    {
+                                        "id": t["id"],
+                                        "filename": t.get("filename", "N/A"),
+                                        "text": t["text"],
+                                        "status": subtask_status.get(
+                                            t["id"], "unknown"
+                                        ),
+                                    }
+                                    for t in list(documenter_queue._queue)
+                                ],
+                            },
+                        }
+                    )
+
+                elif action == "get_structure":
+                    # Отправляем структуру проекта
+                    await websocket.send_json(
+                        {"type": "specific_update", "structure": current_structure}
+                    )
+
+                elif action == "refresh_data":
+                    # Обновляем все данные
+                    await broadcast_full_status()
+
+                elif action == "ping":
+                    # Просто отвечаем на пинг
+                    await websocket.send_json({"type": "pong"})
+
+                else:
+                    logger.warning(f"Unknown WebSocket action: {action}")
+                    await websocket.send_json(
+                        {"type": "error", "message": f"Unknown action: {action}"}
+                    )
+
+            except WebSocketDisconnect:
+                logger.info(
+                    f"WebSocket disconnected during message processing: {websocket.client}"
+                )
+                break
+            except json.JSONDecodeError:
+                logger.error(f"Invalid JSON received from {websocket.client}")
+            except Exception as e:
+                logger.error(f"Error processing WebSocket message: {e}", exc_info=True)
 
         # Keep connection alive with pings and handle potential disconnects
         while True:
@@ -1182,21 +1310,8 @@ async def consult_subtasks(request: Request) -> JSONResponse:
 async def request_ai3_consultation(
     data: Dict, target: str, consultation_type: str
 ) -> Dict:
-    """
-    Отправляет запрос к AI3 для получения рекомендаций по улучшению задач или микрозадач.
-
-    Args:
-        data: Данные для анализа (структура задач или микрозадачи)
-        target: Цель проекта
-        consultation_type: Тип консультации ("task_structure" или "subtasks")
-
-    Returns:
-        Dict с рекомендациями и улучшенной структурой
-    """
     try:
-        ai3_api_url = (
-            f"{config.get('ai3_api_url', 'http://localhost:8003')}/consultation"
-        )
+        logger.info(f"Отправка запроса консультации к AI3: {consultation_type}")
 
         request_data = {
             "consultation_type": consultation_type,
@@ -1204,27 +1319,12 @@ async def request_ai3_consultation(
             "target": target,
         }
 
-        logger.info(f"Отправка запроса консультации к AI3: {consultation_type}")
+        # Используем локальную функцию для получения рекомендаций
+        return generate_basic_recommendations(data, consultation_type)
 
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                ai3_api_url, json=request_data, timeout=60
-            ) as response:
-                if response.status == 200:
-                    result = await response.json()
-                    logger.info(
-                        f"Получен ответ от AI3 с {len(result.get('recommendations', []))} рекомендациями"
-                    )
-                    return result
-                else:
-                    logger.warning(
-                        f"Ошибка при получении рекомендаций от AI3: Статус {response.status}"
-                    )
-                    # Если нет доступа к AI3, предоставляем базовые рекомендации
-                    return generate_basic_recommendations(data, consultation_type)
     except Exception as e:
         logger.error(f"Ошибка при запросе рекомендаций от AI3: {e}")
-        # В случае ошибки, возвращаем базовые рекомендации
+        # В случае ошибки возвращаем базовые рекомендации
         return generate_basic_recommendations(data, consultation_type)
 
 
