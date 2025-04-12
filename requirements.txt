@@ -3,3 +3,27 @@ uvicorn[standard]
 flake8
 black
 isort
+websockets==12.0
+aiohttp==3.10.10
+pytest==7.1.2
+pylint==2.17.5
+coverage==7.3.2
+pillow==10.4.0
+numpy==1.26.4
+pydub==0.25.1
+sqlalchemy==2.0.31
+junitparser==3.1.2
+google-generativeai==0.8.3
+mistralai==1.5.0
+together==1.3.14
+cohere==5.11.2
+openai==1.51.2
+groq==0.11.0
+ollama==0.4.0  # Змінено з 0.3.4 на 0.4.0
+GitPython==3.1.28
+json-log-formatter==0.4.0
+python-dotenv==1.0.1
+jinja2==3.1.4
+aiofiles==24.1.0
+pytest-timeout
+pytest-asyncio
