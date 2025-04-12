@@ -1570,15 +1570,6 @@ async def clear_project():
         current_structure = {}
         log_message("[API] Очищено всі черги завдань та статуси")
 
-        # Оновлюємо глобальну змінну repo якщо вона існує
-        global repo
-        try:
-            if "repo" in globals():
-                repo = git.Repo(repo_dir)
-                log_message("[API] Оновлено глобальну змінну repo")
-        except Exception as e:
-            log_message(f"[API] Помилка при оновленні глобальної змінної repo: {e}")
-
         # Оновлюємо всіх клієнтів
         await broadcast_specific_update(
             {
