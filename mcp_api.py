@@ -2,6 +2,8 @@ import asyncio
 import json
 import logging
 import os
+import re
+import shutil
 import subprocess
 from collections import deque
 from datetime import datetime
@@ -10,11 +12,10 @@ from typing import Any, Dict, List, Optional, Set, Union
 from uuid import uuid4
 
 import aiofiles
+import aiohttp
 import git
 import uvicorn
-
-# from websockets import status  # закомментируем импорт status
-import websockets.typing
+import websockets
 from dotenv import load_dotenv
 from fastapi import (
     BackgroundTasks,
@@ -1384,6 +1385,234 @@ async def forward_test_results_to_ai1(test_data: Dict):
     except Exception as e:
         logger.error(f"Ошибка при пересылке результатов тестов в AI1: {e}")
         return False
+
+
+@app.post("/clear_project")
+async def clear_project():
+    """
+    Повністю очищує проект, включаючи репозиторій, логи, кеш та інші дані
+    """
+    global repo  # Объявление глобальной переменной перед использованием
+    try:
+        log_message("[API] Запит на повне очищення проекту отримано")
+
+        # Зупиняємо всі процеси, якщо вони запущені
+        if "ai1_process" in globals() and ai1_process and ai1_process.poll() is None:
+            log_message("[API] Зупинка AI1 перед очищенням")
+            terminate_process(ai1_process)
+
+        if (
+            "ai2_executor_process" in globals()
+            and ai2_executor_process
+            and ai2_executor_process.poll() is None
+        ):
+            log_message("[API] Зупинка AI2-executor перед очищенням")
+            terminate_process(ai2_executor_process)
+
+        if (
+            "ai2_tester_process" in globals()
+            and ai2_tester_process
+            and ai2_tester_process.poll() is None
+        ):
+            log_message("[API] Зупинка AI2-tester перед очищенням")
+            terminate_process(ai2_tester_process)
+
+        if (
+            "ai2_documenter_process" in globals()
+            and ai2_documenter_process
+            and ai2_documenter_process.poll() is None
+        ):
+            log_message("[API] Зупинка AI2-documenter перед очищенням")
+            terminate_process(ai2_documenter_process)
+
+        if "ai3_process" in globals() and ai3_process and ai3_process.poll() is None:
+            log_message("[API] Зупинка AI3 перед очищенням")
+            terminate_process(ai3_process)
+
+        # Чекаємо, щоб переконатися, що всі процеси зупинилися
+        await asyncio.sleep(2)
+
+        # Очищаємо репозиторій - видаляємо та ініціалізуємо заново
+        repo_dir = config.get("repo_dir", "repo")
+        log_message(f"[API] Очищення репозиторію в: {repo_dir}")
+
+        # Видаляємо репозиторій, якщо він існує
+        if os.path.exists(repo_dir):
+            try:
+                # Переконаємося, що це дійсно директорія repo перед видаленням
+                if os.path.basename(os.path.normpath(repo_dir)) == "repo":
+                    # Видаляємо всі файли, включаючи .git
+                    for root, dirs, files in os.walk(repo_dir, topdown=False):
+                        for name in files:
+                            try:
+                                file_path = os.path.join(root, name)
+                                os.chmod(file_path, 0o777)  # Додаємо всі права на файл
+                                os.remove(file_path)
+                                log_message(f"[API] Видалено файл: {file_path}")
+                            except Exception as e:
+                                log_message(
+                                    f"[API] Помилка при видаленні файлу {file_path}: {e}"
+                                )
+
+                        for name in dirs:
+                            try:
+                                dir_path = os.path.join(root, name)
+                                os.chmod(
+                                    dir_path, 0o777
+                                )  # Додаємо всі права на директорію
+                                shutil.rmtree(dir_path, onerror=handle_readonly_error)
+                                log_message(f"[API] Видалено директорію: {dir_path}")
+                            except Exception as e:
+                                log_message(
+                                    f"[API] Помилка при видаленні директорії {dir_path}: {e}"
+                                )
+
+                    # Тепер ініціалізуємо Git репозиторій заново
+                    try:
+                        import git
+
+                        git.Repo.init(repo_dir)
+                        log_message(
+                            "[API] Git репозиторій успішно ініціалізовано заново"
+                        )
+
+                        # Створюємо базовий README.md
+                        readme_path = os.path.join(repo_dir, "README.md")
+                        with open(readme_path, "w") as f:
+                            f.write(
+                                "# Проект\n\nЦей репозиторій створено системою AI-SYSTEMS.\n"
+                            )
+
+                        # Комітимо базовий README.md
+                        repo = git.Repo(repo_dir)
+                        repo.git.add(readme_path)
+                        repo.git.commit("-m", "Initial commit with README.md")
+                        log_message("[API] Створено та закомічено базовий README.md")
+                    except Exception as e:
+                        log_message(
+                            f"[API] Помилка при ініціалізації Git репозиторію: {e}"
+                        )
+                else:
+                    log_message(
+                        "[API] Безпека: відмовлено у видаленні директорії, що не є 'repo'"
+                    )
+            except Exception as e:
+                log_message(f"[API] Помилка при видаленні репозиторію: {e}")
+        else:
+            # Створюємо нову директорію для репозиторію
+            os.makedirs(repo_dir, exist_ok=True)
+            log_message(f"[API] Створено нову директорію для репозиторію: {repo_dir}")
+
+            # Ініціалізуємо Git репозиторій
+            try:
+                import git
+
+                git.Repo.init(repo_dir)
+                log_message("[API] Git репозиторій успішно ініціалізовано")
+
+                # Створюємо базовий README.md
+                readme_path = os.path.join(repo_dir, "README.md")
+                with open(readme_path, "w") as f:
+                    f.write(
+                        "# Проект\n\nЦей репозиторій створено системою AI-SYSTEMS.\n"
+                    )
+
+                # Комітимо базовий README.md
+                repo = git.Repo(repo_dir)
+                repo.git.add(readme_path)
+                repo.git.commit("-m", "Initial commit with README.md")
+                log_message("[API] Створено та закомічено базовий README.md")
+            except Exception as e:
+                log_message(f"[API] Помилка при ініціалізації Git репозиторію: {e}")
+
+        # Очищаємо директорію з логами
+        logs_dir = "logs"
+        log_message(f"[API] Очищення логів в: {logs_dir}")
+
+        # Очищаємо файли логів, але не видаляємо саму директорію
+        if os.path.exists(logs_dir):
+            for log_file in os.listdir(logs_dir):
+                log_path = os.path.join(logs_dir, log_file)
+                try:
+                    # Перевіряємо, чи це файл (не директорія)
+                    if os.path.isfile(log_path):
+                        with open(log_path, "w") as f:
+                            # Просто відкриваємо файл для запису, щоб очистити
+                            pass
+                        log_message(f"[API] Очищено лог-файл: {log_file}")
+                except Exception as e:
+                    log_message(f"[API] Помилка при очищенні лог-файлу {log_file}: {e}")
+        else:
+            os.makedirs(logs_dir, exist_ok=True)
+            log_message(f"[API] Створено нову директорію для логів: {logs_dir}")
+
+        # Очищаємо кеш та тимчасові файли
+        # (Додайте тут очищення інших директорій, якщо необхідно)
+        cache_dirs = ["__pycache__", ".pytest_cache", ".cache"]
+        for cache_dir in cache_dirs:
+            if os.path.exists(cache_dir):
+                try:
+                    shutil.rmtree(cache_dir, onerror=handle_readonly_error)
+                    log_message(f"[API] Видалено кеш директорію: {cache_dir}")
+                except Exception as e:
+                    log_message(
+                        f"[API] Помилка при видаленні кеш директорії {cache_dir}: {e}"
+                    )
+
+        # Очищаємо черги завдань та стан завдань
+        global subtask_statuses, task_queues, current_structure
+        task_queues = {
+            "executor": asyncio.Queue(),
+            "tester": asyncio.Queue(),
+            "documenter": asyncio.Queue(),
+        }
+        subtask_statuses = {}
+        current_structure = {}
+        log_message("[API] Очищено всі черги завдань та статуси")
+
+        # Оновлюємо глобальну змінну repo якщо вона існує
+        global repo
+        try:
+            if "repo" in globals():
+                repo = git.Repo(repo_dir)
+                log_message("[API] Оновлено глобальну змінну repo")
+        except Exception as e:
+            log_message(f"[API] Помилка при оновленні глобальної змінної repo: {e}")
+
+        # Оновлюємо всіх клієнтів
+        await broadcast_specific_update(
+            {
+                "type": "full_status_update",
+                "ai_status": ai_status,
+                "queues": {"executor": [], "tester": [], "documenter": []},
+                "subtasks": {},
+                "structure": {},
+            }
+        )
+
+        log_message("[API] Проект успішно очищено")
+        return {"status": "success", "message": "Проект повністю очищено"}
+    except Exception as e:
+        log_message(f"[API] Помилка при очищенні проекту: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "message": f"Помилка очищення: {str(e)}"},
+        )
+
+
+def handle_readonly_error(func, path, exc_info):
+    """Функція для обробки помилок доступу при видаленні файлів"""
+    import stat
+
+    # Перевіряємо, чи файл "тільки для читання"
+    if not os.access(path, os.W_OK):
+        # Додаємо права на запис
+        os.chmod(path, stat.S_IWUSR)
+        # Пробуємо знову
+        func(path)
+    else:
+        # Інакше просто логуємо помилку
+        log_message(f"[API] Помилка доступу при видаленні {path}: {exc_info[1]}")
 
 
 if __name__ == "__main__":

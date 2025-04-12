@@ -1,47 +1,35 @@
-name: CI for Game Files
+name: CI Tests
 
 on:
   push:
-    branches: [ master ]
+    branches: [ main ]
   pull_request:
-    branches: [ master ]
+    branches: [ main ]
+  # Позволяет запускать workflow вручную
+  workflow_dispatch:
 
 jobs:
   test:
     runs-on: ubuntu-latest
-
+    
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v3
-      with:
-        fetch-depth: 2  # Отримуємо попередній коміт для порівняння
-
+    - uses: actions/checkout@v3
+    
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
-        python-version: '3.11'
-
+        python-version: '3.12'
+        
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -r requirements_async.txt
-        pip install --upgrade websockets>=10.0  # Додаємо для синхронізації з Dockerfile
-
-    - name: Find changed test files
-      id: changed-files
+        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+        
+    - name: Run tests
       run: |
-        # Отримуємо змінені файли між поточним і попереднім комітом
-        CHANGED_FILES=$(git diff --name-only HEAD^ HEAD | grep '^test_.*\.py$\|^.*_test\.py$' || true)
-        echo "CHANGED_FILES=$CHANGED_FILES" >> $GITHUB_ENV
-
-    - name: Run tests for changed files
-      if: env.CHANGED_FILES != ''
+        pytest -v tests/
+      
+    - name: Report test status
+      if: always()
       run: |
-        echo "Running tests for changed files: $CHANGED_FILES"
-        pytest $CHANGED_FILES
-
-    - name: Run all tests if no specific test files changed
-      if: env.CHANGED_FILES == ''
-      run: |
-        echo "No specific test files changed, running all tests"
-        pytest
+        echo "Test status: ${{ job.status }}"

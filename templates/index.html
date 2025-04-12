@@ -1,120 +1,682 @@
 <!DOCTYPE html>
-<html lang="uk" data-theme="dark"> <!-- Default to dark theme -->
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<html lang="uk" data-theme="dark">
+  <!-- Default to dark theme -->
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>AI Control Dashboard</title>
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/style.css" />
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://unpkg.com/monaco-editor@0.34.0/min/vs/loader.js"></script>
     <!-- Font Awesome for icons -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
-</head>
-<body>
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css"
+    />
+  </head>
+  <body>
     <header class="header">
-        <h1>AI Control Dashboard</h1>
-        <div class="theme-switcher">
-            <button onclick="setTheme('spring')" data-theme="spring">Весна</button>
-            <button onclick="setTheme('summer')" data-theme="summer">Літо</button>
-            <button onclick="setTheme('autumn')" data-theme="autumn">Осінь</button>
-            <button onclick="setTheme('winter')" data-theme="winter">Зима</button>
-             <button onclick="setTheme('dark')" data-theme="dark">Темна</button> <!-- Added generic dark -->
-        </div>
+      <h1>AI Control Dashboard</h1>
+      <div class="theme-switcher">
+        <button onclick="setTheme('spring')" data-theme="spring">Весна</button>
+        <button onclick="setTheme('summer')" data-theme="summer">Літо</button>
+        <button onclick="setTheme('autumn')" data-theme="autumn">Осінь</button>
+        <button onclick="setTheme('winter')" data-theme="winter">Зима</button>
+        <button onclick="setTheme('dark')" data-theme="dark">Темна</button>
+        <!-- Added generic dark -->
+      </div>
     </header>
 
     <div class="container">
-        <!-- Control Panel -->
-        <section class="panel control-panel">
-            <h2><i class="fas fa-cogs"></i> Control Center</h2>
-            <div class="control-buttons">
-                <!-- Buttons now get 'on'/'off' class via JS -->
-                <button id="ai1-button" onclick="toggleAI('ai1')">AI1: <span id="ai1-status">Off</span></button>
-                <button id="ai2-button" onclick="toggleAI('ai2')">AI2: <span id="ai2-status">Off</span></button>
-                <button id="ai3-button" onclick="toggleAI('ai3')">AI3: <span id="ai3-status">Off</span></button>
-                <button id="start-all-button" onclick="startAll()">Start All</button> <!-- Added ID -->
-                <button id="stop-all-button" onclick="stopAll()">Stop All</button>
-                <button onclick="resetSystem()">Reset & Restart</button>
-                <button id="clear-log-button" onclick="clearLogs()">Clear Logs</button> <!-- Added ID -->
-            </div>
-            <div class="prompt-editor">
-                <h3><i class="fas fa-edit"></i> Edit Prompts & Target</h3>
-                <textarea id="target" placeholder="Project Target Goal">{{ target }}</textarea>
-                <textarea id="ai1-prompt" placeholder="AI1 Prompt (Curator)">{{ config.ai1_prompt }}</textarea>
-                <textarea id="ai2-0-prompt" placeholder="AI2 Prompt (Executor)">{{ config.ai2_prompts[0] }}</textarea>
-                <textarea id="ai2-1-prompt" placeholder="AI2 Prompt (Tester)">{{ config.ai2_prompts[1] }}</textarea>
-                <textarea id="ai2-2-prompt" placeholder="AI2 Prompt (Documenter)">{{ config.ai2_prompts[2] }}</textarea>
-                <textarea id="ai3-prompt" placeholder="AI3 Prompt (Structure/File Manager)">{{ config.ai3_prompt }}</textarea>
-                <button onclick="saveConfig()">Save Config</button>
-            </div>
-        </section>
+      <!-- Control Panel -->
+      <section class="panel control-panel">
+        <h2><i class="fas fa-cogs"></i> Control Center</h2>
+        <div class="control-buttons">
+          <!-- Buttons now get 'on'/'off' class via JS -->
+          <button id="ai1-button" onclick="toggleAI('ai1')">
+            AI1: <span id="ai1-status">Off</span>
+          </button>
+          <button id="ai2-button" onclick="toggleAI('ai2')">
+            AI2: <span id="ai2-status">Off</span>
+          </button>
+          <button id="ai3-button" onclick="toggleAI('ai3')">
+            AI3: <span id="ai3-status">Off</span>
+          </button>
+          <button id="start-all-button" onclick="startAll()">Start All</button>
+          <!-- Added ID -->
+          <button id="stop-all-button" onclick="stopAll()">Stop All</button>
+          <button onclick="resetSystem()">Reset & Restart</button>
+          <button id="clear-project-button" onclick="clearProject()" disabled>
+            Clear Project
+          </button>
+          <!-- Changed from clear-log-button -->
+        </div>
+        <div class="prompt-editor">
+          <h3><i class="fas fa-edit"></i> Edit Prompts & Target</h3>
+          <textarea id="target" placeholder="Project Target Goal">
+{{ target }}</textarea
+          >
+          <textarea id="ai1-prompt" placeholder="AI1 Prompt (Curator)">
+{{ config.ai1_prompt }}</textarea
+          >
+          <textarea id="ai2-0-prompt" placeholder="AI2 Prompt (Executor)">
+{{ config.ai2_prompts[0] }}</textarea
+          >
+          <textarea id="ai2-1-prompt" placeholder="AI2 Prompt (Tester)">
+{{ config.ai2_prompts[1] }}</textarea
+          >
+          <textarea id="ai2-2-prompt" placeholder="AI2 Prompt (Documenter)">
+{{ config.ai2_prompts[2] }}</textarea
+          >
+          <textarea
+            id="ai3-prompt"
+            placeholder="AI3 Prompt (Structure/File Manager)"
+          >
+{{ config.ai3_prompt }}</textarea
+          >
+          <button onclick="saveConfig()">Save Config</button>
+        </div>
+      </section>
 
-        <!-- Monitoring Panel -->
-        <section class="panel monitoring-panel">
-            <h2><i class="fas fa-chart-line"></i> Monitoring</h2>
-             <div class="task-stats">
-                <p>Total Tasks: <span id="total-tasks">0</span></p>
-                <p>Completed: <span id="completed-tasks">0</span></p>
-                <p>Efficiency: <span id="efficiency">0%</span></p>
-                <!-- Start: Added extra stats -->
-                <div class="extra-stats">
-                  <p>Pending: <span id="pending-tasks">0</span></p>
-                  <p>Processing: <span id="processing-tasks">0</span></p>
-                  <p>Failed: <span id="failed-tasks">0</span></p>
-                </div>
-                <!-- End: Added extra stats -->
-            </div>
-            <div class="charts">
-                <div class="chart-item"><canvas id="taskChart"></canvas></div>
-                <div class="chart-item"><canvas id="progressChart"></canvas></div>
-                <div class="chart-item"><canvas id="gitChart"></canvas></div>
-                <div class="chart-item"><canvas id="statusPieChart"></canvas></div> <!-- Added Pie Chart Canvas -->
-            </div>
-        </section>
+      <!-- Monitoring Panel -->
+      <section class="panel monitoring-panel">
+        <h2><i class="fas fa-chart-line"></i> Monitoring</h2>
+        <div class="task-stats">
+          <p>Total Tasks: <span id="total-tasks">0</span></p>
+          <p>Completed: <span id="completed-tasks">0</span></p>
+          <p>Efficiency: <span id="efficiency">0%</span></p>
+          <!-- Start: Added extra stats -->
+          <div class="extra-stats">
+            <p>Pending: <span id="pending-tasks">0</span></p>
+            <p>Processing: <span id="processing-tasks">0</span></p>
+            <p>Failed: <span id="failed-tasks">0</span></p>
+          </div>
+          <!-- End: Added extra stats -->
+        </div>
+        <div class="charts">
+          <div class="chart-item"><canvas id="taskChart"></canvas></div>
+          <div class="chart-item"><canvas id="progressChart"></canvas></div>
+          <div class="chart-item"><canvas id="gitChart"></canvas></div>
+          <div class="chart-item"><canvas id="statusPieChart"></canvas></div>
+          <!-- Added Pie Chart Canvas -->
+        </div>
+      </section>
 
-        <!-- File Panel -->
-        <section class="panel file-panel">
-             <h2><i class="fas fa-folder-open"></i> Files & Editor</h2>
-             <div class="file-panel-content">
-                <div id="file-structure">
-                    <!-- File structure will be populated by JS -->
-                    <p><em>Loading file structure...</em></p>
-                </div>
-                <div id="editor">
-                    <!-- Monaco Editor will be initialized here -->
-                </div>
-             </div>
-        </section>
+      <!-- File Panel -->
+      <section class="panel file-panel">
+        <h2><i class="fas fa-folder-open"></i> Files & Editor</h2>
+        <div class="file-panel-content">
+          <div id="file-structure">
+            <!-- File structure will be populated by JS -->
+            <p><em>Loading file structure...</em></p>
+          </div>
+          <div id="editor">
+            <!-- Monaco Editor will be initialized here -->
+          </div>
+        </div>
+      </section>
 
-         <!-- Queue Panel -->
-        <section class="panel queue-panel">
-            <h2><i class="fas fa-tasks"></i> Task Queues</h2>
-            <div class="queue-list">
-                 <div>
-                    <h4>Executor Queue (<span id="executor-queue-count">0</span>)</h4>
-                    <ul id="executor-queue" class="queue-item"></ul>
-                 </div>
-                 <div>
-                    <h4>Tester Queue (<span id="tester-queue-count">0</span>)</h4>
-                    <ul id="tester-queue" class="queue-item"></ul>
-                 </div>
-                 <div>
-                    <h4>Documenter Queue (<span id="documenter-queue-count">0</span>)</h4>
-                    <ul id="documenter-queue" class="queue-item"></ul>
-                 </div>
-            </div>
-        </section>
+      <!-- Queue Panel -->
+      <section class="panel queue-panel">
+        <h2><i class="fas fa-tasks"></i> Task Queues</h2>
+        <div class="queue-list">
+          <div>
+            <h4>Executor Queue (<span id="executor-queue-count">0</span>)</h4>
+            <ul id="executor-queue" class="queue-item"></ul>
+          </div>
+          <div>
+            <h4>Tester Queue (<span id="tester-queue-count">0</span>)</h4>
+            <ul id="tester-queue" class="queue-item"></ul>
+          </div>
+          <div>
+            <h4>
+              Documenter Queue (<span id="documenter-queue-count">0</span>)
+            </h4>
+            <ul id="documenter-queue" class="queue-item"></ul>
+          </div>
+        </div>
+      </section>
 
-        <!-- Log Panel -->
-        <section class="panel log-panel">
-             <h2><i class="fas fa-clipboard-list"></i> System Logs</h2>
-             <div id="log-content">
-                 <p><em>Connecting to server...</em></p>
-                 <!-- Log messages will appear here -->
-             </div>
-        </section>
-
-    </div> <!-- End container -->
+      <!-- Log Panel -->
+      <section class="panel log-panel">
+        <h2><i class="fas fa-clipboard-list"></i> System Logs</h2>
+        <div id="log-content">
+          <p><em>Connecting to server...</em></p>
+          <!-- Log messages will appear here -->
+        </div>
+      </section>
+    </div>
+    <!-- End container -->
 
     <script src="/static/script.js"></script>
-</body>
+    <script>
+      // Объект для состояния очередей
+      let queueState = {
+        executor: [],
+        tester: [],
+        documenter: [],
+      };
+
+      // WebSocket соединение
+      let ws;
+
+      // Инициализация при загрузке страницы
+      document.addEventListener("DOMContentLoaded", () => {
+        initWebSocket();
+        setupButtonListeners();
+      });
+
+      // Инициализация WebSocket
+      function initWebSocket() {
+        const wsProtocol =
+          window.location.protocol === "https:" ? "wss:" : "ws:";
+        const wsUrl = `${wsProtocol}//${window.location.host}/ws`;
+        console.log(`Connecting to WebSocket: ${wsUrl}`);
+
+        ws = new WebSocket(wsUrl);
+
+        ws.onopen = () => {
+          console.log("WebSocket connection established");
+          // Запрашиваем полное состояние системы при подключении
+          ws.send(JSON.stringify({ action: "get_full_status" }));
+        };
+
+        ws.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            console.log("WebSocket message received:", data);
+
+            if (
+              data.type === "full_status_update" ||
+              data.type === "specific_update"
+            ) {
+              // Обновляем состояние системы
+              updateUI(data);
+            }
+          } catch (error) {
+            console.error("Error parsing WebSocket message:", error);
+          }
+        };
+
+        ws.onclose = () => {
+          console.log(
+            "WebSocket connection closed. Reconnecting in 5 seconds..."
+          );
+          setTimeout(initWebSocket, 5000);
+        };
+
+        ws.onerror = (error) => {
+          console.error("WebSocket error:", error);
+        };
+      }
+
+      // Настройка обработчиков кнопок
+      function setupButtonListeners() {
+        // AI кнопки
+        document
+          .querySelectorAll('[id^="ai"][id$="-button"]')
+          .forEach((button) => {
+            const aiId = button.id.split("-")[0];
+            button.addEventListener("click", () => toggleAI(aiId));
+          });
+
+        // Кнопка Start All
+        document
+          .getElementById("start-all-button")
+          .addEventListener("click", startAll);
+
+        // Кнопка Stop All
+        document
+          .getElementById("stop-all-button")
+          .addEventListener("click", stopAll);
+
+        // Кнопка Reset & Restart
+        document
+          .querySelector('button[onclick="resetSystem()"]')
+          .addEventListener("click", resetAndRestart);
+
+        // Кнопка Clear Project
+        document
+          .getElementById("clear-project-button")
+          .addEventListener("click", clearProject);
+      }
+
+      // Отправка запроса на сервер
+      async function sendRequest(endpoint, method = "POST", data = null) {
+        try {
+          const options = {
+            method: method,
+            headers: {
+              "Content-Type": "application/json",
+            },
+          };
+
+          if (data) {
+            options.body = JSON.stringify(data);
+          }
+
+          const response = await fetch(endpoint, options);
+          if (!response.ok) {
+            throw new Error(`Server responded with status: ${response.status}`);
+          }
+
+          return await response.json();
+        } catch (error) {
+          console.error(`Error sending request to ${endpoint}:`, error);
+          showNotification(`Error: ${error.message}`, "error");
+          return null;
+        }
+      }
+
+      // Переключение состояния AI
+      async function toggleAI(aiId) {
+        const statusSpan = document.getElementById(`${aiId}-status`);
+        const isOn = statusSpan.textContent === "On";
+        const action = isOn ? "stop" : "start";
+
+        const result = await sendRequest(`/${action}_${aiId}`);
+        if (result) {
+          showNotification(
+            `${aiId.toUpperCase()} ${action} request sent`,
+            "info"
+          );
+        }
+      }
+
+      // Запуск всех AI
+      async function startAll() {
+        const result = await sendRequest("/start_all");
+        if (result) {
+          showNotification("Start All request sent", "info");
+        }
+      }
+
+      // Остановка всех AI
+      async function stopAll() {
+        const result = await sendRequest("/stop_all");
+        if (result) {
+          showNotification("Stop All request sent", "info");
+        }
+      }
+
+      // Сброс и перезапуск (новая функция)
+      async function resetAndRestart() {
+        if (
+          confirm(
+            "Вы уверены, что хотите сбросить и перезапустить систему? Это остановит все процессы, очистит проект и запустит систему заново."
+          )
+        ) {
+          try {
+            showNotification("Останавливаем все процессы...", "info");
+            await sendRequest("/stop_all");
+
+            // Даем системе время на остановку
+            await new Promise((resolve) => setTimeout(resolve, 3000));
+
+            showNotification("Очищаем проект...", "info");
+            const clearResult = await fetch("/clear_project", {
+              method: "POST",
+            });
+
+            if (!clearResult.ok) {
+              throw new Error(`Ошибка очистки: ${clearResult.status}`);
+            }
+
+            // Даем системе время на очистку
+            await new Promise((resolve) => setTimeout(resolve, 2000));
+
+            showNotification("Запускаем систему...", "info");
+            await sendRequest("/start_all");
+
+            showNotification("Система успешно перезапущена!", "success");
+          } catch (error) {
+            console.error("Ошибка при сбросе и перезапуске:", error);
+            showNotification(`Ошибка: ${error.message}`, "error");
+          }
+        }
+      }
+
+      // Очистка проекта (новая функция)
+      async function clearProject() {
+        // Проверяем, что все AI остановлены
+        const allStopped = Object.values(
+          document.querySelectorAll('[id$="-status"]')
+        ).every((span) => span.textContent === "Off");
+
+        if (!allStopped) {
+          showNotification("Сначала остановите все процессы AI", "warning");
+          return;
+        }
+
+        if (
+          confirm(
+            "ВНИМАНИЕ! Это действие полностью удалит все файлы проекта, включая репозиторий, логи и кэш. Продолжить?"
+          )
+        ) {
+          try {
+            const button = document.getElementById("clear-project-button");
+            button.disabled = true;
+            button.textContent = "Очищаем...";
+
+            showNotification("Начинаем очистку проекта...", "info");
+            const response = await fetch("/clear_project", {
+              method: "POST",
+            });
+
+            if (!response.ok) {
+              throw new Error(`Ошибка очистки: ${response.status}`);
+            }
+
+            const result = await response.json();
+            showNotification(`Проект очищен: ${result.message}`, "success");
+
+            // Обновляем интерфейс
+            document.getElementById("log-content").innerHTML =
+              "<p><em>Проект очищен. Система готова к новому старту.</em></p>";
+
+            // Запрашиваем обновление полного состояния
+            if (ws && ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({ action: "get_full_status" }));
+            }
+          } catch (error) {
+            console.error("Ошибка при очистке проекта:", error);
+            showNotification(`Ошибка: ${error.message}`, "error");
+          } finally {
+            const button = document.getElementById("clear-project-button");
+            button.disabled = false;
+            button.textContent = "Очистить проект";
+          }
+        }
+      }
+
+      // Обновление интерфейса на основе полученных данных
+      function updateUI(data) {
+        // Обновляем статусы AI
+        if (data.ai_status) {
+          updateAIStatus(data.ai_status);
+        }
+
+        // Обновляем очереди задач
+        if (data.queues) {
+          updateQueues(data.queues);
+        }
+
+        // Обновляем статусы задач
+        if (data.subtasks) {
+          updateSubtaskStatus(data.subtasks);
+        }
+
+        // Обновляем структуру файлов
+        if (data.structure) {
+          updateFileStructure(data.structure);
+        }
+
+        // Обновляем логи
+        if (data.log_line) {
+          addLogLine(data.log_line);
+        }
+
+        // Обновляем состояние кнопки очистки проекта
+        updateClearProjectButton();
+      }
+
+      // Обновление статусов AI
+      function updateAIStatus(aiStatus) {
+        for (const [aiId, isRunning] of Object.entries(aiStatus)) {
+          const statusElement = document.getElementById(`${aiId}-status`);
+          const buttonElement = document.getElementById(`${aiId}-button`);
+
+          if (statusElement && buttonElement) {
+            statusElement.textContent = isRunning ? "On" : "Off";
+            buttonElement.className = isRunning ? "on" : "off";
+          }
+        }
+
+        // Обновляем состояние кнопки очистки проекта
+        updateClearProjectButton();
+      }
+
+      // Обновление состояния кнопки очистки проекта
+      function updateClearProjectButton() {
+        const clearButton = document.getElementById("clear-project-button");
+        if (!clearButton) return;
+
+        const allStopped = Object.values(
+          document.querySelectorAll('[id$="-status"]')
+        ).every((span) => span.textContent === "Off");
+
+        clearButton.disabled = !allStopped;
+        clearButton.title = allStopped
+          ? "Очистить все данные проекта (репозиторий, логи, кэш)"
+          : "Сначала остановите все процессы AI";
+      }
+
+      // Обновление очередей задач
+      function updateQueues(queues) {
+        // Сохраняем текущее состояние очередей
+        queueState = queues;
+
+        // Обновляем счетчики очередей
+        for (const role of ["executor", "tester", "documenter"]) {
+          const countElement = document.getElementById(`${role}-queue-count`);
+          const queueElement = document.getElementById(`${role}-queue`);
+
+          if (countElement && queueElement) {
+            const queue = queues[role] || [];
+            countElement.textContent = queue.length;
+
+            // Очищаем и обновляем содержимое очереди
+            queueElement.innerHTML = "";
+            queue.forEach((task) => {
+              const li = document.createElement("li");
+              li.className = `task-item status-${task.status || "unknown"}`;
+              li.innerHTML = `
+                            <div class="task-header">
+                                <span class="task-id">${task.id.substring(
+                                  0,
+                                  8
+                                )}</span>
+                                <span class="task-file">${
+                                  task.filename || "No file"
+                                }</span>
+                                <span class="task-status">${
+                                  task.status || "unknown"
+                                }</span>
+                            </div>
+                            <div class="task-content">${task.text}</div>
+                        `;
+              queueElement.appendChild(li);
+            });
+          }
+        }
+      }
+
+      // Обновление статусов задач
+      function updateSubtaskStatus(subtasks) {
+        // Обновляем статистику
+        const totalTasks = Object.keys(subtasks).length;
+        const completedTasks = Object.values(subtasks).filter((status) =>
+          ["accepted", "completed", "code_received", "tested"].includes(status)
+        ).length;
+        const efficiency =
+          totalTasks > 0
+            ? ((completedTasks / totalTasks) * 100).toFixed(1)
+            : "0.0";
+
+        // Обновляем дополнительные статистические данные
+        const pendingTasks = Object.values(subtasks).filter(
+          (status) => status === "pending"
+        ).length;
+        const processingTasks = Object.values(subtasks).filter(
+          (status) => status === "processing"
+        ).length;
+        const failedTasks = Object.values(subtasks).filter((status) =>
+          status.includes("failed")
+        ).length;
+
+        // Обновляем элементы статистики в DOM
+        document.getElementById("total-tasks").textContent = totalTasks;
+        document.getElementById("completed-tasks").textContent = completedTasks;
+        document.getElementById("efficiency").textContent = `${efficiency}%`;
+        document.getElementById("pending-tasks").textContent = pendingTasks;
+        document.getElementById("processing-tasks").textContent =
+          processingTasks;
+        document.getElementById("failed-tasks").textContent = failedTasks;
+
+        // Обновляем статусы задач в очередях
+        for (const [role, queue] of Object.entries(queueState)) {
+          const queueElement = document.getElementById(`${role}-queue`);
+          if (queueElement) {
+            queue.forEach((task) => {
+              const taskElement = Array.from(
+                queueElement.querySelectorAll(".task-item")
+              ).find(
+                (el) =>
+                  el.querySelector(".task-id").textContent ===
+                  task.id.substring(0, 8)
+              );
+
+              if (taskElement) {
+                const statusElement = taskElement.querySelector(".task-status");
+                if (statusElement && subtasks[task.id]) {
+                  statusElement.textContent = subtasks[task.id];
+                  taskElement.className = `task-item status-${
+                    subtasks[task.id]
+                  }`;
+                }
+              }
+            });
+          }
+        }
+      }
+
+      // Обновление структуры файлов
+      function updateFileStructure(structure) {
+        const structureElement = document.getElementById("file-structure");
+        if (!structureElement) return;
+
+        structureElement.innerHTML = "";
+
+        if (!structure || Object.keys(structure).length === 0) {
+          structureElement.innerHTML =
+            "<p><em>Нет доступной структуры файлов</em></p>";
+          return;
+        }
+
+        function renderStructure(node, parentElement, path = "") {
+          if (!node || typeof node !== "object") return;
+
+          const ul = document.createElement("ul");
+          ul.className = "file-tree";
+          parentElement.appendChild(ul);
+
+          for (const [key, value] of Object.entries(node)) {
+            const li = document.createElement("li");
+            const currentPath = path ? `${path}/${key}` : key;
+
+            if (value && typeof value === "object") {
+              // Это директория
+              li.innerHTML = `<span class="folder"><i class="fas fa-folder"></i> ${key}</span>`;
+              li.className = "folder-item";
+              ul.appendChild(li);
+              renderStructure(value, li, currentPath);
+            } else {
+              // Это файл
+              li.innerHTML = `<span class="file" data-path="${currentPath}"><i class="fas fa-file-code"></i> ${key}</span>`;
+              li.className = "file-item";
+              ul.appendChild(li);
+
+              // Добавляем обработчик клика для открытия файла
+              li.querySelector(".file").addEventListener("click", () => {
+                loadFileContent(currentPath);
+              });
+            }
+          }
+        }
+
+        renderStructure(structure, structureElement);
+
+        // Добавляем обработчики для разворачивания/сворачивания директорий
+        structureElement.querySelectorAll(".folder").forEach((folder) => {
+          folder.addEventListener("click", (event) => {
+            event.target.closest(".folder-item").classList.toggle("expanded");
+          });
+        });
+      }
+
+      // Загрузка содержимого файла
+      async function loadFileContent(path) {
+        try {
+          const response = await fetch(
+            `/file_content?path=${encodeURIComponent(path)}`
+          );
+          if (!response.ok) {
+            throw new Error(`Failed to load file: ${response.status}`);
+          }
+
+          const content = await response.text();
+          // Здесь должен быть код для отображения содержимого файла в редакторе
+          console.log(`Loaded file: ${path}`);
+          showNotification(`Файл ${path} загружен`, "info");
+        } catch (error) {
+          console.error("Error loading file:", error);
+          showNotification(`Ошибка загрузки файла: ${error.message}`, "error");
+        }
+      }
+
+      // Добавление строки лога
+      function addLogLine(line) {
+        const logContent = document.getElementById("log-content");
+        if (!logContent) return;
+
+        const logLine = document.createElement("p");
+        logLine.textContent = line;
+        logContent.appendChild(logLine);
+
+        // Прокручиваем к последней строке
+        logContent.scrollTop = logContent.scrollHeight;
+      }
+
+      // Показ уведомления
+      function showNotification(message, type = "info") {
+        // Здесь может быть ваш код для отображения уведомлений
+        console.log(`[${type.toUpperCase()}] ${message}`);
+
+        // Простая реализация уведомлений
+        const notification = document.createElement("div");
+        notification.className = `notification ${type}`;
+        notification.textContent = message;
+
+        document.body.appendChild(notification);
+
+        setTimeout(() => {
+          notification.classList.add("show");
+
+          setTimeout(() => {
+            notification.classList.remove("show");
+            setTimeout(() => notification.remove(), 300);
+          }, 3000);
+        }, 10);
+      }
+
+      // Сохранение настроек
+      async function saveConfig() {
+        const config = {
+          target: document.getElementById("target").value,
+          ai1_prompt: document.getElementById("ai1-prompt").value,
+          ai2_prompts: [
+            document.getElementById("ai2-0-prompt").value,
+            document.getElementById("ai2-1-prompt").value,
+            document.getElementById("ai2-2-prompt").value,
+          ],
+          ai3_prompt: document.getElementById("ai3-prompt").value,
+        };
+
+        const result = await sendRequest("/update_config", "POST", config);
+        if (result) {
+          showNotification("Настройки сохранены", "success");
+        }
+      }
+    </script>
+  </body>
 </html>

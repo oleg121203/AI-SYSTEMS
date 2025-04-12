@@ -11,6 +11,8 @@ let queueLists = {};
 let queueCounts = {};
 let statElements = {};
 let subtask_status = {};
+let clearProjectBtn; // Додано посилання на кнопку очищення проекту
+let allAIsOff = true; // Флаг для відстеження стану AI
 
 // Налаштування Monaco Editor
 require.config({
@@ -144,7 +146,10 @@ function connectWebSocket() {
 // Оновлення повного UI
 function updateFullUI(data) {
   console.log("Updating full UI with data:", data);
-  if (data.ai_status) updateAllButtonStates(data.ai_status);
+  if (data.ai_status) {
+    updateAllButtonStates(data.ai_status);
+    checkAllAIsStatus(data.ai_status); // Перевірка стану всіх AI
+  }
   if (data.queues) updateQueues(data.queues);
   if (data.subtasks) {
     Object.assign(subtask_status, data.subtasks);
@@ -681,6 +686,10 @@ function getMonacoLanguage(fileExt) {
 
 function updateAllButtonStates(aiStatusData) {
   console.log("Updating button states:", aiStatusData);
+
+  // Перевірка: всі AI вимкнені?
+  let allOff = true;
+
   for (const [aiId, isRunning] of Object.entries(aiStatusData)) {
     const button = aiButtons[aiId];
     const statusSpan = document.getElementById(`${aiId}-status`);
@@ -688,68 +697,44 @@ function updateAllButtonStates(aiStatusData) {
       statusSpan.textContent = isRunning ? "On" : "Off";
       button.classList.toggle("on", isRunning);
       button.classList.toggle("off", !isRunning);
+
+      if (isRunning) {
+        allOff = false;
+      }
     } else {
       console.warn(`Button or status span not found for AI: ${aiId}`);
     }
   }
-}
 
-function getEditorTheme(appTheme) {
-  return ["dark", "winter", "autumn"].includes(appTheme)
-    ? "vs-dark"
-    : "vs-light";
-}
-
-function setTheme(theme) {
-  document.documentElement.setAttribute("data-theme", theme);
-  document.body.setAttribute("data-theme", theme);
-  localStorage.setItem("theme", theme);
-  if (editor) monaco.editor.setTheme(getEditorTheme(theme));
-  const chartColor = getChartFontColor();
-  [taskChart, progressChart, gitChart, statusPieChart].forEach((chart) => {
-    if (chart) {
-      chart.options.scales.y.ticks.color = chartColor;
-      chart.options.scales.x.ticks.color = chartColor;
-      chart.options.plugins.legend.labels.color = chartColor;
-      chart.options.plugins.title &&
-        (chart.options.plugins.title.color = chartColor);
-      chart.update();
+  // Оновлюємо стан кнопки очищення проекту
+  if (clearProjectBtn) {
+    clearProjectBtn.disabled = !allOff;
+    if (!allOff) {
+      clearProjectBtn.title = "Зупиніть всі процеси AI перед очищенням проекту";
+    } else {
+      clearProjectBtn.title =
+        "Очистити всі дані проекту (репозиторій, логи, кеш)";
     }
-  });
-  console.log(`Theme set to: ${theme}`);
+  }
+
+  allAIsOff = allOff;
 }
 
-function showNotification(message, type = "info") {
-  const notification = document.createElement("div");
-  notification.className = `notification ${type}`;
-  notification.textContent = message;
-  document.body.appendChild(notification);
-  setTimeout(() => {
-    notification.style.opacity = "0";
-    setTimeout(() => notification.remove(), 500);
-  }, 5000);
-}
+// Перевірка стану всіх AI (додаткова функція)
+function checkAllAIsStatus(aiStatusData) {
+  let allOff = true;
+  for (const [_, isRunning] of Object.entries(aiStatusData)) {
+    if (isRunning) {
+      allOff = false;
+      break;
+    }
+  }
 
-async function sendRequest(endpoint, method = "POST", body = null) {
-  try {
-    const options = { method };
-    if (body) {
-      options.headers = { "Content-Type": "application/json" };
-      options.body = JSON.stringify(body);
-    }
-    const response = await fetch(endpoint, options);
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`Network error: ${response.status} - ${errorText}`);
-    }
-    const contentType = response.headers.get("content-type");
-    return contentType && contentType.includes("application/json")
-      ? await response.json()
-      : {};
-  } catch (error) {
-    console.error(`Request failed for ${endpoint}:`, error);
-    showNotification(`Error: ${error.message}`, "error");
-    throw error;
+  allAIsOff = allOff;
+
+  // Оновлюємо стан кнопки на основі флагу
+  if (clearProjectBtn) {
+    clearProjectBtn.disabled = !allAIsOff;
   }
 }
 
@@ -811,6 +796,96 @@ async function saveConfig() {
   showNotification("Configuration saved", "success");
 }
 
+// Функція очищення проекту (нова)
+async function clearProject() {
+  if (!allAIsOff) {
+    showNotification("Спочатку зупиніть всі процеси AI", "warning");
+    return;
+  }
+
+  if (
+    confirm(
+      "Це повністю видалить ВСІ дані проекту, включаючи репозиторій, комміти, логи та кеш. Продовжити?"
+    )
+  ) {
+    try {
+      clearProjectBtn.disabled = true;
+      clearProjectBtn.textContent = "Очищення...";
+
+      showNotification("Початок очищення проекту...", "info");
+      const response = await fetch("/clear_project", {
+        method: "POST",
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(
+          `Помилка очищення проекту: ${response.status} - ${errorText}`
+        );
+      }
+
+      const result = await response.json();
+      showNotification(`Проект очищено: ${result.message}`, "success");
+
+      // Очищаємо локальні дані інтерфейсу
+      if (logContent)
+        logContent.innerHTML =
+          "<p><em>Проект очищено. Система готова до нового старту.</em></p>";
+      updateQueues({ executor: [], tester: [], documenter: [] });
+      updateStatsFromSubtasks({});
+
+      // Оновлюємо структуру файлів (якщо вона порожня)
+      updateFileStructure({});
+
+      console.log("Очищення проекту завершено");
+    } catch (error) {
+      console.error("Помилка очищення проекту:", error);
+      showNotification(`Помилка: ${error.message}`, "error");
+    } finally {
+      clearProjectBtn.disabled = false;
+      clearProjectBtn.textContent = "Очистити проект";
+    }
+  }
+}
+
+// Функція сбросу і перезапуску (оновлена)
+async function resetAndRestart() {
+  if (
+    confirm("Відбудеться зупинка системи, очищення та перезапуск. Продовжити?")
+  ) {
+    try {
+      // Спочатку зупиняємо всі AI
+      showNotification("Зупинка всіх AI...", "info");
+      await sendRequest("/stop_all");
+
+      // Чекаємо трохи, щоб переконатися, що все зупинилося
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+
+      // Очищаємо проект
+      showNotification("Очищення проекту...", "info");
+      const clearResponse = await fetch("/clear_project", {
+        method: "POST",
+      });
+
+      if (!clearResponse.ok) {
+        throw new Error(`Помилка очищення: ${clearResponse.status}`);
+      }
+
+      // Чекаємо трохи після очищення
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+
+      // Запускаємо все заново
+      showNotification("Перезапуск системи...", "info");
+      await sendRequest("/start_all");
+
+      showNotification("Система успішно перезапущена", "success");
+    } catch (error) {
+      console.error("Помилка при виконанні сбросу і перезапуску:", error);
+      showNotification(`Помилка: ${error.message}`, "error");
+    }
+  }
+}
+
 // Ініціалізація
 document.addEventListener("DOMContentLoaded", () => {
   console.log("DOM fully loaded");
@@ -841,10 +916,20 @@ document.addEventListener("DOMContentLoaded", () => {
     // End: Add new stat elements
   };
 
+  // Ініціалізуємо посилання на кнопку очищення проекту
+  clearProjectBtn = document.getElementById("clear-project-button");
+
   const savedTheme = localStorage.getItem("theme") || "dark";
   setTheme(savedTheme);
   connectWebSocket();
   updateQueues({ executor: [], tester: [], documenter: [] });
   updateStatsFromSubtasks({});
   console.log("Initialization complete");
+
+  // Додаємо обробник для періодичного оновлення даних
+  setInterval(() => {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ action: "refresh_data" }));
+    }
+  }, 10000); // Оновлювати дані кожні 10 секунд
 });

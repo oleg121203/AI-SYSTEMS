@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 import time
+from collections import deque
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -282,7 +283,7 @@ async def get_ai3_api_session() -> aiohttp.ClientSession:
 async def close_ai3_api_session():
     """Closes the shared aiohttp session if it exists."""
     global ai3_api_session
-    if ai3_api_session and not ai3_api_session.closed:
+    if ai3_api_session is not None and not ai3_api_session.closed:
         await ai3_api_session.close()
         ai3_api_session = None
         log_message("[AI3] Closed aiohttp ClientSession.")
@@ -733,14 +734,30 @@ async def monitor_github_actions():
     Функция мониторинга результатов GitHub Actions.
     Отслеживает результаты запуска тестов и предоставляет рекомендации AI1.
     """
+    # Загружаем переменные окружения из .env файла
+    from dotenv import load_dotenv
+
+    load_dotenv()
+
     log_message("[AI3-GitHub] Начат мониторинг результатов GitHub Actions")
     check_interval = config.get(
         "github_check_interval", 30
     )  # Интервал проверки в секундах
 
     github_api_token = config.get("github_token", os.environ.get("GITHUB_TOKEN"))
+    if not github_api_token:
+        log_message(
+            "[AI3-GitHub] Токен GitHub API не найден в конфигурации, пробуем получить из переменных окружения"
+        )
+        github_api_token = os.environ.get("GITHUB_TOKEN")
+
     repo_owner = config.get("github_repo_owner", "owner")
     repo_name = config.get("github_repo_name", "AI-SYSTEMS")
+
+    log_message(f"[AI3-GitHub] Используем репозиторий: {repo_owner}/{repo_name}")
+    log_message(
+        f"[AI3-GitHub] Токен GitHub {'найден' if github_api_token else 'НЕ найден'}"
+    )
 
     # URL для API GitHub Actions
     github_api_url = (
