@@ -56,6 +56,9 @@ async def simple_api_test():
             "Accept": "application/vnd.github.v3+json",
         }
 
+        # Примерно будет выглядеть так:
+        headers = {"Authorization": f"token {os.environ.get('GITHUB_TOKEN')}"}
+
         async with aiohttp.ClientSession() as session:
             url = "https://api.github.com/user"
             print(f"Выполняем запрос к {url}")

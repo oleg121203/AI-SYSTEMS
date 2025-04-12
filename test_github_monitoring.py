@@ -182,7 +182,7 @@ async def test_monitor_github_actions_startup():
                 # Настраиваем моки
                 mock_config.side_effect = lambda key, default=None: {
                     "github_check_interval": 0.1,
-                    "github_token": "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",
+                    "github_token": os.environ.get("GITHUB_TOKEN"),
                     "github_repo_owner": "oleg121203",
                     "github_repo_name": "AI-SYSTEMS-REPO",
                 }.get(key, default)
