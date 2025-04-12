@@ -7,8 +7,6 @@ import asyncio
 import os
 from datetime import datetime
 
-import os
-token = os.environ.get("GITHUB_TOKEN")
 
 async def test_github_token():
     """Проверяет доступность токена GitHub и выводит информацию о нем."""
@@ -52,12 +50,9 @@ async def simple_api_test():
 
     try:
         headers = {
-            "Authorization": f"token {token}",
+            "Authorization": f"token {os.environ.get('GITHUB_TOKEN')}",
             "Accept": "application/vnd.github.v3+json",
         }
-
-        # Примерно будет выглядеть так:
-        headers = {"Authorization": f"token {os.environ.get('GITHUB_TOKEN')}"}
 
         async with aiohttp.ClientSession() as session:
             url = "https://api.github.com/user"
@@ -91,10 +86,11 @@ async def main():
 
 
 if __name__ == "__main__":
-    # Явно устанавливаем токен для тестов
     if "GITHUB_TOKEN" not in os.environ:
-        os.environ["GITHUB_TOKEN"] = (
-            "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"
+        print(
+            "[ОШИБКА] Переменная окружения GITHUB_TOKEN не найдена. Установите её перед запуском."
         )
+        print("Пример: export GITHUB_TOKEN=your_token_here")
+        exit(1)
 
     asyncio.run(main())
