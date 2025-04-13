@@ -34,7 +34,7 @@
     },
     "ai2": {
       "executor": "gemini-pro2.5_2",
-      "tester": "ollama",
+      "tester": "groq",
       "documenter": "groq",
       "fallback_provider": "openrouter-qwen",
       "max_tokens": 4096,
@@ -42,7 +42,7 @@
     },
     "ai3": {
       "provider": "ollama",
-      "model": "qwen2.5-coder:latest",
+      "model": "qwen2.5-coder:1.5b",
       "max_tokens": 2048,
       "temperature": 0.7
     }
@@ -51,7 +51,7 @@
     "ollama": {
       "type": "ollama",
       "endpoint": "http://localhost:11434",
-      "model": "qwen2.5-coder:latest"
+      "model": "qwen2.5-coder:1.5b"
     },
     "ollama1": {
       "type": "ollama",

@@ -197,7 +197,20 @@ function handleFullStatusUpdate(data) {
     Object.assign(subtask_status, data.subtasks);
     updateStatsFromSubtasks(subtask_status);
   }
-  if (data.structure) updateFileStructure(data.structure);
+
+  // Додаткове логування для відстеження структури файлів
+  if (data.structure) {
+    console.log(
+      "Full status update contains structure data:",
+      Object.keys(data.structure).length ? "Yes" : "No (empty object)",
+      "Keys:",
+      Object.keys(data.structure)
+    );
+    updateFileStructure(data.structure);
+  } else {
+    console.warn("Full status update does not contain structure data");
+  }
+
   updateCharts(data);
 }
 
@@ -638,7 +651,8 @@ function getChartFontColor() {
 
 // Функції для структури файлів
 function updateFileStructure(structureData) {
-  console.log("Received structure data:", structureData); // Додано логування для діагностики
+  console.log("Received structure data:", structureData);
+
   const fileStructureDiv = document.getElementById("file-structure");
   if (!fileStructureDiv) {
     console.error("File structure div (#file-structure) not found in DOM!");
@@ -647,16 +661,31 @@ function updateFileStructure(structureData) {
 
   fileStructureDiv.innerHTML = "";
 
-  if (
-    !structureData ||
-    typeof structureData !== "object" ||
-    Object.keys(structureData).length === 0
-  ) {
+  if (!structureData || typeof structureData !== "object") {
+    console.error("Invalid structure data type:", typeof structureData);
     fileStructureDiv.innerHTML =
       "<p><em>No project structure available or data is invalid</em></p>";
     return;
   }
 
+  // Перевірка, чи є структура вкладеною - можливо, дані приходять як { structure: { ... } }
+  if (structureData.structure && typeof structureData.structure === "object") {
+    console.log("Found nested structure property, using it instead");
+    structureData = structureData.structure;
+  }
+
+  if (Object.keys(structureData).length === 0) {
+    console.warn("Structure data is an empty object");
+    fileStructureDiv.innerHTML =
+      "<p><em>No project structure available (empty object)</em></p>";
+    return;
+  }
+
+  console.log(
+    "Creating root UL for file structure with",
+    Object.keys(structureData).length,
+    "top-level items"
+  );
   const rootUl = document.createElement("ul");
   fileStructureDiv.appendChild(rootUl);
 
@@ -669,7 +698,12 @@ function updateFileStructure(structureData) {
 }
 
 function renderNode(node, parentUl, currentPath = "") {
-  if (!node || typeof node !== "object") return;
+  console.log("Rendering node:", node, "Path:", currentPath);
+
+  if (!node || typeof node !== "object") {
+    console.warn("Invalid node to render:", node);
+    return;
+  }
 
   const entries = Object.entries(node).sort(
     ([keyA, valueA], [keyB, valueB]) => {
@@ -680,6 +714,8 @@ function renderNode(node, parentUl, currentPath = "") {
       return keyA.localeCompare(keyB);
     }
   );
+
+  console.log("Sorted entries to render:", entries.length);
 
   for (const [key, value] of entries) {
     const li = document.createElement("li");

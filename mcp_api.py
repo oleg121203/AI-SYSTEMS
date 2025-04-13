@@ -985,8 +985,7 @@ def get_pending_files_for_role(role: str) -> List[str]:
     pending_files = []
     try:
         if role == "executor":
-            # Логика поиска файлов для исполнителя
-            # Пример: файлы из структуры, по которым еще нет задач
+            # Логика пошуку файлів для виконавця
             for file_path in structure_files:
                 if file_path not in [
                     task["filename"]
@@ -995,10 +994,10 @@ def get_pending_files_for_role(role: str) -> List[str]:
                 ]:
                     pending_files.append(file_path)
         elif role == "tester":
-            # Логика поиска файлов для тестировщика
+            # Логика пошуку файлів для тестувальника
             pending_files = get_completed_files_without_tests()
         elif role == "documenter":
-            # Логика поиска файлов для документатора
+            # Логика пошуку файлів для документатора
             pending_files = get_completed_files_without_docs()
 
         logger.debug(
@@ -1204,7 +1203,7 @@ async def notify_ai1_about_error(error_details: Dict[str, Any]):
 # Добавим функцию для обновления списка файлов из структуры
 def update_structure_files():
     """
-    Обновляет список файлов на основе текущей структуры проекта.
+    Оновлює список файлів на основі поточної структури проекту.
     """
     global structure_files
     structure_files = []
@@ -1214,12 +1213,18 @@ def update_structure_files():
             for key, value in struct.items():
                 path = f"{prefix}/{key}" if prefix else key
                 if isinstance(value, dict):
+                    # Рекурсивний виклик для обробки вкладених каталогів
                     extract_files(value, path)
-                elif value is None:  # Это файл
+                else:  # Це файл (значення може бути None або "")
                     structure_files.append(path)
 
-    extract_files(current_structure)
-    logger.info(f"Updated structure files list: {len(structure_files)} files found")
+    # Перевіряємо, що структура містить дані
+    if current_structure and isinstance(current_structure, dict):
+        extract_files(current_structure)
+        logger.info(f"Оновлено список файлів: знайдено {len(structure_files)} файлів")
+    else:
+        logger.warning("Структура проекту порожня або недійсна")
+
     return structure_files
 
 
@@ -1544,7 +1549,7 @@ async def clear_project():
             log_message("[API] Зупинка AI2-documenter перед очищенням")
             terminate_process(ai2_documenter_process)
 
-        if "ai3_process" in globals() and ai3_process and ai3_process.poll() is None:
+        if "ai3_process" in globals() in ai3_process and ai3_process.poll() is None:
             log_message("[API] Зупинка AI3 перед очищенням")
             terminate_process(ai3_process)
 
