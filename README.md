@@ -1,198 +1,198 @@
 # AI-SYSTEMS
 
-## Суть програми AI-SYSTEMS
+## The Essence of AI-SYSTEMS
 
-AI-SYSTEMS — це комплексна система, розроблена для автоматизації процесу розробки програмного забезпечення за допомогою взаємодії кількох спеціалізованих AI-агентів. Основна мета — взяти на вхід опис цілі проекту (target) і згенерувати відповідну структуру проекту, написати код, створити тести, написати документацію та забезпечити ітеративне покращення коду на основі результатів тестування.
+AI-SYSTEMS is a comprehensive system designed to automate the software development process through the interaction of several specialized AI agents. The main goal is to take a project target description as input and generate an appropriate project structure, write code, create tests, write documentation, and provide iterative code improvements based on test results.
 
-## Архітектура системи
+## System Architecture
 
-Система складається з наступних основних компонентів:
+The system consists of the following main components:
 
-- **AI1 (Координатор)**: Планує та координує задачі, приймає рішення на основі результатів тестування.
-- **AI2 (Виконавці)**: Генерують код (executor), тести (tester) та документацію (documenter).
-- **AI3 (Дозор/Менеджер структури)**: Створює структуру проекту, моніторить систему, надає консультації.
-- **MCP API**: Центральне API для взаємодії між компонентами, керує чергами завдань.
-- **Веб-інтерфейс**: Візуалізація процесу розробки та управління системою.
-- **GitHub Actions**: Автоматизоване тестування коду.
+- **AI1 (Coordinator)**: Plans and coordinates tasks, makes decisions based on test results.
+- **AI2 (Executors)**: Generate code (executor), tests (tester), and documentation (documenter).
+- **AI3 (Overseer/Structure Manager)**: Creates project structure, monitors the system, provides consultations.
+- **MCP API**: Central API for component interaction, manages task queues.
+- **Web Interface**: Visualization of the development process and system management.
+- **GitHub Actions**: Automated code testing.
 
-## Структура репозиторіїв
+## Repository Structure
 
-Система використовує два репозиторії:
+The system uses two repositories:
 
-1. **Основний репозиторій (AI-SYSTEMS)**: 
-   - Містить код самої системи (AI-агенти, API, веб-інтерфейс)
+1. **Main Repository (AI-SYSTEMS)**: 
+   - Contains the system code (AI agents, API, web interface)
    - URL: `https://github.com/oleg121203/AI-SYSTEMS.git`
 
-2. **Репозиторій проекту (repo/)**: 
-   - Вкладений репозиторій, де зберігається згенерований проект
-   - AI3 автоматично створює файли та робить коміти
+2. **Project Repository (repo/)**: 
+   - Nested repository where the generated project is stored
+   - AI3 automatically creates files and commits changes
    - URL: `https://github.com/oleg121203/AI-SYSTEMS-REPO.git`
 
-## Алгоритм роботи системи
+## System Operation Algorithm
 
-1. **Ініціалізація (AI3):**
-   * AI3 отримує ціль проекту (`target`) з конфігурації.
-   * Генерує початкову JSON-структуру файлів та директорій проекту за допомогою LLM.
-   * Створює ці файли та директорії у локальному репозиторії (repo).
-   * Відправляє згенеровану структуру в MCP API.
-   * Запускає фонові процеси моніторингу:
-     * Простаюючих AI2-воркерів (executor, tester, documenter).
-     * Помилок у лог-файлах системи.
-     * Результатів тестів із GitHub Actions.
+1. **Initialization (AI3):**
+   * AI3 receives the project goal (`target`) from the configuration.
+   * Generates the initial JSON structure of project files and directories using LLM.
+   * Creates these files and directories in the local repository (repo).
+   * Sends the generated structure to the MCP API.
+   * Launches background monitoring processes:
+     * Idle AI2 workers (executor, tester, documenter).
+     * Errors in system log files.
+     * Test results from GitHub Actions.
 
-2. **Планування та координація (AI1):**
-   * AI1 отримує структуру проекту від MCP API.
-   * Будує високорівневу структуру основних завдань (наприклад, за компонентами: Backend, Frontend тощо).
-   * **Консультується з AI3:** Відправляє структуру основних завдань AI3 для аналізу та отримання рекомендацій щодо покращення.
-   * Розбиває кожну основну задачу на мікрозадачі (зазвичай пофайлово: реалізація, тестування, документування).
-   * **Консультується з AI3:** Відправляє згенеровані мікрозадачі AI3 для аналізу та отримання рекомендацій.
-   * Ініціалізує статуси для всіх мікрозадач.
+2. **Planning and Coordination (AI1):**
+   * AI1 receives the project structure from the MCP API.
+   * Builds a high-level structure of main tasks (e.g., by components: Backend, Frontend, etc.).
+   * **Consults with AI3:** Sends the main task structure to AI3 for analysis and recommendations for improvement.
+   * Breaks down each main task into microtasks (usually file by file: implementation, testing, documentation).
+   * **Consults with AI3:** Sends the generated microtasks to AI3 for analysis and recommendations.
+   * Initializes statuses for all microtasks.
 
-3. **Розподіл та виконання завдань (AI1 -> MCP API -> AI2):**
-   * AI1 починає керувати завданнями (`manage_tasks`):
-     * Визначає, які завдання готові до виконання (наприклад, "executor" для нового файлу, "tester" після завершення "executor").
-     * Створює конкретні підзадачі (з промптами, ID, роллю, іменем файлу, іноді з кодом) та відправляє їх у MCP API.
-   * MCP API розміщує підзадачі у відповідні черги (executor, tester, documenter).
-   * AI2-воркери (запущені окремо для кожної ролі) періодично запитують завдання зі своєї черги у MCP API (`/task/{role}`).
-   * Отримавши завдання, AI2-воркер використовує відповідний LLM-провайдер для генерації контенту (коду, тестів, документації).
-   * AI2 відправляє звіт (`/report`) з результатом (згенерований контент або статус помилки) назад у MCP API.
+3. **Task Distribution and Execution (AI1 -> MCP API -> AI2):**
+   * AI1 starts managing tasks (`manage_tasks`):
+     * Determines which tasks are ready for execution (e.g., "executor" for a new file, "tester" after "executor" completion).
+     * Creates specific subtasks (with prompts, ID, role, filename, sometimes with code) and sends them to the MCP API.
+   * MCP API places subtasks in the appropriate queues (executor, tester, documenter).
+   * AI2 workers (launched separately for each role) periodically request tasks from their queue in the MCP API (`/task/{role}`).
+   * Upon receiving a task, the AI2 worker uses the appropriate LLM provider to generate content (code, tests, documentation).
+   * AI2 sends a report (`/report`) with the result (generated content or error status) back to the MCP API.
 
-4. **Обробка звітів та оновлення статусу (MCP API):**
-   * MCP API отримує звіти від AI2.
-   * Якщо звіт містить код (`type: code`), він записується у відповідний файл у репозиторії (repo) та комітиться за допомогою Git.
-   * Статус відповідної підзадачі оновлюється (наприклад, `code_received`, `tested`).
-   * **Автоматичне створення наступних завдань:** MCP API автоматично створює завдання для тестувальника та документатора після отримання коду від executor. Така послідовність дозволяє паралельно працювати всім AI2-воркерам, підвищуючи загальну ефективність системи.
-   * Оновлення статусу транслюється через WebSocket на веб-панель.
+4. **Report Processing and Status Updates (MCP API):**
+   * MCP API receives reports from AI2.
+   * If the report contains code (`type: code`), it is written to the corresponding file in the repository (repo) and committed using Git.
+   * The status of the corresponding subtask is updated (e.g., `code_received`, `tested`).
+   * **Automatic Creation of Next Tasks:** MCP API automatically creates tasks for the tester and documenter after receiving code from the executor. This sequence allows all AI2 workers to work in parallel, increasing the overall efficiency of the system.
+   * Status updates are broadcast via WebSocket to the web panel.
 
-5. **Тестування (GitHub Actions -> AI3 -> MCP API -> AI1):**
-   * Коміти, зроблені MCP API (після отримання коду від AI2-executor або тестів від AI2-tester), тригерять GitHub Actions workflow (`.github/workflows/ci.yml`).
-   * GitHub Actions запускає `pytest` для змінених тестових файлів (або всіх тестів).
-   * AI3 моніторить завершені запуски GitHub Actions (`monitor_github_actions`).
-   * AI3 аналізує результат (успіх/невдача), визначає пов'язані файли та формує рекомендацію (`accept`/`rework`).
-   * AI3 відправляє рекомендацію в MCP API (`/test_recommendation`).
-   * MCP API оновлює статус тестових завдань та пересилає рекомендацію AI1.
+5. **Testing (GitHub Actions -> AI3 -> MCP API -> AI1):**
+   * Commits made by MCP API (after receiving code from AI2-executor or tests from AI2-tester) trigger GitHub Actions workflow (`.github/workflows/ci.yml`).
+   * GitHub Actions runs `pytest` for modified test files (or all tests).
+   * AI3 monitors completed GitHub Actions runs (`monitor_github_actions`).
+   * AI3 analyzes the result (success/failure), identifies related files, and forms a recommendation (`accept`/`rework`).
+   * AI3 sends the recommendation to the MCP API (`/test_recommendation`).
+   * MCP API updates the status of test tasks and forwards the recommendation to AI1.
 
-6. **Прийняття рішень та доопрацювання (AI1):**
-   * AI1 отримує результати тестів та рекомендацію AI3 (`handle_test_result`).
-   * AI1 приймає остаточне рішення (`decide_on_test_results`): прийняти код (`accept`) чи відправити на доопрацювання (`rework`).
-   * Якщо `accept`, статус відповідних завдань оновлюється на `accepted`.
-   * Якщо `rework`, статус оновлюється на `needs_rework`, і AI1 створює нову підзадачу для AI2-executor з описом необхідних виправлень (на основі коментарів AI3 або логів помилок). Ця нова задача знову проходить через цикл виконання та тестування.
-   * AI1 періодично перевіряє, чи всі завдання досягли фінального статусу (`accepted` або `skipped`).
+6. **Decision Making and Refinement (AI1):**
+   * AI1 receives test results and AI3's recommendation (`handle_test_result`).
+   * AI1 makes the final decision (`decide_on_test_results`): accept the code (`accept`) or send it for refinement (`rework`).
+   * If `accept`, the status of the corresponding tasks is updated to `accepted`.
+   * If `rework`, the status is updated to `needs_rework`, and AI1 creates a new subtask for AI2-executor with a description of the required fixes (based on AI3's comments or error logs). This new task again goes through the execution and testing cycle.
+   * AI1 periodically checks if all tasks have reached a final status (`accepted` or `skipped`).
 
-7. **Моніторинг "Дозором" (AI3):**
-   * Паралельно з усім процесом AI3:
-     * Перевіряє стан всіх воркерів через ендпоінт `/worker_status` в MCP API. Якщо воркер простоює (відповідна черга пуста), запитує у MCP API нову задачу для нього (`/request_task_for_idle_worker`).
-     * Якщо API для перевірки статусу недоступний, використовує резервний метод аналізу лог-файлів, шукаючи повідомлення про порожню чергу.
-     * Збирає та аналізує статистику моніторингу (кількість виявлених простоїв, запитів на нові завдання, успішних запитів).
-     * Якщо знаходить помилки в логах, запитує у MCP API задачу на їх виправлення (`/request_error_fix`).
-     * Моніторить результати тестів (як описано в п.5).
+7. **Monitoring by the "Overseer" (AI3):**
+   * In parallel with the entire process, AI3:
+     * Checks the status of all workers through the `/worker_status` endpoint in the MCP API. If a worker is idle (corresponding queue is empty), it requests a new task for it from the MCP API (`/request_task_for_idle_worker`).
+     * If the API for status checking is unavailable, it uses a backup method of analyzing log files, looking for messages about an empty queue.
+     * Collects and analyzes monitoring statistics (number of detected idle periods, requests for new tasks, successful requests).
+     * If it finds errors in the logs, it requests a task to fix them from the MCP API (`/request_error_fix`).
+     * Monitors test results (as described in point 5).
 
-8. **Візуалізація (Dashboard):**
-   * Веб-інтерфейс (`templates/index.html`, script.js, style.css) підключається до MCP API через WebSocket.
-   * Відображає статуси AI-агентів, стан черг завдань, структуру файлів, логи, статистику та графіки прогресу в реальному часі.
-   * Дозволяє користувачу керувати системою (старт/стоп агентів, скидання, редагування промптів).
+8. **Visualization (Dashboard):**
+   * The web interface (`templates/index.html`, script.js, style.css) connects to the MCP API via WebSocket.
+   * Displays AI agent statuses, task queue states, file structure, logs, statistics, and progress charts in real-time.
+   * Allows the user to control the system (start/stop agents, reset, edit prompts).
 
-## Розширені функції системи
+## Advanced System Features
 
-### Управління середовищем розробки
-* **Dev Container**: Система працює у контейнеризованому середовищі з усіма необхідними інструментами (Git, Docker, Python, Node.js, Go, Rust)
-* **Автоматична настройка**: Скрипти для автоматичного налаштування середовища розробки
+### Development Environment Management
+* **Dev Container**: The system runs in a containerized environment with all the necessary tools (Git, Docker, Python, Node.js, Go, Rust)
+* **Automatic Setup**: Scripts for automatic setup of the development environment
 
-### Робота з LLM-провайдерами
-* **Підтримка кількох LLM**: Можливість налаштування різних LLM для різних типів задач (код, тести, документація)
-* **Ротація API-ключів**: Автоматичне перемикання між кількома API-ключами для уникнення лімітів
-* **Кешування запитів**: Зменшення кількості запитів до LLM через збереження попередніх результатів
+### Working with LLM Providers
+* **Support for Multiple LLMs**: Ability to configure different LLMs for different types of tasks (code, tests, documentation)
+* **API Key Rotation**: Automatic switching between multiple API keys to avoid limits
+* **Request Caching**: Reducing the number of requests to LLM by storing previous results
 
-### Підтримка мультимовності
-* **Багатомовні проекти**: Підтримка генерації проектів на різних мовах програмування
-* **Локалізація веб-інтерфейсу**: Можливість вибору мови інтерфейсу
+### Multilingual Support
+* **Multilingual Projects**: Support for generating projects in different programming languages
+* **Web Interface Localization**: Ability to choose the interface language
 
-### Розширені можливості тестування
-* **Аналіз покриття коду**: Інтеграція з інструментами аналізу покриття коду
-* **Статичний аналіз**: Використання лінтерів та інших інструментів статичного аналізу
-* **Інтеграційні тести**: Генерація та запуск інтеграційних тестів
+### Advanced Testing Capabilities
+* **Code Coverage Analysis**: Integration with code coverage analysis tools
+* **Static Analysis**: Use of linters and other static analysis tools
+* **Integration Tests**: Generation and execution of integration tests
 
-### Інструменти для розробників
-* **CLI інтерфейс**: Управління системою через командний рядок 
-* **Експорт/імпорт проектів**: Можливість експортувати та імпортувати проекти
-* **Розширена аналітика**: Детальна статистика та метрики процесу розробки
-* **Форматування кодових блоків**: Функція `format_code_blocks` автоматично виправляє форматування кодових блоків, додаючи пробіл між назвою мови і потрійними зворотними лапками. Це дозволяє уникнути проблем з парсингом коду в AI-системі.
+### Developer Tools
+* **CLI Interface**: System management via command line
+* **Project Export/Import**: Ability to export and import projects
+* **Advanced Analytics**: Detailed statistics and metrics of the development process
+* **Code Block Formatting**: The `format_code_blocks` function automatically fixes the formatting of code blocks, adding a space between the language name and triple backticks. This avoids code parsing issues in the AI system.
 
-#### Приклад використання:
+#### Usage Example:
 ```python
 example_text = """python```print('Hello')```"""
 formatted = format_code_blocks(example_text)
 print(formatted)
 ```
 
-## Налаштування та запуск
+## Setup and Launch
 
-### Вимоги до системи
+### System Requirements
 * Docker
 * Git
 * Python 3.10+
 * Node.js 18+
 
-### Швидкий старт
+### Quick Start
 ```bash
-# Клонування репозиторію
+# Clone the repository
 git clone https://github.com/oleg121203/AI-SYSTEMS.git
 cd AI-SYSTEMS
 
-# Налаштування середовища
+# Setup environment
 ./setup.sh
 
-# Запуск системи
-./start.sh --target "Опис вашого проекту"
+# Launch the system
+./start.sh --target "Your project description"
 ```
 
-## Оцінка побудови системи
+## System Evaluation
 
-### Сильні сторони
-* **Модульність:** Чіткий поділ відповідальності між AI-агентами (AI1 - координація, AI2 - виконання, AI3 - структура та моніторинг).
-* **Автоматизація:** Повна автоматизація циклу розробки від структури до тестування та доопрацювання.
-* **Зворотний зв'язок:** Замкнутий цикл тестування через GitHub Actions та аналіз результатів AI3 дозволяє системі самостійно покращувати код.
-* **Моніторинг:** Роль "дозора" (AI3) додає системі стійкості, виявляючи проблеми (простої, помилки) та ініціюючи їх вирішення.
-* **Консультації:** Механізм консультацій між AI1 та AI3 дозволяє покращувати планування завдань.
-* **Централізоване API:** MCP API слугує єдиною точкою взаємодії, спрощуючи комунікацію.
-* **Візуалізація:** Дашборд надає гарний огляд стану системи.
-* **Автоматичне створення наступних завдань:** Система автоматично створює завдання для тестувальника та документатора одразу після отримання коду, забезпечуючи безперервний процес розробки.
-* **Покращений моніторинг статусу воркерів:** AI3 використовує спеціальний ендпоінт `/worker_status` для ефективного виявлення простоюючих воркерів.
+### Strengths
+* **Modularity:** Clear division of responsibilities between AI agents (AI1 - coordination, AI2 - execution, AI3 - structure and monitoring).
+* **Automation:** Complete automation of the development cycle from structure to testing and refinement.
+* **Feedback:** Closed testing loop through GitHub Actions and AI3 result analysis allows the system to improve code on its own.
+* **Monitoring:** The "overseer" role (AI3) adds resilience to the system by detecting problems (idle periods, errors) and initiating their resolution.
+* **Consultations:** The consultation mechanism between AI1 and AI3 allows for improved task planning.
+* **Centralized API:** MCP API serves as a single point of interaction, simplifying communication.
+* **Visualization:** The dashboard provides a good overview of the system state.
+* **Automatic Creation of Next Tasks:** The system automatically creates tasks for the tester and documenter immediately after receiving code, ensuring a continuous development process.
+* **Improved Worker Status Monitoring:** AI3 uses a special `/worker_status` endpoint for effective detection of idle workers.
 
-### Області для покращення
-* **Складність:** Система досить складна через велику кількість взаємодіючих компонентів. Відладка та підтримка можуть бути непростими.
-* **Надійність LLM:** Якість кінцевого продукту сильно залежить від якості генерації коду/тестів/документації базовими LLM. Потрібне ретельне налаштування промптів.
-* **Обробка помилок:** Система має бути стійкою до помилок на кожному етапі (помилки API, помилки LLM, помилки Git, помилки GitHub Actions). Поточна обробка може потребувати розширення.
-* **Ефективність доопрацювання:** Механізм доопрацювання (коли AI1 створює нову задачу на виправлення) має бути ефективним, щоб не зациклюватися на одних і тих самих помилках. Можливо, потрібні складніші стратегії виправлення.
-* **Управління станом:** Синхронізація стану між усіма компонентами (особливо статуси завдань) є критично важливою і може бути складною.
-* **Масштабованість:** Зі збільшенням розміру проекту може зрости навантаження на API та LLM-провайдерів.
-* **GitHub Actions:** Поточний воркфлоу може бути не оптимальним (наприклад, запускати тести лише для файлів, пов'язаних зі зміненим кодом, а не лише змінених тестів).
+### Areas for Improvement
+* **Complexity:** The system is quite complex due to the large number of interacting components. Debugging and maintenance can be challenging.
+* **LLM Reliability:** The quality of the final product heavily depends on the quality of code/test/documentation generation by the underlying LLMs. Careful prompt tuning is required.
+* **Error Handling:** The system must be resilient to errors at each stage (API errors, LLM errors, Git errors, GitHub Actions errors). Current handling may need expansion.
+* **Refinement Efficiency:** The refinement mechanism (when AI1 creates a new task for fixing) must be efficient to avoid cycling on the same errors. More complex fixing strategies may be needed.
+* **State Management:** Synchronizing state across all components (especially task statuses) is critically important and can be complex.
+* **Scalability:** As the project size increases, the load on the API and LLM providers may increase.
+* **GitHub Actions:** The current workflow may not be optimal (e.g., running tests only for files related to the changed code, not just the changed tests).
 
-## Плани розвитку
+## Development Plans
 
-### Короткострокові
-* Покращення системи обробки помилок
-* Розширення набору підтримуваних мов програмування
-* Оптимізація процесу тестування
+### Short-term
+* Improvement of the error handling system
+* Expansion of the set of supported programming languages
+* Optimization of the testing process
 
-### Середньострокові
-* Інтеграція з іншими CI/CD системами (крім GitHub Actions)
-* Впровадження механізмів машинного навчання для покращення якості генерації
-* Додавання підтримки мобільної розробки
+### Medium-term
+* Integration with other CI/CD systems (besides GitHub Actions)
+* Implementation of machine learning mechanisms to improve generation quality
+* Adding support for mobile development
 
-### Довгострокові
-* Розробка плагінів для популярних IDE
-* Створення маркетплейсу шаблонів проектів
-* Підтримка розподіленої розробки кількома командами
+### Long-term
+* Development of plugins for popular IDEs
+* Creation of a marketplace for project templates
+* Support for distributed development by multiple teams
 
-## Внесок у проект
+## Contributing to the Project
 
-Ми раді будь-якому внеску в проект! Додаткову інформацію можна знайти в файлі CONTRIBUTING.md.
+We welcome any contribution to the project! Additional information can be found in the CONTRIBUTING.md file.
 
-## Ліцензія
+## License
 
-Проект розповсюджується під ліцензією MIT. Детальну інформацію можна знайти в файлі LICENSE.
+The project is distributed under the MIT license. Detailed information can be found in the LICENSE file.
 
-## Висновок
+## Conclusion
 
-Система AI-SYSTEMS має продуману архітектуру з чітким розподілом ролей та автоматизованим циклом розробки з тестуванням і доопрацюванням. Включення AI3 як "дозора" та механізму консультацій є сильними сторонами. Основні виклики полягають у надійності LLM, комплексній обробці помилок та ефективному управлінні станом у такій складній системі. Загалом, це амбітний та добре структурований підхід до автоматизації створення ПЗ за допомогою AI.
+The AI-SYSTEMS system has a well-thought-out architecture with a clear distribution of roles and an automated development cycle with testing and refinement. The inclusion of AI3 as an "overseer" and the consultation mechanism are strengths. The main challenges lie in the reliability of LLMs, comprehensive error handling, and effective state management in such a complex system. Overall, it is an ambitious and well-structured approach to automating software creation using AI.

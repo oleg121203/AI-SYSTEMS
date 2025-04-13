@@ -18,6 +18,7 @@ import uvicorn
 import websockets
 from fastapi import (
     BackgroundTasks,
+    Depends,
     FastAPI,
     HTTPException,
     Request,
@@ -25,20 +26,25 @@ from fastapi import (
     WebSocketDisconnect,
 )
 from fastapi import status as fastapi_status
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
+
+from providers import ProviderFactory
+from shutdown_handler import register_shutdown_handlers
+
+load_dotenv()
 
 
-# Определяем функцию log_message в начале файла
+# Define log_message function at the beginning of the file
 def log_message(message: str):
-    """Логирование сообщения в консоль и файл"""
+    """Log a message to console and file"""
     logger.info(message)
 
 
 def terminate_process(process):
-    """Безопасное завершение процесса"""
+    """Safely terminate a process"""
     if process and process.poll() is None:
         try:
             process.terminate()
@@ -77,18 +83,18 @@ load_dotenv()
 
 # --- Pydantic Models ---
 class Report(BaseModel):
-    type: str = Field(..., description="Тип отчета (code, test_result, status_update)")
+    type: str = Field(..., description="Report type (code, test_result, status_update)")
     file: Optional[str] = Field(
-        None, description="Путь к файлу для обновления (для code)"
+        None, description="Path to the file to update (for code)"
     )
-    content: Optional[str] = Field(None, description="Содержимое файла (для code)")
+    content: Optional[str] = Field(None, description="File content (for code)")
     subtask_id: Optional[str] = Field(
-        None, description="ID подзадачи, которая выполнялась"
+        None, description="ID of the subtask being executed"
     )
     metrics: Optional[Dict] = Field(
-        None, description="Метрики выполнения (для test_result)"
+        None, description="Execution metrics (for test_result)"
     )
-    message: Optional[str] = Field(None, description="Дополнительное сообщение")
+    message: Optional[str] = Field(None, description="Additional message")
 
 
 # --- Configuration Loading ---
@@ -297,7 +303,7 @@ def process_test_results(test_data: Report, subtask_id: str):
 
 def add_task_to_queue(role: str, task: Dict):
     """
-    Добавляет задачу в очередь для указанной роли.
+    Adds a task to the queue for the specified role.
     """
     queue = {
         "executor": executor_queue,
@@ -309,11 +315,11 @@ def add_task_to_queue(role: str, task: Dict):
         logger.error(f"Invalid role for task queue: {role}")
         return False
 
-    # Добавляем задачу в очередь
+    # Add task to queue
     queue.put_nowait(task)
     subtask_status[task["id"]] = "pending"
 
-    # Обновляем UI через WebSocket
+    # Update UI via WebSocket
     asyncio.create_task(
         broadcast_specific_update(
             {
@@ -335,10 +341,10 @@ def add_task_to_queue(role: str, task: Dict):
 
 def get_all_tasks() -> List[Dict]:
     """
-    Возвращает список всех задач (активных и завершенных).
+    Returns a list of all tasks (active and completed).
     """
     tasks = []
-    # Собираем задачи из очередей
+    # Collect tasks from queues
     for role, queue in [
         ("executor", executor_queue),
         ("tester", tester_queue),
@@ -350,16 +356,16 @@ def get_all_tasks() -> List[Dict]:
             task_copy["role"] = role
             tasks.append(task_copy)
 
-    # Добавляем задачи, которых нет в очередях, но есть в статусах
+    # Add tasks that are not in queues but have status
     for subtask_id, status in subtask_status.items():
-        # Проверяем, есть ли уже эта задача в списке
+        # Check if this task is already in the list
         if not any(t.get("id") == subtask_id for t in tasks):
-            # Это задача, которая уже не в очереди (выполнена или извлечена)
+            # This is a task that is no longer in the queue (completed or extracted)
             tasks.append(
                 {
                     "id": subtask_id,
                     "status": status,
-                    # Другие поля могут быть недоступны, так как задача не в очереди
+                    # Other fields may be unavailable since the task is not in the queue
                 }
             )
 
@@ -386,7 +392,7 @@ async def get_file_content(path: str):
 @app.get("/all_statuses")
 async def get_all_statuses():
     """
-    Повертає статуси всіх задач.
+    Returns statuses of all tasks.
     """
     all_tasks = get_all_tasks()
     return JSONResponse(
@@ -424,22 +430,20 @@ async def receive_subtask(data: dict):
         "documenter": documenter_queue,
     }[role]
 
-    # Добавляем логирование информации о добавляемой задаче
-    logger.info(
-        f"Добавление в очередь {role} задачи: ID {subtask_id}, Файл: {filename}"
-    )
+    # Log information about the task being added
+    logger.info(f"Adding to {role} queue: ID {subtask_id}, File: {filename}")
 
-    # Проверяем содержимое очередей после добавления
+    # Check queue contents after adding
     await queue.put(subtask)
     subtask_status[subtask_id] = "pending"
 
-    # Получаем размеры всех очередей для логирования
+    # Get all queue sizes for logging
     executor_size = executor_queue.qsize()
     tester_size = tester_queue.qsize()
     documenter_size = documenter_queue.qsize()
 
     logger.info(
-        f"Состояние очередей: executor({executor_size}), tester({tester_size}), documenter({documenter_size})"
+        f"Queue status: executor({executor_size}), tester({tester_size}), documenter({documenter_size})"
     )
     logger.info(f"Subtask added to {role} queue: ID {subtask_id}, File: {filename}")
 
@@ -447,7 +451,7 @@ async def receive_subtask(data: dict):
         {
             "queues": {
                 "executor": list(executor_queue._queue),
-                "tester": list(tester_queue._queue),
+                "tester": list(tester_queue.__queue),
                 "documenter": list(documenter_queue._queue),
             },
             "subtasks": {subtask_id: "pending"},
@@ -467,9 +471,9 @@ async def get_task_for_role(role: str):
         logger.error(f"Invalid role: {role}")
         raise HTTPException(status_code=400, detail="Invalid role")
     try:
-        # Проверяем, есть ли задачи в очереди
+        # Check if there are tasks in the queue
         if queue.empty():
-            logger.warning(f"Очередь для роли {role} пуста")
+            logger.warning(f"Queue for role {role} is empty")
             return {"message": f"No tasks available for {role}", "empty": True}
 
         subtask = queue.get_nowait()
@@ -488,7 +492,7 @@ async def get_task_for_role(role: str):
         )
         return {"subtask": subtask}
     except asyncio.QueueEmpty:
-        logger.warning(f"Очередь для роли {role} пуста (QueueEmpty)")
+        logger.warning(f"Queue for role {role} is empty (QueueEmpty)")
         return {"message": f"No tasks available for {role}", "empty": True}
 
 
@@ -1206,7 +1210,7 @@ async def notify_ai1_about_error(error_details: Dict[str, Any]):
 # Добавим функцию для обновления списка файлов из структуры
 def update_structure_files():
     """
-    Оновлює список файлів на основі поточної структури проекту.
+    Updates the list of files based on the current project structure.
     """
     global structure_files
     structure_files = []
@@ -1216,17 +1220,17 @@ def update_structure_files():
             for key, value in struct.items():
                 path = f"{prefix}/{key}" if prefix else key
                 if isinstance(value, dict):
-                    # Рекурсивний виклик для обробки вкладених каталогів
+                    # Recursive call to process nested directories
                     extract_files(value, path)
-                else:  # Це файл (значення може бути None або "")
+                else:  # This is a file (value may be None or "")
                     structure_files.append(path)
 
-    # Перевіряємо, що структура містить дані
+    # Check that the structure contains data
     if current_structure and isinstance(current_structure, dict):
         extract_files(current_structure)
-        logger.info(f"Оновлено список файлів: знайдено {len(structure_files)} файлів")
+        logger.info(f"Updated file list: found {len(structure_files)} files")
     else:
-        logger.warning("Структура проекту порожня або недійсна")
+        logger.warning("Project structure is empty or invalid")
 
     return structure_files
 
@@ -1567,7 +1571,7 @@ async def clear_project():
         if os.path.exists(repo_dir):
             try:
                 # Переконаємося, що це дійсно директорія repo перед видаленням
-                if os.path.basename(os.path.normpath(repo_dir)) == "repo":
+                if ос.path.basename(os.path.normpath(repo_dir)) == "repo":
                     # Видаляємо всі файли, включаючи .git
                     for root, dirs, files in os.walk(repo_dir, topdown=False):
                         for name in files:
@@ -1657,12 +1661,12 @@ async def clear_project():
         log_message(f"[API] Очищення логів в: {logs_dir}")
 
         # Очищаємо файли логів, але не видаляємо саму директорію
-        if os.path.exists(logs_dir):
-            for log_file in os.listdir(logs_dir):
+        if ос.path.exists(logs_dir):
+            for log_file in ос.listdir(logs_dir):
                 log_path = os.path.join(logs_dir, log_file)
                 try:
                     # Перевіряємо, чи це файл (не директорія)
-                    if os.path.isfile(log_path):
+                    if ос.path.isfile(log_path):
                         with open(log_path, "w") as f:
                             # Просто відкриваємо файл для запису, щоб очистити
                             pass
@@ -1670,14 +1674,14 @@ async def clear_project():
                 except Exception as e:
                     log_message(f"[API] Помилка при очищенні лог-файлу {log_file}: {e}")
         else:
-            os.makedirs(logs_dir, exist_ok=True)
+            ос.makedirs(logs_dir, exist_ok=True)
             log_message(f"[API] Створено нову директорію для логів: {logs_dir}")
 
         # Очищаємо кеш та тимчасові файли
         # (Додайте тут очищення інших директорій, якщо необхідно)
         cache_dirs = ["__pycache__", ".pytest_cache", ".cache"]
         for cache_dir in cache_dirs:
-            if os.path.exists(cache_dir):
+            if ос.path.exists(cache_dir):
                 try:
                     shutil.rmtree(cache_dir, onerror=handle_readonly_error)
                     log_message(f"[API] Видалено кеш директорію: {cache_dir}")
@@ -1735,18 +1739,18 @@ def handle_readonly_error(func, path, exc_info):
 
 async def create_followup_tasks(file_path: str, executor_subtask_id: str):
     """
-    Створює завдання для тестування та документування після успішного отримання коду.
+    Creates tasks for testing and documentation after successful code receipt.
 
     Args:
-        file_path: Шлях до файлу, для якого створюються завдання
-        executor_subtask_id: ID підзадачі виконавця, яка була виконана
+        file_path: Path to the file for which tasks are being created
+        executor_subtask_id: ID of the executor subtask that was completed
     """
     try:
-        # Отримуємо вміст файлу
+        # Get file content
         file_path_obj = repo_path / file_path
         if not file_path_obj.exists():
             logger.error(
-                f"[API] Не вдалося знайти файл {file_path} для створення наступних завдань"
+                f"[API] Could not find file {file_path} to create follow-up tasks"
             )
             return
 
@@ -1755,10 +1759,10 @@ async def create_followup_tasks(file_path: str, executor_subtask_id: str):
             with open(file_path_obj, "r", encoding="utf-8") as f:
                 content = f.read()
         except Exception as e:
-            logger.error(f"[API] Помилка при читанні файлу {file_path}: {e}")
+            logger.error(f"[API] Error reading file {file_path}: {e}")
             return
 
-        # Перевіряємо тип файлу, щоб визначити, чи потрібні тести
+        # Check file type to determine if tests are needed
         testable_extensions = (
             ".py",
             ".js",
@@ -1771,7 +1775,7 @@ async def create_followup_tasks(file_path: str, executor_subtask_id: str):
         )
         needs_tests = file_path.lower().endswith(testable_extensions)
 
-        # Створюємо завдання для тестування
+        # Create task for testing
         if needs_tests:
             tester_task = {
                 "id": str(uuid4()),
@@ -1779,45 +1783,43 @@ async def create_followup_tasks(file_path: str, executor_subtask_id: str):
                 "role": "tester",
                 "text": f"Generate unit tests for the code in file: {file_path}",
                 "code": content,
-                "related_task_id": executor_subtask_id,  # Зв'язуємо з оригінальною задачею
+                "related_task_id": executor_subtask_id,  # Link to original task
             }
 
-            # Додаємо завдання в чергу
+            # Add task to queue
             tester_success = add_task_to_queue("tester", tester_task)
             if tester_success:
                 logger.info(
-                    f"[API] Створено завдання на тестування {tester_task['id']} для файлу {file_path}"
+                    f"[API] Created testing task {tester_task['id']} for file {file_path}"
                 )
             else:
                 logger.error(
-                    f"[API] Не вдалося створити завдання на тестування для файлу {file_path}"
+                    f"[API] Failed to create testing task for file {file_path}"
                 )
 
-        # Створюємо завдання для документування
+        # Create task for documentation
         documenter_task = {
             "id": str(uuid4()),
             "filename": file_path,
             "role": "documenter",
             "text": f"Generate documentation for the code in file: {file_path}",
             "code": content,
-            "related_task_id": executor_subtask_id,  # Зв'язуємо з оригінальною задачею
+            "related_task_id": executor_subtask_id,  # Link to original task
         }
 
-        # Додаємо завдання в чергу
+        # Add task to queue
         documenter_success = add_task_to_queue("documenter", documenter_task)
         if documenter_success:
             logger.info(
-                f"[API] Створено завдання на документування {documenter_task['id']} для файлу {file_path}"
+                f"[API] Created documentation task {documenter_task['id']} for file {file_path}"
             )
         else:
             logger.error(
-                f"[API] Не вдалося створити завдання на документування для файлу {file_path}"
+                f"[API] Failed to create documentation task for file {file_path}"
             )
 
     except Exception as e:
-        logger.error(
-            f"[API] Помилка при створенні наступних завдань для {file_path}: {e}"
-        )
+        logger.error(f"[API] Error creating follow-up tasks for {file_path}: {e}")
 
 
 @app.get("/worker_status")
@@ -1863,25 +1865,25 @@ async def get_worker_status():
 
 def get_repo_structure(repo_path="repo"):
     """
-    Рекурсивно сканує директорію repo та повертає вкладений словник,
-    що представляє структуру файлів та директорій.
+    Recursively scans the repo directory and returns a nested dictionary
+    representing the structure of files and directories.
     """
     structure = {}
     if not os.path.exists(repo_path) or not os.path.isdir(repo_path):
-        logger.warning(f"Директорія репозиторію '{repo_path}' не знайдена.")
+        logger.warning(f"Repository directory '{repo_path}' not found.")
         return structure
 
     try:
         for item in sorted(os.listdir(repo_path)):
             item_path = os.path.join(repo_path, item)
             if os.path.isdir(item_path):
-                # Рекурсивний виклик для піддиректорій
+                # Recursive call for subdirectories
                 structure[item] = get_repo_structure(item_path)
             else:
-                # Файли представляємо як ключ зі значенням None (або іншим маркером файлу)
+                # Files are represented as keys with None value (or other file marker)
                 structure[item] = None
     except OSError as e:
-        logger.error(f"Помилка при скануванні директорії '{repo_path}': {e}")
+        logger.error(f"Error scanning directory '{repo_path}': {e}")
     return structure
 
 
@@ -1902,6 +1904,45 @@ async def send_full_status(websocket: WebSocket):
     }
     await manager.broadcast(json.dumps(status_data))
     logger.info("Надіслано повне оновлення статусу всім клієнтам")
+
+
+@app.post("/task/{role}")
+async def add_task_for_role(role: str, task: Dict):
+    """
+    Adds a task to the queue for the specified role.
+    """
+    queue = {
+        "executor": executor_queue,
+        "tester": tester_queue,
+        "documenter": documenter_queue,
+    }.get(role)
+
+    if not queue:
+        logger.error(f"Invalid role for task queue: {role}")
+        raise HTTPException(status_code=400, detail="Invalid role")
+
+    # Add task to queue
+    queue.put_nowait(task)
+    subtask_status[task["id"]] = "pending"
+
+    # Update UI via WebSocket
+    asyncio.create_task(
+        broadcast_specific_update(
+            {
+                "queues": {
+                    "executor": list(executor_queue._queue),
+                    "tester": list(tester_queue._queue),
+                    "documenter": list(documenter_queue._queue),
+                },
+                "subtasks": {task["id"]: "pending"},
+            }
+        )
+    )
+
+    logger.info(
+        f"Added task {task['id']} to {role} queue for file {task.get('filename')}"
+    )
+    return {"status": "task received", "id": task["id"]}
 
 
 if __name__ == "__main__":
