@@ -1,0 +1,94 @@
+vscode ➜ /home/dev/vscode/AI-SYSTEMS (main) $ tree
+.
+├── Dockerfile
+├── Plan_change.md
+├── README.md
+├── __pycache__
+│   ├── ai3.cpython-312.pyc
+│   ├── config.cpython-312.pyc
+│   ├── providers.cpython-312.pyc
+│   ├── shutdown_handler.cpython-312.pyc
+│   └── utils.cpython-312.pyc
+├── ai1.py
+├── ai2.py
+├── ai3.py
+├── cleanup.sh
+├── config.json
+├── config.py
+├── docker-compose.yml
+├── logs
+│   ├── ai1.log
+│   ├── ai2_documenter.log
+│   ├── ai2_executor.log
+│   ├── ai2_tester.log
+│   ├── ai3.log
+│   ├── mcp.log
+│   └── mcp_api.log
+├── mcp_api.py
+├── notes.txt
+├── package-lock.json
+├── providers.py
+├── pytest.ini
+├── repo
+│   ├── README.md
+│   ├── assets
+│   │   ├── sound
+│   │   └── sprites
+│   ├── backend
+│   │   ├── leaderboard.py
+│   │   └── main.py
+│   ├── data
+│   │   ├── enemy.json
+│   │   ├── levels.json
+│   │   └── player.json
+│   ├── docker-compose.yml
+│   ├── frontend
+│   │   ├── game.js
+│   │   ├── index.html
+│   │   └── styles.css
+│   ├── public
+│   │   ├── images
+│   │   └── sounds
+│   ├── serverless.yml
+│   ├── settings.ini
+│   ├── src
+│   │   ├── assets
+│   │   │   ├── sound
+│   │   │   └── sprites
+│   │   ├── game.js
+│   │   ├── index.html
+│   │   ├── main.py
+│   │   ├── styles.css
+│   │   └── utils.js
+│   ├── static
+│   │   ├── css
+│   │   └── js
+│   └── tests
+│       └── test_game.js
+├── requirements.txt
+├── run_async_services.sh
+├── setup.sh
+├── shutdown_handler.py
+├── static
+│   ├── script.js
+│   └── style.css
+├── templates
+│   └── index.html
+├── tests
+│   ├── __pycache__
+│   │   ├── test_ai_integration.cpython-312-pytest-7.1.2.pyc
+│   │   ├── test_github_api.cpython-312-pytest-7.1.2.pyc
+│   │   ├── test_github_monitoring.cpython-312-pytest-7.1.2.pyc
+│   │   ├── test_mcp_api.cpython-312-pytest-7.1.2.pyc
+│   │   ├── test_openrouter.cpython-312-pytest-7.1.2.pyc
+│   │   └── test_websocket.cpython-312-pytest-7.1.2.pyc
+│   ├── test_ai_integration.py
+│   ├── test_github_api.py
+│   ├── test_github_monitoring.py
+│   ├── test_mcp_api.py
+│   ├── test_openrouter.py
+│   └── test_websocket.py
+└── utils.py
+
+17 directories, 73 files
+vscode ➜ /home/dev/vscode/AI-SYSTEMS (main) $ 

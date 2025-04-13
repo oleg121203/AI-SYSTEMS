@@ -615,6 +615,9 @@ async def broadcast_full_status():
             else:
                 status_counts["other"] += 1
 
+        # Отримуємо актуальну структуру репозиторію за допомогою нової функції
+        current_structure = get_repo_structure(str(repo_path))
+
         state_data = {
             "type": "full_status_update",
             "ai_status": ai_status,
@@ -772,8 +775,8 @@ async def websocket_endpoint(websocket: WebSocket):
         while True:
             await asyncio.sleep(30)  # Keepalive interval
             try:
-                # Check connection state before sending (optional but good practice)
-                if websocket.state == websockets.typing.State.OPEN:
+                # Check connection state before sending (updated logic)
+                if websocket.application_state == WebSocketState.CONNECTED:
                     await websocket.send_json({"type": "ping"})
                 else:
                     logger.warning(
@@ -1549,7 +1552,7 @@ async def clear_project():
             log_message("[API] Зупинка AI2-documenter перед очищенням")
             terminate_process(ai2_documenter_process)
 
-        if "ai3_process" in globals() in ai3_process and ai3_process.poll() is None:
+        if "ai3_process" in globals() in ai3_process in ai3_process.poll() is None:
             log_message("[API] Зупинка AI3 перед очищенням")
             terminate_process(ai3_process)
 
@@ -1856,6 +1859,49 @@ async def get_worker_status():
 
     logger.info(f"[API] Запит статусу воркерів: {worker_status}")
     return {"status": worker_status}
+
+
+def get_repo_structure(repo_path="repo"):
+    """
+    Рекурсивно сканує директорію repo та повертає вкладений словник,
+    що представляє структуру файлів та директорій.
+    """
+    structure = {}
+    if not os.path.exists(repo_path) or not os.path.isdir(repo_path):
+        logger.warning(f"Директорія репозиторію '{repo_path}' не знайдена.")
+        return structure
+
+    try:
+        for item in sorted(os.listdir(repo_path)):
+            item_path = os.path.join(repo_path, item)
+            if os.path.isdir(item_path):
+                # Рекурсивний виклик для піддиректорій
+                structure[item] = get_repo_structure(item_path)
+            else:
+                # Файли представляємо як ключ зі значенням None (або іншим маркером файлу)
+                structure[item] = None
+    except OSError as e:
+        logger.error(f"Помилка при скануванні директорії '{repo_path}': {e}")
+    return structure
+
+
+async def send_full_status(websocket: WebSocket):
+    global current_structure, subtask_status, ai_status, queues
+    # ... (отримання інших статусів) ...
+
+    # Отримуємо актуальну структуру репозиторію
+    current_structure = get_repo_structure("repo")  # <--- Використовуємо нову функцію
+
+    status_data = {
+        "type": "full_status_update",
+        "ai_status": ai_status,
+        "queues": {role: list(q.queue) for role, q in queues.items()},
+        "subtasks": subtask_status,
+        "structure": current_structure,  # <--- Надсилаємо коректну структуру
+        # ... (інші дані, якщо є) ...
+    }
+    await manager.broadcast(json.dumps(status_data))
+    logger.info("Надіслано повне оновлення статусу всім клієнтам")
 
 
 if __name__ == "__main__":

@@ -54,7 +54,8 @@
         "editorconfig.editorconfig",
         "DavidAnson.vscode-markdownlint",
         "SonarSource.sonarlint-vscode",
-        "ciiqr.note"
+        "ciiqr.note",
+        "GitHub.vscode-github-actions"
       ]
     }
   },

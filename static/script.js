@@ -651,7 +651,10 @@ function getChartFontColor() {
 
 // Функції для структури файлів
 function updateFileStructure(structureData) {
-  console.log("Received structure data:", structureData);
+  console.log(
+    "Received structure data:",
+    JSON.stringify(structureData, null, 2)
+  );
 
   const fileStructureDiv = document.getElementById("file-structure");
   if (!fileStructureDiv) {
@@ -668,12 +671,7 @@ function updateFileStructure(structureData) {
     return;
   }
 
-  // Перевірка, чи є структура вкладеною - можливо, дані приходять як { structure: { ... } }
-  if (structureData.structure && typeof structureData.structure === "object") {
-    console.log("Found nested structure property, using it instead");
-    structureData = structureData.structure;
-  }
-
+  // Перевірка на пустий об'єкт
   if (Object.keys(structureData).length === 0) {
     console.warn("Structure data is an empty object");
     fileStructureDiv.innerHTML =
@@ -681,16 +679,25 @@ function updateFileStructure(structureData) {
     return;
   }
 
-  console.log(
-    "Creating root UL for file structure with",
-    Object.keys(structureData).length,
-    "top-level items"
-  );
   const rootUl = document.createElement("ul");
+  rootUl.className = "file-tree";
   fileStructureDiv.appendChild(rootUl);
 
   try {
-    renderNode(structureData, rootUl);
+    if (Array.isArray(structureData)) {
+      // Якщо прийшов масив файлів
+      structureData.forEach((item) => {
+        if (typeof item === "string") {
+          const li = document.createElement("li");
+          li.className = "file";
+          li.innerHTML = `<span class="file-name">${item}</span>`;
+          rootUl.appendChild(li);
+        }
+      });
+    } else {
+      // Якщо прийшла вкладена структура
+      renderNode(structureData, rootUl);
+    }
   } catch (error) {
     console.error("Error during file structure rendering:", error);
     fileStructureDiv.innerHTML = `<p><em>Error rendering file structure: ${error.message}</em></p>`;
@@ -705,17 +712,15 @@ function renderNode(node, parentUl, currentPath = "") {
     return;
   }
 
+  // Сортуємо записи: спочатку папки, потім файли
   const entries = Object.entries(node).sort(
     ([keyA, valueA], [keyB, valueB]) => {
       const isDirA = typeof valueA === "object" && valueA !== null;
       const isDirB = typeof valueB === "object" && valueB !== null;
-      // Directories first, then files alphabetically
       if (isDirA !== isDirB) return isDirA ? -1 : 1;
       return keyA.localeCompare(keyB);
     }
   );
-
-  console.log("Sorted entries to render:", entries.length);
 
   for (const [key, value] of entries) {
     const li = document.createElement("li");
@@ -724,15 +729,22 @@ function renderNode(node, parentUl, currentPath = "") {
 
     if (isDirectory) {
       li.innerHTML = `<span class="folder"><i class="fas fa-folder"></i> ${key}</span>`;
-      li.classList.add("folder-item");
+      li.className = "folder-item"; // Важливий клас для CSS
       const subUl = document.createElement("ul");
       li.appendChild(subUl);
       renderNode(value, subUl, itemPath);
 
+      // Додаємо обробник кліку на папку
       const folderSpan = li.querySelector(".folder");
       if (folderSpan) {
         folderSpan.addEventListener("click", (e) => {
           li.classList.toggle("expanded");
+          const icon = folderSpan.querySelector("i");
+          if (icon) {
+            icon.className = li.classList.contains("expanded")
+              ? "fas fa-folder-open"
+              : "fas fa-folder";
+          }
           e.stopPropagation();
         });
       }
@@ -740,10 +752,21 @@ function renderNode(node, parentUl, currentPath = "") {
       li.innerHTML = `<span class="file" data-path="${itemPath}"><i class="fas ${getFileIcon(
         key
       )}"></i> ${key}</span>`;
+
+      // Додаємо обробник кліку на файл
       const fileSpan = li.querySelector(".file");
       if (fileSpan) {
         fileSpan.addEventListener("click", (e) => {
-          loadFileContent(e.currentTarget.getAttribute("data-path"));
+          // Знімаємо виділення з інших файлів
+          document
+            .querySelectorAll("#file-structure .file")
+            .forEach((f) => f.classList.remove("selected"));
+
+          // Додаємо виділення поточному файлу
+          fileSpan.classList.add("selected");
+
+          // Завантажуємо вміст файлу
+          loadFileContent(itemPath);
           e.stopPropagation();
         });
       }
