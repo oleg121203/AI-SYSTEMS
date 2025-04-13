@@ -1,5 +1,6 @@
 #!/bin/bash
 
+# filepath: /home/dev/vscode/AI-SYSTEMS/setup.sh
 # Налаштування прав доступу
 sudo chmod -R 755 "/home/dev/vscode/AI-SYSTEMS"
 sudo chown -R $(id -u):$(id -g) "/home/dev/vscode/AI-SYSTEMS"
@@ -10,7 +11,11 @@ sudo apt-get install -y shfmt shellcheck
 
 # Оновлення pip і встановлення Python-пакетів
 pip install --upgrade pip
-pip install flake8==7.1.1 black==24.8.0 isort==5.13.2 pytest==8.3.3 httpx==0.27.2 pydantic==2.9.2
+
+# Встановлення пакетів з requirements.txt
+if [ -f "/home/dev/vscode/AI-SYSTEMS/requirements.txt" ]; then
+    pip install -r "/home/dev/vscode/AI-SYSTEMS/requirements.txt"
+fi
 
 # Встановлення markdownlint-cli глобально
 npm install -g markdownlint-cli
