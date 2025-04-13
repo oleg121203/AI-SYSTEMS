@@ -383,6 +383,17 @@ async def get_file_content(path: str):
         raise HTTPException(status_code=500, detail=f"Error reading file: {e}")
 
 
+@app.get("/all_statuses")
+async def get_all_statuses():
+    """
+    Повертає статуси всіх задач.
+    """
+    all_tasks = get_all_tasks()
+    return JSONResponse(
+        content={"statuses": {task.get("id"): task.get("status") for task in all_tasks}}
+    )
+
+
 @app.post("/subtask")
 async def receive_subtask(data: dict):
     subtask = data.get("subtask")
@@ -520,6 +531,14 @@ async def receive_report(
                     report.content,
                     report.subtask_id,
                 )
+
+                # Автоматично створюємо завдання для tester і documenter після отримання коду
+                background_tasks.add_task(
+                    create_followup_tasks,
+                    report.file,
+                    report.subtask_id,
+                )
+
             elif report.type == "test_result":
                 subtask_status[report.subtask_id] = "tested"
                 if report.metrics:
@@ -1704,6 +1723,134 @@ def handle_readonly_error(func, path, exc_info):
     else:
         # Інакше просто логуємо помилку
         log_message(f"[API] Помилка доступу при видаленні {path}: {exc_info[1]}")
+
+
+async def create_followup_tasks(file_path: str, executor_subtask_id: str):
+    """
+    Створює завдання для тестування та документування після успішного отримання коду.
+
+    Args:
+        file_path: Шлях до файлу, для якого створюються завдання
+        executor_subtask_id: ID підзадачі виконавця, яка була виконана
+    """
+    try:
+        # Отримуємо вміст файлу
+        file_path_obj = repo_path / file_path
+        if not file_path_obj.exists():
+            logger.error(
+                f"[API] Не вдалося знайти файл {file_path} для створення наступних завдань"
+            )
+            return
+
+        content = None
+        try:
+            with open(file_path_obj, "r", encoding="utf-8") as f:
+                content = f.read()
+        except Exception as e:
+            logger.error(f"[API] Помилка при читанні файлу {file_path}: {e}")
+            return
+
+        # Перевіряємо тип файлу, щоб визначити, чи потрібні тести
+        testable_extensions = (
+            ".py",
+            ".js",
+            ".ts",
+            ".java",
+            ".cpp",
+            ".go",
+            ".rs",
+            ".php",
+        )
+        needs_tests = file_path.lower().endswith(testable_extensions)
+
+        # Створюємо завдання для тестування
+        if needs_tests:
+            tester_task = {
+                "id": str(uuid4()),
+                "filename": file_path,
+                "role": "tester",
+                "text": f"Generate unit tests for the code in file: {file_path}",
+                "code": content,
+                "related_task_id": executor_subtask_id,  # Зв'язуємо з оригінальною задачею
+            }
+
+            # Додаємо завдання в чергу
+            tester_success = add_task_to_queue("tester", tester_task)
+            if tester_success:
+                logger.info(
+                    f"[API] Створено завдання на тестування {tester_task['id']} для файлу {file_path}"
+                )
+            else:
+                logger.error(
+                    f"[API] Не вдалося створити завдання на тестування для файлу {file_path}"
+                )
+
+        # Створюємо завдання для документування
+        documenter_task = {
+            "id": str(uuid4()),
+            "filename": file_path,
+            "role": "documenter",
+            "text": f"Generate documentation for the code in file: {file_path}",
+            "code": content,
+            "related_task_id": executor_subtask_id,  # Зв'язуємо з оригінальною задачею
+        }
+
+        # Додаємо завдання в чергу
+        documenter_success = add_task_to_queue("documenter", documenter_task)
+        if documenter_success:
+            logger.info(
+                f"[API] Створено завдання на документування {documenter_task['id']} для файлу {file_path}"
+            )
+        else:
+            logger.error(
+                f"[API] Не вдалося створити завдання на документування для файлу {file_path}"
+            )
+
+    except Exception as e:
+        logger.error(
+            f"[API] Помилка при створенні наступних завдань для {file_path}: {e}"
+        )
+
+
+@app.get("/worker_status")
+async def get_worker_status():
+    """
+    Повертає статус всіх воркерів (executor, tester, documenter).
+    Використовується AI3 для моніторингу простоюючих воркерів.
+    """
+    worker_status = {
+        "executor": "idle" if executor_queue.empty() else "busy",
+        "tester": "idle" if tester_queue.empty() else "busy",
+        "documenter": "idle" if documenter_queue.empty() else "busy",
+    }
+
+    # Перевіряємо час останньої активності для кожного воркера
+    for role in worker_status.keys():
+        log_path = f"logs/ai2_{role}.log"
+        if os.path.exists(log_path):
+            # Якщо лог-файл не оновлювався більше ніж 60 секунд і черга пуста - воркер простоює
+            last_modified = os.path.getmtime(log_path)
+            if time.time() - last_modified > 60 and worker_status[role] == "idle":
+                worker_status[role] = "idle"
+            elif worker_status[role] == "idle":
+                # Перевіримо вміст останніх рядків логу
+                try:
+                    with open(log_path, "r", encoding="utf-8") as f:
+                        last_lines = list(deque(f, 10))  # Читаємо останні 10 рядків
+                        has_empty_message = any(
+                            "пуста" in line or "empty" in line.lower()
+                            for line in last_lines
+                        )
+                        if has_empty_message:
+                            worker_status[role] = "idle"
+                        else:
+                            # Якщо немає повідомлення про пусту чергу, але черга пуста - воркер в режимі очікування
+                            worker_status[role] = "waiting"
+                except Exception as e:
+                    logger.error(f"Помилка при читанні логу {log_path}: {e}")
+
+    logger.info(f"[API] Запит статусу воркерів: {worker_status}")
+    return {"status": worker_status}
 
 
 if __name__ == "__main__":

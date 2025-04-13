@@ -327,7 +327,7 @@ class AI1:
 
     async def get_all_task_statuses_from_api(self) -> Dict[str, str]:
         """Fetches all task statuses from the API."""
-        api_url = f"{MCP_API_URL}/all_subtask_statuses"
+        api_url = f"{MCP_API_URL}/all_statuses"
         log_message(f"[AI1] Querying API for all subtask statuses...")
         await apply_request_delay("ai1")  # Add delay before request
         try:
@@ -335,8 +335,16 @@ class AI1:
             async with session.get(api_url, timeout=30) as response:
                 if response.status == 200:
                     data = await response.json()
-                    log_message(f"[AI1] Received {len(data)} task statuses from API.")
-                    return data
+                    if "statuses" in data:
+                        log_message(
+                            f"[AI1] Received {len(data['statuses'])} task statuses from API."
+                        )
+                        return data["statuses"]
+                    else:
+                        log_message(
+                            f"[AI1] API response missing 'statuses' key: {data}"
+                        )
+                        return {}
                 else:
                     log_message(
                         f"[AI1] Failed to get all statuses. Status: {response.status}"
@@ -995,7 +1003,7 @@ class AI1:
             request_data = {"task_structure": task_structure, "target": self.target}
 
             async with session.post(api_url, json=request_data, timeout=60) as response:
-                if response.status == 200:
+                if response.status == 200):
                     result = await response.json()
                     improved_structure = result.get(
                         "improved_structure", task_structure
@@ -1097,7 +1105,7 @@ class AI1:
             }
 
             async with session.post(api_url, json=request_data, timeout=60) as response:
-                if response.status == 200:
+                if response.status == 200):
                     result = await response.json()
                     improved_subtasks = result.get("improved_subtasks", subtasks)
                     recommendations = result.get("recommendations", [])

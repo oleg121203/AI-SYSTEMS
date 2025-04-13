@@ -511,60 +511,131 @@ async def monitor_idle_workers():
     # Максимальное количество сообщений перед запросом на создание новой задачи
     max_idle_messages = 3
 
+    # Статистика мониторинга
+    monitoring_stats = {
+        "total_idle_detected": 0,
+        "tasks_requested": 0,
+        "successful_requests": 0,
+    }
+
     while True:
         try:
             session = await get_ai3_api_session()
             current_time = time.time()
 
-            # Проверяем логи каждого работника
-            for role in ["executor", "tester", "documenter"]:
-                log_path = f"logs/ai2_{role}.log"
-                try:
-                    # Проверяем время последнего изменения лог-файла
-                    if os.path.exists(log_path):
-                        last_modified = os.path.getmtime(log_path)
-                        elapsed_time = current_time - last_modified
+            # Проверяем статус всех воркеров через API
+            api_url = f"{MCP_API_URL}/worker_status"
+            try:
+                async with session.get(api_url, timeout=10) as response:
+                    if response.status == 200:
+                        workers_status = await response.json()
+                        log_message(
+                            f"[AI3-Monitor] Получен статус воркеров: {workers_status}"
+                        )
 
-                        # Проверяем содержимое последних строк логов на наличие сообщений об отсутствии задач
-                        has_empty_queue = False
-                        with open(log_path, "r", encoding="utf-8") as f:
-                            last_lines = deque(f, 10)  # Читаем последние 10 строк
-                            for line in last_lines:
-                                if "Очередь для роли" in line and "пуста" in line:
-                                    has_empty_queue = True
-                                    break
+                        # Если API не поддерживает этот эндпоинт, используем старый метод
+                        if "error" in workers_status or "status" not in workers_status:
+                            raise Exception(
+                                "API не поддерживает эндпоинт /worker_status"
+                            )
 
-                        # Если очередь пуста и прошло достаточно времени
-                        if has_empty_queue and elapsed_time > idle_threshold:
-                            if role not in idle_workers:
-                                idle_workers.add(role)
-                                log_message(
-                                    f"[AI3-Monitor] Обнаружен простаивающий работник: {role}, бездействует {elapsed_time:.1f} секунд"
-                                )
+                        # Обрабатываем полученный статус
+                        for role, status in workers_status.get("status", {}).items():
+                            if status == "idle":
+                                if role not in idle_workers:
+                                    idle_workers.add(role)
+                                    log_message(
+                                        f"[AI3-Monitor] Обнаружен простаивающий воркер через API: {role}"
+                                    )
+                                    monitoring_stats["total_idle_detected"] += 1
 
-                            idle_messages_count[role] += 1
+                                idle_messages_count[role] += 1
 
-                            # Если достигнут порог сообщений, запрашиваем новую задачу
-                            if idle_messages_count[role] >= max_idle_messages:
-                                await request_new_task_for_worker(role)
-                                idle_messages_count[role] = 0  # Сбрасываем счетчик
-                        else:
-                            if role in idle_workers:
-                                idle_workers.remove(role)
-                                idle_messages_count[role] = 0
-                                log_message(
-                                    f"[AI3-Monitor] Работник {role} больше не простаивает"
-                                )
-                except Exception as e:
-                    log_message(
-                        f"[AI3-Monitor] Ошибка при проверке логов работника {role}: {e}"
-                    )
+                                # Если достаточно сообщений, запрашиваем новую задачу
+                                if idle_messages_count[role] >= max_idle_messages:
+                                    monitoring_stats["tasks_requested"] += 1
+                                    success = await request_new_task_for_worker(role)
+                                    if success:
+                                        monitoring_stats["successful_requests"] += 1
+                                        idle_messages_count[role] = 0
+                            else:
+                                if role in idle_workers:
+                                    idle_workers.remove(role)
+                                    idle_messages_count[role] = 0
+                                    log_message(
+                                        f"[AI3-Monitor] Работник {role} больше не простаивает"
+                                    )
+                    else:
+                        # Если API не ответил, используем старый метод
+                        raise Exception(f"API вернул статус {response.status}")
+            except Exception as api_error:
+                log_message(
+                    f"[AI3-Monitor] Ошибка при получении статуса через API: {api_error}. Использую старый метод."
+                )
+
+                # Используем старый метод на основе логов
+                # Проверяем логи каждого работника
+                for role in ["executor", "tester", "documenter"]:
+                    log_path = f"logs/ai2_{role}.log"
+                    try:
+                        # Проверяем время последнего изменения лог-файла
+                        if os.path.exists(log_path):
+                            last_modified = os.path.getmtime(log_path)
+                            elapsed_time = current_time - last_modified
+
+                            # Проверяем содержимое последних строк логов на наличие сообщений об отсутствии задач
+                            has_empty_queue = False
+                            with open(log_path, "r", encoding="utf-8") as f:
+                                last_lines = deque(f, 10)  # Читаем последние 10 строк
+                                for line in last_lines:
+                                    if "Очередь для роли" in line and "пуста" in line:
+                                        has_empty_queue = True
+                                        break
+
+                            # Если очередь пуста и прошло достаточно времени
+                            if has_empty_queue and elapsed_time > idle_threshold:
+                                if role not in idle_workers:
+                                    idle_workers.add(role)
+                                    log_message(
+                                        f"[AI3-Monitor] Обнаружен простаивающий работник: {role}, бездействует {elapsed_time:.1f} секунд"
+                                    )
+                                    monitoring_stats["total_idle_detected"] += 1
+
+                                idle_messages_count[role] += 1
+
+                                # Если достигнут порог сообщений, запрашиваем новую задачу
+                                if idle_messages_count[role] >= max_idle_messages:
+                                    monitoring_stats["tasks_requested"] += 1
+                                    success = await request_new_task_for_worker(role)
+                                    if success:
+                                        monitoring_stats["successful_requests"] += 1
+                                        idle_messages_count[role] = (
+                                            0  # Сбрасываем счетчик
+                                        )
+                            else:
+                                if role in idle_workers:
+                                    idle_workers.remove(role)
+                                    idle_messages_count[role] = 0
+                                    log_message(
+                                        f"[AI3-Monitor] Работник {role} больше не простаивает"
+                                    )
+                    except Exception as e:
+                        log_message(
+                            f"[AI3-Monitor] Ошибка при проверке логов работника {role}: {e}"
+                        )
 
             # Отправляем общий отчет, если есть простаивающие работники
             if idle_workers:
                 log_message(
                     f"[AI3-Monitor] Текущие простаивающие работники: {', '.join(idle_workers)}"
                 )
+
+            # Регулярно выводим статистику мониторинга
+            if (
+                sum(monitoring_stats.values()) > 0
+                and current_time % 300 < monitoring_interval
+            ):  # Каждые 5 минут
+                log_message(f"[AI3-Monitor] Статистика мониторинга: {monitoring_stats}")
 
             await asyncio.sleep(monitoring_interval)
         except asyncio.CancelledError:
@@ -613,16 +684,43 @@ async def scan_for_errors_in_logs():
     scan_interval = config.get("error_scan_interval", 30)  # Интервал сканирования логов
     log_message("[AI3-Monitor] Начато сканирование логов на наличие ошибок")
 
-    # Регулярное выражение для поиска ошибок в логах
-    error_pattern = re.compile(
-        r".*(ERROR|CRITICAL|Exception|failed test|test failed).*", re.IGNORECASE
-    )
+    # Улучшенное регулярное выражение для поиска ошибок в логах
+    error_patterns = {
+        # Стандартные ошибки
+        "error": re.compile(
+            r".*(ERROR|CRITICAL|Exception|Error|Failed).*", re.IGNORECASE
+        ),
+        # Ошибки тестирования
+        "test_failure": re.compile(
+            r".*(failed test|test failed|assertion failed|pytest.*failed).*",
+            re.IGNORECASE,
+        ),
+        # Ошибки синтаксиса
+        "syntax_error": re.compile(r".*(SyntaxError|IndentationError|TabError).*"),
+        # Ошибки импорта
+        "import_error": re.compile(r".*(ImportError|ModuleNotFoundError).*"),
+        # Типичные исключения Python
+        "python_exception": re.compile(
+            r".*(TypeError|ValueError|KeyError|IndexError|AttributeError).*"
+        ),
+    }
 
     # Словарь для хранения последних позиций чтения файлов
     file_positions = {}
 
     # Словарь для хранения уже отправленных ошибок, чтобы не дублировать
     reported_errors = {}
+
+    # Статистика обнаруженных ошибок
+    error_stats = {
+        "error": 0,
+        "test_failure": 0,
+        "syntax_error": 0,
+        "import_error": 0,
+        "python_exception": 0,
+        "total_reported": 0,
+        "successfully_fixed": 0,
+    }
 
     while True:
         try:
@@ -650,8 +748,18 @@ async def scan_for_errors_in_logs():
                                     new_content = file.read()
                                     file_positions[log_path] = file.tell()
 
-                                    for line in new_content.splitlines():
-                                        if error_pattern.search(line):
+                                    for line_num, line in enumerate(
+                                        new_content.splitlines(), 1
+                                    ):
+                                        # Проверяем на наличие ошибок по каждому шаблону
+                                        error_type = None
+                                        for err_type, pattern in error_patterns.items():
+                                            if pattern.search(line):
+                                                error_type = err_type
+                                                error_stats[err_type] += 1
+                                                break
+
+                                        if error_type:
                                             # Создаем хеш для этой ошибки, чтобы не дублировать отчеты
                                             error_hash = hash(line)
 
@@ -665,11 +773,12 @@ async def scan_for_errors_in_logs():
                                                 > 3600
                                             ):  # 1 час между повторными отчетами
                                                 log_message(
-                                                    f"[AI3-Monitor] Обнаружена ошибка в {filename}: {line}"
+                                                    f"[AI3-Monitor] Обнаружена ошибка типа {error_type} в {filename}:{line_num}: {line}"
                                                 )
                                                 reported_errors[error_hash] = (
                                                     time.time()
                                                 )
+                                                error_stats["total_reported"] += 1
 
                                                 # Определяем роль из имени файла
                                                 role = None
@@ -680,14 +789,35 @@ async def scan_for_errors_in_logs():
                                                 elif "ai2_documenter" in filename:
                                                     role = "documenter"
 
+                                                # Извлекаем имя файла из строки ошибки, если возможно
+                                                file_pattern = re.search(
+                                                    r'file[s:]?\s+[\'"]?([^\'"\s]+\.(py|js|ts|html|css|json))[\'"]?',
+                                                    line,
+                                                )
+                                                file_info = ""
+                                                if file_pattern:
+                                                    file_info = f", файл: {file_pattern.group(1)}"
+
                                                 # Запрашиваем исправление ошибки
-                                                await request_error_fix(
+                                                success = await request_error_fix(
                                                     line, filename, role
                                                 )
+                                                if success:
+                                                    error_stats[
+                                                        "successfully_fixed"
+                                                    ] += 1
                         except Exception as e:
                             log_message(
                                 f"[AI3-Monitor] Ошибка при чтении лог-файла {log_path}: {e}"
                             )
+
+            # Регулярно выводим статистику обнаруженных ошибок
+            if (
+                sum(error_stats.values()) > 0 and int(time.time()) % 300 < scan_interval
+            ):  # Каждые 5 минут
+                log_message(
+                    f"[AI3-Monitor] Статистика обнаруженных ошибок: {error_stats}"
+                )
 
             await asyncio.sleep(scan_interval)
         except asyncio.CancelledError:
@@ -696,37 +826,6 @@ async def scan_for_errors_in_logs():
         except Exception as e:
             log_message(f"[AI3-Monitor] Ошибка в цикле сканирования: {e}")
             await asyncio.sleep(scan_interval)
-
-
-async def request_error_fix(error_line, log_file, role=None):
-    """
-    Запрашивает задачу на исправление обнаруженной ошибки.
-    """
-    log_message(
-        f"[AI3-Monitor] Запрос исправления ошибки из {log_file}{' для роли '+role if role else ''}"
-    )
-
-    try:
-        session = await get_ai3_api_session()
-        api_url = f"{MCP_API_URL}/request_error_fix"
-
-        payload = {"error_text": error_line, "log_file": log_file, "role": role}
-
-        async with session.post(api_url, json=payload, timeout=30) as resp:
-            response_text = await resp.text()
-            if resp.status == 200:
-                log_message(
-                    f"[AI3-Monitor] Успешно запрошено исправление ошибки. Ответ: {response_text}"
-                )
-                return True
-            else:
-                log_message(
-                    f"[AI3-Monitor] Ошибка запроса исправления. Статус: {resp.status}, Ответ: {response_text}"
-                )
-                return False
-    except Exception as e:
-        log_message(f"[AI3-Monitor] Не удалось запросить исправление ошибки: {e}")
-        return False
 
 
 async def monitor_github_actions():
