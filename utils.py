@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import random  # Added import
+import re
 import time
 from datetime import datetime
 from typing import Any, Dict, Optional
@@ -375,3 +376,22 @@ async def apply_request_delay(ai_identifier: str, role: Optional[str] = None):
         logger.error(
             f"Error applying request delay: {e}"
         )  # Log error but don't block execution
+
+
+def format_code_blocks(text):
+    """
+    Форматує кодові блоки, додаючи пробіл між назвою мови і потрійними зворотними лапками.
+    """
+    # Регулярний вираз для пошуку кодових блоків без пробілу
+    pattern = r"```(\w+)([^\n`])"
+
+    # Замінюємо на правильний формат
+    formatted_text = re.sub(pattern, r"```\1 \2", text)
+    return formatted_text
+
+
+# Приклад використання
+if __name__ == "__main__":
+    example_text = """python```print('Hello')```"""
+    formatted = format_code_blocks(example_text)
+    print(formatted)
