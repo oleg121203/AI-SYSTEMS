@@ -638,6 +638,7 @@ function getChartFontColor() {
 
 // Функції для структури файлів
 function updateFileStructure(structureData) {
+  console.log("Received structure data:", structureData); // Додано логування для діагностики
   const fileStructureDiv = document.getElementById("file-structure");
   if (!fileStructureDiv) {
     console.error("File structure div (#file-structure) not found in DOM!");
@@ -1063,6 +1064,13 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Встановлюємо тему
   setTheme(savedTheme);
+
+  // Додати функцію для розгортання опису
+  document.querySelectorAll(".queue-item li").forEach((item) => {
+    item.addEventListener("click", () => {
+      item.classList.toggle("expanded"); // Додає/знімає клас expanded
+    });
+  });
 
   console.log("Initialization complete");
 });

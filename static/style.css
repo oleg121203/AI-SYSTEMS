@@ -427,6 +427,9 @@ body {
   box-shadow: var(--button-shadow); /* Apply button shadow to list items */
   transition: background-color 0.2s ease, box-shadow 0.2s ease,
     transform 0.2s ease; /* Add transitions */
+  border-bottom: 1px solid var(--border-color);
+  padding-bottom: 10px;
+  margin-bottom: 10px;
 }
 
 .queue-item li:hover {
@@ -475,6 +478,10 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
   flex-grow: 1; /* Take available space */
+  font-weight: bold;
+  font-size: 1.1em;
+  color: var(--primary-color);
+  margin-bottom: 5px; /* Відступ між назвою та описом */
 }
 
 .queue-item li .status-icon {
@@ -489,6 +496,22 @@ body {
   color: var(--secondary-color);
   margin-left: auto; /* Push ID to the right */
   white-space: nowrap;
+}
+
+.queue-item li .task-summary .task-details {
+  font-size: 0.95em;
+  color: var(--secondary-color);
+  background-color: rgba(0, 0, 0, 0.05); /* Легкий фон для розмежування */
+  padding: 8px;
+  border-radius: 4px;
+  margin-top: 5px;
+  word-wrap: break-word; /* Перенесення тексту */
+  white-space: pre-wrap; /* Збереження форматування */
+  display: none; /* За замовчуванням приховано */
+}
+
+.queue-item li.expanded .task-details {
+  display: block; /* Відображення опису при розгортанні */
 }
 
 /* Status colors for queue items */
@@ -597,5 +620,17 @@ body {
   .theme-switcher {
     width: 100%;
     justify-content: center; /* Center theme buttons */
+  }
+  .queue-item li .task-summary {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .queue-item li .task-summary .task-filename {
+    font-size: 1em;
+  }
+
+  .queue-item li .task-summary .task-details {
+    font-size: 0.9em;
   }
 }
