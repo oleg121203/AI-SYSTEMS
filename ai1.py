@@ -1003,7 +1003,7 @@ class AI1:
             request_data = {"task_structure": task_structure, "target": self.target}
 
             async with session.post(api_url, json=request_data, timeout=60) as response:
-                if response.status == 200):
+                if response.status == 200:
                     result = await response.json()
                     improved_structure = result.get(
                         "improved_structure", task_structure
@@ -1105,7 +1105,7 @@ class AI1:
             }
 
             async with session.post(api_url, json=request_data, timeout=60) as response:
-                if response.status == 200):
+                if response.status == 200:
                     result = await response.json()
                     improved_subtasks = result.get("improved_subtasks", subtasks)
                     recommendations = result.get("recommendations", [])

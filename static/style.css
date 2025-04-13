@@ -439,15 +439,27 @@ body {
   display: none; /* Hide details by default */
   margin-top: 8px;
   padding-top: 8px;
+  padding-left: 10px; /* Add padding for better alignment */
   border-top: 1px dashed var(--border-color);
   font-size: 0.95em; /* Slightly larger for readability */
   white-space: pre-wrap; /* Preserve formatting */
   word-break: break-word;
   color: var(--secondary-color); /* Dimmer color for details */
+  text-align: left; /* Ensure text aligns to the left */
 }
 
 .queue-item li.expanded .task-details {
   display: block; /* Show details when expanded */
+  animation: fadeIn 0.3s ease-in-out; /* Smooth transition for visibility */
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 .queue-item li .task-summary {
