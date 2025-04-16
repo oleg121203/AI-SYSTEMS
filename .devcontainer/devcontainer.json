@@ -7,15 +7,12 @@
     },
     "ghcr.io/devcontainers/features/docker-in-docker:2": {}
   },
-  "runArgs": ["--add-host=host.docker.internal:host-gateway", "--network=host"],
+  "runArgs": ["--network=bridge"],
   "containerEnv": {
-    "OLLAMA_HOST": "http://localhost:11434",
-    "OLLAMA_API": "http://localhost:11434"
+    "OLLAMA_HOST": "http://host.docker.internal:11434",
+    "OLLAMA_API": "http://host.docker.internal:11434"
   },
-  "mounts": [
-    "source=my-app-data,target=/data,type=volume",
-    "source=${localWorkspaceFolder},target=/home/dev/vscode/AI-SYSTEMS,type=bind,consistency=cached"
-  ],
+  "mounts": ["source=my-app-data,target=/data,type=volume"],
   "customizations": {
     "vscode": {
       "extensions": [
@@ -66,5 +63,5 @@
     }
   },
   "postCreateCommand": "pip install --upgrade pip && pip install -r \"${containerWorkspaceFolder}/requirements.txt\" && if [ -f \"${containerWorkspaceFolder}/package.json\" ]; then cd \"${containerWorkspaceFolder}\" && npm install; else echo 'No package.json found, skipping npm install'; fi && git config --global user.name \"Oleg Kizyma\" && git config --global user.email \"oleg1203@gmail.com\" && echo 'Git user configured successfully'",
-  "workspaceFolder": "/home/dev/vscode/AI-SYSTEMS"
+  "workspaceFolder": "/workspaces/AI-SYSTEMS"
 }
