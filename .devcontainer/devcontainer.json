@@ -2,19 +2,37 @@
   "name": "Python & Node.js Development",
   "image": "mcr.microsoft.com/devcontainers/python:1-3.12",
   "features": {
+    "ghcr.io/devcontainers/features/java:1": {
+      "version": "17",
+      "installMaven": "false",
+      "installGradle": "false"
+    },
     "ghcr.io/devcontainers/features/node:1": {
       "version": "lts"
     },
-    "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {},
+    "ghcr.io/devcontainers/features/rust:1": {},
+    "ghcr.io/devcontainers/features/go:1": {}
   },
-  "runArgs": ["--network=bridge"],
+  "runArgs": [
+    "--add-host=host.docker.internal:host-gateway",
+    "--network=bridge"
+  ],
   "containerEnv": {
     "OLLAMA_HOST": "http://host.docker.internal:11434",
-    "OLLAMA_API": "http://host.docker.internal:11434"
+    "TZ": "Europe/Kyiv" // Змініть, якщо потрібно
+    // JAVA_HOME видалено, оскільки встановлюється функцією Java
   },
-  "mounts": ["source=my-app-data,target=/data,type=volume"],
+  "mounts": [
+    "source=my-app-data,target=/data,type=volume",
+    "source=${localEnv:HOME}/.ssh,target=/home/vscode/.ssh,type=bind,consistency=cached,readonly"
+  ],
   "customizations": {
     "vscode": {
+      "settings": {
+        "sonarlint.ls.javaHome": "${env:JAVA_HOME}",
+        "java.home": "${env:JAVA_HOME}"
+      },
       "extensions": [
         "ms-python.python",
         "ms-python.black-formatter",
@@ -24,6 +42,7 @@
         "njpwerner.autodocstring",
         "ms-toolsai.jupyter",
         "ms-python.debugpy",
+        "ms-python.pytest",
         "dbaeumer.vscode-eslint",
         "esbenp.prettier-vscode",
         "vscjava.vscode-java-pack",
@@ -36,19 +55,26 @@
         "ms-azuretools.vscode-docker",
         "GitHub.copilot",
         "GitHub.copilot-chat",
-        "batisteo.vscode-django",
-        "openai.openai-chatgpt-adhoc",
+        "GitHub.copilot-labs",
+        "GitHub.copilot-labs-experiments",
         "donjayamanne.python-environment-manager",
-        "donjayamanne.python-extension-manager"
+        "foxundermoon.shell-format",
+        "timonwong.shellcheck",
+        "yzhang.markdown-all-in-one",
+        "redhat.vscode-yaml",
+        "golang.go",
+        "rust-lang.rust-analyzer",
+        "editorconfig.editorconfig",
+        "DavidAnson.vscode-markdownlint",
+        "SonarSource.sonarlint-vscode",
+        "ciiqr.note",
+        "GitHub.vscode-github-actions"
       ]
     }
   },
-  "forwardPorts": [9000, 3000, 7860, 11434],
+  "forwardPorts": [3000, 7860, 11434],
   "portsAttributes": {
-    "9000": {
-      "label": "Hello Remote World",
-      "onAutoForward": "notify"
-    },
+    // Видалено атрибути для порту 9000
     "3000": {
       "label": "Node.js Application",
       "onAutoForward": "notify"
@@ -62,6 +88,6 @@
       "onAutoForward": "notify"
     }
   },
-  "postCreateCommand": "pip install --upgrade pip && pip install -r \"${containerWorkspaceFolder}/requirements.txt\" && if [ -f \"${containerWorkspaceFolder}/package.json\" ]; then cd \"${containerWorkspaceFolder}\" && npm install; else echo 'No package.json found, skipping npm install'; fi && git config --global user.name \"Oleg Kizyma\" && git config --global user.email \"oleg1203@gmail.com\" && echo 'Git user configured successfully'",
+  "postCreateCommand": "chmod +x /workspaces/AI-SYSTEMS/setup.sh && /workspaces/AI-SYSTEMS/setup.sh", // Переконайтеся в ідемпотентності setup.sh
   "workspaceFolder": "/workspaces/AI-SYSTEMS"
 }
