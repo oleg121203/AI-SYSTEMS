@@ -92,17 +92,21 @@ function connectWebSocket() {
           break;
         case "specific_update": // Handle targeted updates
           console.log("Processing specific_update:", data); // Log specific updates
+          // Update queues first if present, as stats calculation might depend on it
           if (data.queues) {
-            updateQueues(data.queues);
+            updateQueues(data.queues); // This already calls updateStats
           }
           if (data.subtasks) {
             // Update only specific subtask statuses
             Object.assign(subtask_status, data.subtasks); // Merge updates
-            updateStatsFromSubtasks(subtask_status); // Recalculate stats
+            // Recalculate stats using the updated subtask_status and potentially updated queues
+            // Pass data.queues if available, otherwise updateStats will try to get counts from DOM
+            updateStats(subtask_status, data.queues); // CORRECTED FUNCTION CALL
           }
           if (data.structure) {
             updateFileStructure(data.structure);
           }
+          // Update charts separately if specific chart data is received
           if (data.processed_over_time) {
             console.log(
               "Specific update: Updating charts with processed_over_time"
@@ -117,6 +121,7 @@ function connectWebSocket() {
               task_status_distribution: data.task_status_distribution,
             });
           }
+          // Handle log lines within specific updates too
           if (data.log_line && logContent) {
             const logEntry = document.createElement("p");
             logEntry.textContent = data.log_line;
