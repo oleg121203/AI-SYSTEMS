@@ -857,10 +857,6 @@ async def broadcast_full_status():
             },
             "subtasks": subtask_status,
             "structure": current_structure,
-            "progress": {  # Placeholder
-                "stages": ["Stage 1", "Stage 2", "Stage 3"],
-                "values": [30, 60, 10],
-            },
             "processed_over_time": list(processed_history),
             "task_status_distribution": status_counts  # Add aggregated data
         }

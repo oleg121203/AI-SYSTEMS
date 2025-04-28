@@ -55,22 +55,17 @@ function connectWebSocket() {
   ws.onmessage = function (event) {
     try {
       const data = JSON.parse(event.data);
-      console.log("Received data:", data); // Debugging
+      console.log("WebSocket received data:", data); // Log all received data
 
       // --- Route message based on type ---
       switch (data.type) {
-        case "initial_status": // Initial full status
-          ws.send(JSON.stringify({ action: "get_full_status" }));
-          showNotification(
-            "Connected to server, requesting full status...",
-            "info"
-          );
-          break;
         case "full_status_update": // Periodic full status
+          console.log("Processing full_status_update");
           updateFullUI(data);
           break;
         case "status_update": // Just AI on/off status
           if (data.ai_status) {
+            console.log("Processing status_update (AI status only)");
             updateAllButtonStates(data.ai_status);
           }
           break;
@@ -97,7 +92,7 @@ function connectWebSocket() {
           }
           break;
         case "specific_update": // Handle targeted updates
-          console.log("Handling specific update:", data);
+          console.log("Processing specific_update:", data); // Log specific updates
           if (data.queues) {
             updateQueues(data.queues);
           }
@@ -110,9 +105,15 @@ function connectWebSocket() {
             updateFileStructure(data.structure);
           }
           if (data.processed_over_time) {
+            console.log(
+              "Specific update: Updating charts with processed_over_time"
+            ); // Log chart update trigger
             updateCharts({ processed_over_time: data.processed_over_time }); // Update specific chart data
           }
           if (data.task_status_distribution) {
+            console.log(
+              "Specific update: Updating charts with task_status_distribution"
+            ); // Log chart update trigger
             updateCharts({
               task_status_distribution: data.task_status_distribution,
             });
@@ -205,10 +206,14 @@ function updateFullUI(data) {
     updateStatsLegacy(data);
   }
 
+  console.log("Calling updateCharts from updateFullUI"); // Log chart update trigger
   updateCharts(data); // Pass the whole data object
 
   if (data.structure) {
+    console.log("Calling updateFileStructure from updateFullUI"); // Log structure update trigger
     updateFileStructure(data.structure);
+  } else {
+    console.warn("updateFullUI: No structure data received."); // Warn if structure is missing
   }
 }
 
@@ -313,6 +318,7 @@ function getStatusIcon(status) {
 }
 
 function updateCharts(data) {
+  console.log("updateCharts called with data:", data); // Log data passed to updateCharts
   // Task Distribution Chart (Bar)
   if (!taskChart) {
     const ctx = document.getElementById("taskChart")?.getContext("2d");
@@ -354,6 +360,7 @@ function updateCharts(data) {
   }
   // Update task chart data if available (using queue sizes)
   if (taskChart && data.queues) {
+    console.log("Updating taskChart data:", data.queues); // Log task chart update
     taskChart.data.datasets[0].data = [
       (data.queues.executor || []).length,
       (data.queues.tester || []).length,
@@ -450,6 +457,7 @@ function updateCharts(data) {
     }
   }
   if (gitChart && data.processed_over_time) {
+    console.log("Updating gitChart data:", data.processed_over_time); // Log git chart update
     gitChart.data.labels = data.processed_over_time.map((_, i) => `T${i + 1}`);
     gitChart.data.datasets[0].data = data.processed_over_time;
     gitChart.options.scales.y.ticks.color = getChartFontColor();
@@ -509,6 +517,7 @@ function updateCharts(data) {
   }
   // Update pie chart data if available
   if (statusPieChart && data.task_status_distribution) {
+    console.log("Updating statusPieChart data:", data.task_status_distribution); // Log pie chart update
     const dist = data.task_status_distribution;
     statusPieChart.data.datasets[0].data = [
       dist.pending || 0,
@@ -532,7 +541,11 @@ function getChartFontColor() {
 
 function updateFileStructure(structureData) {
   const fileStructureDiv = document.getElementById("file-structure");
-  if (!fileStructureDiv) return;
+  if (!fileStructureDiv) {
+    console.error("File structure container not found!"); // Error if container missing
+    return;
+  }
+  console.log("updateFileStructure called with data:", structureData); // Log data passed to updateFileStructure
 
   fileStructureDiv.innerHTML = ""; // Clear previous structure
 
