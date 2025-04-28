@@ -1,34 +1,22 @@
 #!/bin/bash
-
-# Script to fully stop all services and then run the regular startup script
+set -e
 
 echo "Stopping all existing MCP services..."
-# Find and kill all related Python processes
-PIDS=$(pgrep -f 'python (mcp_api|ai1|ai2|ai3).py')
-if [ -n "$PIDS" ]; then
-    echo "Killing processes: $PIDS"
-    kill $PIDS
-    sleep 3
-    
-    # Check if any processes are still running and force kill if necessary
-    REMAINING=$(pgrep -f 'python (mcp_api|ai1|ai2|ai3).py')
-    if [ -n "$REMAINING" ]; then
-        echo "Force killing remaining processes: $REMAINING"
-        kill -9 $REMAINING
-    fi
-    echo "All services stopped."
-else
-    echo "No running services found to stop."
-fi
+pkill -f "python3 ai1.py" || echo "No AI1 process found."
+pkill -f "python3 ai2.py" || echo "No AI2 processes found."
+pkill -f "python3 ai3.py" || echo "No AI3 process found."
+pkill -f "python3 mcp_api.py" || echo "No MCP API process found."
 
-# Clean up Python cache files
 echo "Cleaning up Python cache files..."
-find . -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null
+find . -type d -name "__pycache__" -exec rm -rf {} +
+find . -name "*.pyc" -delete
+echo "Python cache files cleaned."
 
-# Clear logs directory
 echo "Clearing logs directory..."
 mkdir -p logs
 rm -f logs/*.log
 
 echo "Starting services using run_async_services.sh..."
-bash ./run_async_services.sh
+./run_async_services.sh
+
+echo "Services restart completed."

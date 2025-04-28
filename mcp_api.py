@@ -21,6 +21,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field, ValidationError
 
 from providers import ProviderFactory  # Добавьте этот импорт, если его нет
+from ai3 import ai3_instance # Import the global instance
 
 load_dotenv()
 
@@ -76,14 +77,25 @@ logger = logging.getLogger(__name__)  # Use specific logger
 
 # Add a handler to send logs via WebSocket
 class WebSocketLogHandler(logging.Handler):
-    async def emit(self, record):
+    def emit(self, record):
+        # Використовуємо синхронну версію, щоб уникнути RuntimeWarning
         log_entry = self.format(record)
-        await broadcast_specific_update({"log_line": log_entry})
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # Якщо цикл подій запущений, створюємо завдання
+                asyncio.create_task(broadcast_specific_update({"log_line": log_entry}))
+            else:
+                # Якщо цикл не запущений, просто логуємо без відправки
+                pass  # Можна просто мовчки ігнорувати в цьому випадку
+        except Exception:
+            # Тихо ігноруємо помилки при логуванні
+            pass
 
 # Configure the handler (do this after basicConfig)
 ws_log_handler = WebSocketLogHandler()
 ws_log_handler.setLevel(logging.INFO)  # Set desired level for WebSocket logs
-formatter = logging.Formatter('%(asctime)s - %(levellevelname)s - %(message)s')  # Simpler format for UI
+formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')  # Simpler format for UI - FIX: levelname instead of levellevel
 ws_log_handler.setFormatter(formatter)
 logging.getLogger().addHandler(ws_log_handler)  # Add to root logger
 
@@ -909,6 +921,19 @@ async def clear_state():
     return {"status": "state cleared"}
 
 
+@app.post("/clear_repo")
+async def clear_repo():
+    """Очищає та ініціалізує Git репозиторій."""
+    try:
+        await ai3_instance.clear_and_init_repo()
+        await broadcast_specific_update({"message": "Repository cleared and re-initialized.", "log_line": "[API] Repository clear requested and executed."})
+        return {"status": "Repository cleared and re-initialized."}
+    except Exception as e:
+        logger.error(f"Error during repository clear: {e}")
+        await broadcast_specific_update({"error": f"Failed to clear repository: {e}"})
+        raise HTTPException(status_code=500, detail=f"Failed to clear repository: {e}")
+
+
 async def broadcast_full_status():
     """Broadcasts detailed status to all connected clients."""
     if active_connections:
@@ -967,7 +992,8 @@ async def broadcast_full_status():
         logger.info(
             f"Broadcasting full status update: {state_data}"
         )  # Log full status for debugging
-        for connection in active_connections:
+        # Iterate over a copy of the set to avoid RuntimeError
+        for connection in list(active_connections):
             try:
                 await connection.send_json(state_data)
             except WebSocketDisconnect:

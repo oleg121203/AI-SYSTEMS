@@ -1282,6 +1282,28 @@ async function saveConfig() {
   }
 }
 
+async function clearRepo() {
+  if (
+    confirm(
+      "Are you sure you want to clear the entire repository? This will delete all files and commit history!"
+    )
+  ) {
+    showNotification("Clearing repository...", "info");
+    try {
+      const response = await sendRequest("/clear_repo", "POST");
+      showNotification(
+        response.status || "Repository cleared and re-initialized.",
+        "success"
+      );
+      // Optionally, refresh file structure or other UI elements
+      fetchAndUpdateStructure(); // Assuming this function exists to refresh the file tree
+    } catch (error) {
+      // Error already shown by sendRequest
+      showNotification("Failed to clear repository.", "error");
+    }
+  }
+}
+
 // --- Initialization ---
 document.addEventListener("DOMContentLoaded", () => {
   console.log("DOM fully loaded and parsed");

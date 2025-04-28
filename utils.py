@@ -2,10 +2,12 @@ import asyncio
 import json
 import logging
 import os
-import random  # Added import
+import random
 import time
 from datetime import datetime
 from typing import Any, Dict, Optional
+# Додаємо імпорт для ротації логів
+from logging.handlers import RotatingFileHandler
 
 import aiohttp
 
@@ -13,32 +15,86 @@ import aiohttp
 import json_log_formatter
 from dotenv import load_dotenv
 
-formatter = json_log_formatter.JSONFormatter()
-handler = logging.FileHandler("logs/mcp.log")
-handler.setFormatter(formatter)
-logger = logging.getLogger()
-logger.setLevel(logging.INFO)
-logger.addHandler(handler)
-
+# Вантажимо змінні середовища
 load_dotenv()
 
+formatter = json_log_formatter.JSONFormatter()
 
+# --- Налаштування для ротації логів ---
+LOG_DIR = "logs"
+os.makedirs(LOG_DIR, exist_ok=True) # Переконуємося, що директорія існує
+LOG_FILE_PATH = os.path.join(LOG_DIR, "mcp.log") # Основний лог файл
+MAX_LOG_SIZE_MB = 10 # Максимальний розмір одного файлу логів у МБ
+BACKUP_COUNT = 5 # Кількість архівних файлів логів
+
+# Використовуємо RotatingFileHandler замість FileHandler
+handler = RotatingFileHandler(
+    LOG_FILE_PATH,
+    maxBytes=MAX_LOG_SIZE_MB * 1024 * 1024, # Переводимо МБ в байти
+    backupCount=BACKUP_COUNT,
+    encoding='utf-8' # Додаємо кодування
+)
+handler.setFormatter(formatter)
+
+# Налаштовуємо кореневий логер
+logger = logging.getLogger()
+# Перевіряємо, чи вже є обробники, щоб уникнути дублювання
+if not logger.hasHandlers():
+    logger.setLevel(logging.INFO)
+    logger.addHandler(handler)
+    # Додаємо також вивід у консоль для зручності
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+# --- Кінець змін для ротації логів ---
+
+# Функція log_message тепер буде використовувати налаштований logger
 def log_message(message: str):
-    """Логирование сообщения в консоль и файл"""
+    """Логирование сообщения с использованием настроенного логгера"""
+    # Використовуємо стандартний logging замість ручного запису
     timestamp = datetime.now().isoformat()
     log_data = {"message": message, "time": timestamp}
-    log_json = json.dumps(log_data)
+    logger.info(log_data)
 
-    # Выводим в консоль
-    print(log_json)
-
-    # Записываем в файл лога
-    log_file = os.environ.get("LOG_FILE", "logs/mcp.log")
-    os.makedirs(os.path.dirname(log_file), exist_ok=True)
-
-    with open(log_file, "a", encoding="utf-8") as f:
-        f.write(f"{log_json}\n")
-
+# Створюємо окремі логери для кожного AI сервісу з їх власною ротацією
+def setup_service_logger(service_name):
+    """
+    Створює і налаштовує логер для конкретного сервісу з ротацією файлів логів.
+    
+    Args:
+        service_name: Ім'я сервісу (ai1, ai2_executor, ai2_tester і т.д.)
+    
+    Returns:
+        logging.Logger: Налаштований логер
+    """
+    log_path = os.path.join(LOG_DIR, f"{service_name}.log")
+    service_logger = logging.getLogger(service_name)
+    
+    # Очищаємо існуючі обробники, щоб уникнути дублікатів при перезавантаженні
+    if service_logger.handlers:
+        for handler in service_logger.handlers:
+            service_logger.removeHandler(handler)
+    
+    # Налаштовуємо рівень логування
+    service_logger.setLevel(logging.INFO)
+    service_logger.propagate = False  # Запобігаємо дублюванню логів у батьківському логері
+    
+    # Створюємо RotatingFileHandler для цього сервісу
+    file_handler = RotatingFileHandler(
+        log_path,
+        maxBytes=MAX_LOG_SIZE_MB * 1024 * 1024,
+        backupCount=BACKUP_COUNT,
+        encoding='utf-8'
+    )
+    file_handler.setFormatter(formatter)
+    service_logger.addHandler(file_handler)
+    
+    # Додаємо також консольний вивід
+    console = logging.StreamHandler()
+    console.setFormatter(formatter)
+    service_logger.addHandler(console)
+    
+    return service_logger
 
 def load_config(config_file="config.json"):
     """Завантажує конфігурацію з файлу, замінюючи змінні оточення."""
