@@ -48,7 +48,7 @@ body[data-theme="dark"] {
   /* Dark Orange/Autumn */
   --bg-color: #211d1a;
   --container-bg: #302a27;
-  --text-color: #e6dbc B;
+  --text-color: #e6dbcb;
   --heading-color: #f07f2e;
   --border-color: #4a403a;
   --primary-color: #f07f2e;
@@ -75,12 +75,12 @@ body[data-theme="dark"] {
   /* Light Yellow/Summer */
   --bg-color: #fffde7;
   --container-bg: #ffffff;
-  --text-color: #f57f17;
-  --heading-color: #f9a825;
+  --text-color: #7d4200; /* Темніший коричневий замість світлого помаранчевого для кращої контрастності */
+  --heading-color: #e65100; /* Темніший помаранчевий для заголовків */
   --border-color: #fff59d;
-  --primary-color: #ffca28;
-  --secondary-color: #ffb300;
-  --tertiary-color: #ffa000;
+  --primary-color: #ff8f00; /* Темніший помаранчевий для основного кольору */
+  --secondary-color: #e65100;
+  --tertiary-color: #f57c00;
   --editor-bg: #ffffff;
 }
 

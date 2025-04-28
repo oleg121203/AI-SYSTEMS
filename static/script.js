@@ -652,10 +652,9 @@ async function loadFileContent(path) {
   editor.setValue(`// Loading ${path}...`); // Placeholder content
 
   try {
-    // Ensure path starts with '/' if necessary, or adjust based on backend expectation
-    const safePath = path.startsWith("/") ? path.substring(1) : path; // Remove leading '/' if present, adjust as needed
+    // Використовуємо шлях як є, без видалення початкового слешу
     const response = await fetch(
-      `/file_content?path=${encodeURIComponent(safePath)}`
+      `/file_content?path=${encodeURIComponent(path)}`
     );
 
     if (response.ok) {
