@@ -657,14 +657,13 @@ function getChartFontColor() {
 function updateFileStructure(structureData) {
   const fileStructureDiv = document.getElementById("file-structure");
   if (!fileStructureDiv) {
-    console.error("File structure container not found!"); // Error if container missing
+    console.error("File structure container not found!");
     return;
   }
-  // Log the received structure data for debugging
   console.log(
     "updateFileStructure received data:",
     JSON.stringify(structureData, null, 2)
-  ); // Log the actual data
+  );
 
   fileStructureDiv.innerHTML = ""; // Clear previous structure
 
@@ -673,7 +672,7 @@ function updateFileStructure(structureData) {
     typeof structureData !== "object" ||
     Object.keys(structureData).length === 0
   ) {
-    console.warn("File structure data is empty or invalid:", structureData); // More specific warning
+    console.warn("File structure data is empty or invalid:", structureData);
     fileStructureDiv.innerHTML =
       "<p><em>Project structure is empty or unavailable.</em></p>";
     return;
@@ -683,55 +682,82 @@ function updateFileStructure(structureData) {
   fileStructureDiv.appendChild(rootUl);
 
   function renderNode(node, parentUl, currentPath = "") {
-    // Sort entries: folders first, then files, alphabetically
-    const entries = Object.entries(node).sort(
-      ([keyA, valueA], [keyB, valueB]) => {
-        // Ensure valueA and valueB are treated correctly even if null/undefined
+    // --- Add logging here ---
+    console.log(
+      `Rendering node at path: '${currentPath}'. Node type: ${typeof node}`,
+      node
+    );
+    if (typeof node !== "object" || node === null) {
+      console.error(
+        `Invalid node passed to renderNode at path '${currentPath}'. Expected object, got:`,
+        node
+      );
+      const errorLi = document.createElement("li");
+      errorLi.style.color = "red";
+      errorLi.textContent = `Error: Invalid data for ${currentPath || "root"}`;
+      parentUl.appendChild(errorLi);
+      return; // Stop processing this invalid node
+    }
+    // --- End logging ---
+
+    let entries;
+    try {
+      entries = Object.entries(node).sort(([keyA, valueA], [keyB, valueB]) => {
         const isDirA = typeof valueA === "object" && valueA !== null;
         const isDirB = typeof valueB === "object" && valueB !== null;
         if (isDirA !== isDirB) {
           return isDirA ? -1 : 1; // Folders first
         }
-        // Ensure keys are strings before comparing
         return String(keyA).localeCompare(String(keyB)); // Then alphabetical
-      }
-    );
+      });
+      console.log(
+        `Sorted entries for path '${currentPath}':`,
+        entries.map((e) => e[0])
+      ); // Log sorted keys
+    } catch (sortError) {
+      console.error(
+        `Error sorting entries for node at path '${currentPath}':`,
+        sortError,
+        "Node:",
+        node
+      );
+      const errorLi = document.createElement("li");
+      errorLi.style.color = "red";
+      errorLi.textContent = `Error sorting items in ${currentPath || "root"}`;
+      parentUl.appendChild(errorLi);
+      return; // Stop processing this node if sorting fails
+    }
 
     for (const [key, value] of entries) {
+      const li = document.createElement("li"); // Create li outside try block
+      parentUl.appendChild(li); // Append li outside try block
+
       try {
-        // Add try...catch around each item processing
-        const li = document.createElement("li");
-        parentUl.appendChild(li);
-        // Check if value is an object (and not null) to determine if it's a directory
+        // --- Add logging inside try ---
+        console.log(
+          `Processing entry: Key='${key}', Type='${typeof value}', Path='${currentPath}'`
+        );
+        // ---
+
         const isDirectory = typeof value === "object" && value !== null;
-        // Build path carefully, ensuring key is treated as string
         const itemPath = currentPath
           ? `${currentPath}/${String(key)}`
           : String(key);
 
         if (isDirectory) {
-          // It's a directory
+          console.log(`Rendering folder: ${itemPath}`);
           li.innerHTML = `<span class="folder"><i class="fas fa-folder"></i> ${String(
             key
           )}</span>`;
           li.classList.add("folder-item");
           const subUl = document.createElement("ul");
           li.appendChild(subUl);
-          // Recurse only if the directory is not empty
-          if (Object.keys(value).length > 0) {
-            renderNode(value, subUl, itemPath); // Recurse
-          } else {
-            // Optionally add a placeholder for empty folders
-            // subUl.innerHTML = "<li><em>(empty)</em></li>";
-          }
 
-          // Toggle expansion on click
           const folderSpan = li.querySelector(".folder");
           if (folderSpan) {
-            // Check if element exists before adding listener
             folderSpan.addEventListener("click", (e) => {
               li.classList.toggle("expanded");
-              e.stopPropagation(); // Prevent event bubbling
+              e.stopPropagation();
             });
           } else {
             console.warn(
@@ -739,19 +765,30 @@ function updateFileStructure(structureData) {
               li.innerHTML
             );
           }
+
+          // Recurse only if the directory is not empty
+          if (Object.keys(value).length > 0) {
+            console.log(`Recursing into folder: ${itemPath}`);
+            renderNode(value, subUl, itemPath); // Recurse
+          } else {
+            console.log(`Folder is empty: ${itemPath}`);
+            // Optionally add a placeholder for empty folders
+            // subUl.innerHTML = "<li><em>(empty)</em></li>";
+          }
         } else {
-          // It's a file (value is null, string, or other non-object type)
-          li.innerHTML = `<span class="file" data-path="${itemPath}"><i class="fas ${getFileIcon(
-            String(key) // Ensure key is string for icon lookup
-          )}"></i> ${String(key)}</span>`;
-          // Add click listener to load file content
+          // It's a file
+          console.log(`Rendering file: ${itemPath}`);
+          const iconClass = getFileIcon(String(key));
+          console.log(`Icon for ${key}: ${iconClass}`); // Log icon class
+          li.innerHTML = `<span class="file" data-path="${itemPath}"><i class="fas ${iconClass}"></i> ${String(
+            key
+          )}</span>`;
+
           const fileSpan = li.querySelector(".file");
           if (fileSpan) {
-            // Check if element exists
             fileSpan.addEventListener("click", (e) => {
               const path = e.currentTarget.getAttribute("data-path");
               if (path) {
-                // Check if path attribute exists
                 loadFileContent(path);
               } else {
                 console.error(
@@ -769,29 +806,160 @@ function updateFileStructure(structureData) {
           }
         }
       } catch (error) {
+        // Log the specific error and the item being processed
         console.error(
-          `Error rendering node key "${key}" at path "${currentPath}":`,
+          `Error rendering node entry: Key='${key}', Path='${currentPath}', ValueType='${typeof value}':`,
           error,
-          "Node value:",
+          "Value:",
           value
         );
-        // Optionally add an error message to the UI for this specific node
-        const errorLi = document.createElement("li");
-        errorLi.style.color = "red";
-        errorLi.textContent = `Error rendering ${key}`;
-        parentUl.appendChild(errorLi);
+        // Update the existing li with error message instead of adding a new one
+        li.style.color = "red";
+        li.textContent = `Error rendering ${key}`; // Keep the original error message format
       }
     }
   }
 
   try {
-    // Wrap the initial call in try...catch as well
+    console.log("Starting initial renderNode call for root.");
     renderNode(structureData, rootUl);
     console.log("File structure rendering completed.");
   } catch (error) {
     console.error("Error during initial call to renderNode:", error);
     fileStructureDiv.innerHTML =
-      "<p><em>Error rendering file structure. Check console.</em></p>";
+      "<p><em>Error rendering file structure. Check browser console for details.</em></p>"; // Update message
+  }
+}
+
+// Need to also define getFileIcon if it's not already defined correctly
+function getFileIcon(fileName) {
+  // Ensure fileName is treated as a string
+  const nameStr = String(fileName);
+  // Handle files starting with '.' like .gitignore
+  const ext = nameStr.includes(".")
+    ? nameStr.split(".").pop().toLowerCase()
+    : "";
+  const baseName = nameStr.toLowerCase();
+
+  // Prioritize specific names (FontAwesome 6 Free icons)
+  // Note: Some brand icons (like fa-python, fa-js) might require FontAwesome Pro or specific setup.
+  // Using generic icons for broader compatibility first.
+  if (baseName === ".gitignore" || baseName === ".gitattributes")
+    return "fa-code-branch"; // Git icon
+  if (baseName === "dockerfile") return "fa-box-open"; // Generic box icon for Docker
+  if (baseName === "makefile") return "fa-file-code";
+
+  switch (ext) {
+    // Code files
+    case "py":
+      return "fa-file-code"; // Generic code
+    case "js":
+      return "fa-file-code"; // Generic code
+    case "html":
+      return "fa-file-code";
+    case "css":
+      return "fa-file-code"; // fa-css3-alt exists but might need setup
+    case "json":
+      return "fa-file-code";
+    case "md":
+      return "fa-file-lines"; // Text file icon
+    case "ts":
+      return "fa-file-code";
+    case "java":
+      return "fa-file-code";
+    case "c":
+    case "h":
+      return "fa-file-code";
+    case "cpp":
+    case "hpp":
+      return "fa-file-code";
+    case "cs":
+      return "fa-file-code";
+    case "go":
+      return "fa-file-code";
+    case "php":
+      return "fa-file-code";
+    case "rb":
+      return "fa-file-code"; // fa-gem exists but might need setup
+    case "swift":
+      return "fa-file-code";
+    case "xml":
+      return "fa-file-code";
+    case "yaml":
+    case "yml":
+      return "fa-file-alt"; // Use alt text file icon
+    case "sh":
+    case "bash":
+    case "zsh":
+      return "fa-terminal";
+    case "sql":
+      return "fa-database";
+
+    // Text/Data files
+    case "txt":
+      return "fa-file-alt";
+    case "log":
+      return "fa-file-alt";
+    case "csv":
+      return "fa-file-csv";
+    case "tsv":
+      return "fa-file-csv"; // Use same icon as CSV
+
+    // Image files
+    case "png":
+    case "jpg":
+    case "jpeg":
+    case "gif":
+    case "bmp":
+    case "ico":
+    case "svg":
+      return "fa-file-image";
+
+    // Audio files
+    case "mp3":
+    case "wav":
+    case "ogg":
+    case "flac":
+    case "aac":
+      return "fa-file-audio";
+
+    // Video files
+    case "mp4":
+    case "avi":
+    case "mov":
+    case "wmv":
+    case "mkv":
+      return "fa-file-video";
+
+    // Document files
+    case "pdf":
+      return "fa-file-pdf";
+    case "doc":
+    case "docx":
+      return "fa-file-word";
+    case "xls":
+    case "xlsx":
+      return "fa-file-excel";
+    case "ppt":
+    case "pptx":
+      return "fa-file-powerpoint";
+
+    // Archive files
+    case "zip":
+    case "rar":
+    case "7z":
+    case "tar":
+    case "gz":
+      return "fa-file-archive";
+
+    // Other
+    case "db":
+    case "sqlite":
+      return "fa-database";
+
+    // Default
+    default:
+      return "fa-file"; // Default file icon
   }
 }
 
