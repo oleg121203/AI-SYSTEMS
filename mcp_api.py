@@ -64,7 +64,7 @@ except Exception as e:
 
 
 # --- Logging Setup ---
-log_file_path = config.get("log_file", "logs/app.log")
+log_file_path = config.get("log_file", "logs/mcp.log")
 os.makedirs(
     os.path.dirname(log_file_path), exist_ok=True
 )  # Ensure log directory exists
@@ -232,6 +232,14 @@ async def broadcast_specific_update(update_data: dict):
                 await connection.send_json(message)
             except WebSocketDisconnect:
                 disconnected_clients.add(connection)
+            except RuntimeError as e:
+                # Обробка помилки "Cannot call "send" once a close message has been sent"
+                if "once a close message has been sent" in str(e):
+                    logger.warning(f"Connection already closing: {e}. Removing from active connections.")
+                    disconnected_clients.add(connection)
+                else:
+                    logger.error(f"RuntimeError sending update to {connection.client}: {e}")
+                    disconnected_clients.add(connection)
             except Exception as e:
                 logger.error(f"Error sending specific update to {connection.client}: {e}")
                 disconnected_clients.add(connection)
@@ -989,10 +997,9 @@ async def broadcast_full_status():
             "processed_over_time": list(processed_history),
             "task_status_distribution": status_counts  # Add aggregated data
         }
-        logger.info(
-            f"Broadcasting full status update: {state_data}"
-        )  # Log full status for debugging
+        
         # Iterate over a copy of the set to avoid RuntimeError
+        disconnected_clients = set()
         for connection in list(active_connections):
             try:
                 await connection.send_json(state_data)
@@ -1000,11 +1007,22 @@ async def broadcast_full_status():
                 logger.info(
                     f"Client {connection.client} disconnected during broadcast."
                 )
-                active_connections.discard(
-                    connection
-                )  # Remove disconnected client immediately
+                disconnected_clients.add(connection)
+            except RuntimeError as e:
+                # Обробка помилки "Cannot call "send" once a close message has been sent"
+                if "once a close message has been sent" in str(e):
+                    logger.warning(f"Connection already closing: {e}. Removing from active connections.")
+                    disconnected_clients.add(connection)
+                else:
+                    logger.error(f"RuntimeError sending status to {connection.client}: {e}")
+                    disconnected_clients.add(connection)
             except Exception as e:
                 logger.error(f"Error sending status to {connection.client}: {e}")
+                disconnected_clients.add(connection)
+                
+        # Видаляємо від'єднані клієнти після закінчення циклу
+        for client in disconnected_clients:
+            active_connections.discard(client)
 
 
 @app.websocket("/ws")

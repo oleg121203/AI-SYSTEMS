@@ -25,7 +25,7 @@
   "ai_config": {
     "ai1": {
       "provider": "gemini-pro2.5",
-      "model": "gemini-2.5-pro-exp-03-25",
+      "model": "gemini-2.5-pro-preview-03-25",
       "max_tokens": 4096,
       "temperature": 0.7
     },
@@ -66,7 +66,7 @@
     },
     "gemini-pro2.5": {
       "type": "gemini",
-      "model": "gemini-2.5-pro-exp-03-25"
+      "model": "gemini-2.5-pro-preview-03-25"
     },
     "cohere": {
       "type": "cohere",
@@ -91,22 +91,26 @@
     "openrouter": {
       "type": "openrouter",
       "endpoint": "https://openrouter.ai/api/v1",
-      "model": "anthropic/claude-3-opus"
+      "model": "anthropic/claude-3-opus",
+      "max_tokens": 1024
     },
     "openrouter-qwen": {
       "type": "openrouter",
       "endpoint": "https://openrouter.ai/api/v1",
-      "model": "qwen/qwen-2.5-coder-32b-instruct"
+      "model": "qwen/qwen-2.5-coder-32b-instruct",
+      "max_tokens": 1024
     },
     "openrouter-qwen-2": {
       "type": "openrouter",
       "endpoint": "https://openrouter.ai/api/v1",
-      "model": "anthropic/claude-3-sonnet"
+      "model": "anthropic/claude-3-sonnet",
+      "max_tokens": 1024
     },
     "openrouter-gemini": {
       "type": "openrouter",
       "endpoint": "https://openrouter.ai/api/v1",
-      "model": "google/gemini-pro-1.5"
+      "model": "google/gemini-pro-1.5",
+      "max_tokens": 1024
     }
   },
   "request_delays": {

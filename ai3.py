@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)  # Use logger correctly
 config = load_config()
 MCP_API_URL = config.get("mcp_api", "http://localhost:7860")
 REPO_DIR = config.get("repo_dir", "repo")
-LOG_FILE_PATH = config.get("log_file", "logs/mcp.log")  # Still needed for general logs
+LOG_FILE_PATH = "logs/mcp_api.log"  # Змінюємо шлях до лог-файлу MCP API
 
 
 def _init_or_open_repo(repo_path: str) -> Repo:

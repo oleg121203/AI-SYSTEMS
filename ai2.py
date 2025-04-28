@@ -185,142 +185,106 @@ class AI2:
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
     ) -> str:
-        """Пытается сгенерировать ответ, используя основной провайдер роли, и последовательно пробует fallback провайдеры при ошибке."""
+        """Пытается сгенерировать ответ, используя основной провайдер роли и пробует все доступные провайдеры по кругу."""
         provider_config = self.providers_config.get(self.role, {})
         provider_name = provider_config.get("name", "N/A")
         primary_provider = None
         
-        # Пробуем основной провайдер
-        try:
-            primary_provider = await self._get_provider_instance()
-            logger.info(
-                f"Попытка генерации с основным провайдером '{primary_provider.name}' для роли '{self.role}'."
-            )
-            result = await primary_provider.generate(
-                prompt=user_prompt,
-                system_prompt=system_prompt,
-                model=model or provider_config.get("model"),
-                max_tokens=max_tokens or self.ai_config.get("max_tokens"),
-                temperature=temperature or self.ai_config.get("temperature"),
-            )
-            if isinstance(result, str) and result.startswith("Ошибка генерации"):
-                raise Exception(
-                    f"Primary provider '{primary_provider.name}' failed: {result}"
+        # Собираем полный список провайдеров, начиная с основного и добавляя все фолбек провайдеры
+        all_providers = [provider_name]
+        # Добавим фолбеки, которых нет в списке
+        for fallback in self.fallback_providers:
+            if fallback not in all_providers:
+                all_providers.append(fallback)
+        
+        logger.info(f"Попытка генерации с использованием провайдеров (по порядку): {', '.join(all_providers)}")
+        
+        all_errors = []
+        # Перебираем все провайдеры по очереди
+        for provider_idx, current_provider_name in enumerate(all_providers):
+            current_provider = None
+            try:
+                logger.info(
+                    f"Попытка генерации с провайдером [{provider_idx+1}/{len(all_providers)}] '{current_provider_name}'."
                 )
-            
-            # Закрываем сессию основного провайдера после успешного использования
-            if (
-                primary_provider
-                and hasattr(primary_provider, "close_session")
-                and callable(primary_provider.close_session)
-            ):
-                await primary_provider.close_session()
                 
-            return result
+                # Получаем конфиг для текущего провайдера
+                current_config_base = self.config.get("providers", {}).get(
+                    current_provider_name, {}
+                )
+                current_config = {
+                    **current_config_base,
+                    **{
+                        k: v
+                        for k, v in self.ai_config.items()
+                        if k
+                        not in [
+                            "executor",
+                            "tester",
+                            "documenter",
+                            "provider",
+                            "fallback_providers",
+                        ]
+                    },
+                }
 
-        except Exception as primary_error:
-            # Логируем ошибку основного провайдера
-            primary_provider_name_for_log = (
-                primary_provider.name if primary_provider else provider_name
-            )
-            logger.error(
-                f"Ошибка генерации с основным провайдером '{primary_provider_name_for_log}' для роли '{self.role}': {primary_error}"
-            )
-            
-            # Закрываем сессию основного провайдера при ошибке
-            if (
-                primary_provider
-                and hasattr(primary_provider, "close_session")
-                and callable(primary_provider.close_session)
-            ):
-                await primary_provider.close_session()
-            
-            # Последовательно пробуем каждый из fallback провайдеров
-            all_errors = [f"Primary provider '{primary_provider_name_for_log}' failed: {primary_error}"]
-            
-            for fallback_index, fallback_provider_name in enumerate(self.fallback_providers):
-                fallback_provider = None
-                try:
-                    logger.info(
-                        f"Попытка генерации с fallback провайдером [{fallback_index+1}/{len(self.fallback_providers)}] '{fallback_provider_name}'."
-                    )
-                    
-                    # Получаем конфиг для fallback провайдера
-                    fallback_config_base = self.config.get("providers", {}).get(
-                        fallback_provider_name, {}
-                    )
-                    fallback_config = {
-                        **fallback_config_base,
-                        **{
-                            k: v
-                            for k, v in self.ai_config.items()
-                            if k
-                            not in [
-                                "executor",
-                                "tester",
-                                "documenter",
-                                "provider",
-                                "fallback_providers",
-                            ]
-                        },
-                    }
+                # Создаем экземпляр провайдера
+                current_provider = ProviderFactory.create_provider(
+                    current_provider_name, current_config
+                )
 
-                    # Создаем экземпляр fallback провайдера
-                    fallback_provider = ProviderFactory.create_provider(
-                        fallback_provider_name
-                    )
-
-                    # Добавляем задержку, чтобы не перегружать API
+                # Добавляем задержку, чтобы не перегружать API (только не для первого основного провайдера)
+                if provider_idx > 0:
                     await apply_request_delay("ai2", self.role)
 
-                    # Генерируем с fallback провайдером
-                    result = await fallback_provider.generate(
-                        prompt=user_prompt,
-                        system_prompt=system_prompt,
-                        model=model
-                        or fallback_config.get("model")
-                        or self.ai_config.get("model"),
-                        max_tokens=max_tokens or self.ai_config.get("max_tokens"),
-                        temperature=temperature or self.ai_config.get("temperature"),
+                # Генерируем с текущим провайдером
+                result = await current_provider.generate(
+                    prompt=user_prompt,
+                    system_prompt=system_prompt,
+                    model=model
+                    or current_config.get("model")
+                    or self.ai_config.get("model"),
+                    max_tokens=max_tokens or self.ai_config.get("max_tokens"),
+                    temperature=temperature or self.ai_config.get("temperature"),
+                )
+                
+                # Проверяем на ошибку генерации
+                if isinstance(result, str) and result.startswith("Ошибка генерации"):
+                    raise Exception(
+                        f"Provider '{current_provider_name}' failed: {result}"
                     )
+                
+                # Закрываем сессию после успешного использования
+                if (
+                    current_provider
+                    and hasattr(current_provider, "close_session")
+                    and callable(current_provider.close_session)
+                ):
+                    await current_provider.close_session()
                     
-                    # Проверяем на ошибку генерации
-                    if isinstance(result, str) and result.startswith("Ошибка генерации"):
-                        raise Exception(
-                            f"Fallback provider '{fallback_provider_name}' failed: {result}"
-                        )
-                    
-                    # Закрываем сессию после успешного использования
-                    if (
-                        fallback_provider
-                        and hasattr(fallback_provider, "close_session")
-                        and callable(fallback_provider.close_session)
-                    ):
-                        await fallback_provider.close_session()
-                        
-                    # Возвращаем результат от успешного fallback провайдера
-                    logger.info(f"Успешно сгенерировано с fallback провайдером '{fallback_provider_name}'")
-                    return result
+                # Возвращаем результат от успешного провайдера
+                logger.info(f"Успешно сгенерировано с провайдером '{current_provider_name}'")
+                return result
 
-                except Exception as fallback_error:
-                    # Логируем ошибку fallback провайдера
-                    logger.error(
-                        f"Ошибка генерации с fallback провайдером '{fallback_provider_name}': {fallback_error}"
-                    )
-                    all_errors.append(f"Fallback provider '{fallback_provider_name}' failed: {fallback_error}")
-                    
-                    # Закрываем сессию fallback провайдера при ошибке
-                    if (
-                        fallback_provider
-                        and hasattr(fallback_provider, "close_session")
-                        and callable(fallback_provider.close_session)
-                    ):
-                        await fallback_provider.close_session()
-            
-            # Если все fallback провайдеры не сработали, возвращаем информацию о всех ошибках
-            error_msg = "Не удалось сгенерировать ответ ни основным, ни fallback провайдерами:\n- " + "\n- ".join(all_errors)
-            logger.error(error_msg)
-            return error_msg
+            except Exception as provider_error:
+                # Логируем ошибку провайдера
+                logger.error(
+                    f"Ошибка генерации с провайдером '{current_provider_name}': {provider_error}"
+                )
+                all_errors.append(f"Provider '{current_provider_name}' failed: {provider_error}")
+                
+                # Закрываем сессию провайдера при ошибке
+                if (
+                    current_provider
+                    and hasattr(current_provider, "close_session")
+                    and callable(current_provider.close_session)
+                ):
+                    await current_provider.close_session()
+        
+        # Если все провайдеры не сработали, возвращаем информацию о всех ошибках
+        error_msg = "Не удалось сгенерировать ответ ни одним из доступных провайдеров:\n- " + "\n- ".join(all_errors)
+        logger.error(error_msg)
+        return error_msg
 
     async def generate_code(self, task: str, filename: str) -> str:
         """Генерация кода на основе описания задачи."""
