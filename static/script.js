@@ -1,4 +1,3 @@
-// filepath: /workspaces/vscode-remote-try-python/static/script.js
 let taskChart, progressChart, gitChart, editor, statusPieChart;
 let ws;
 const reconnectInterval = 5000; // Reconnect interval 5 seconds
@@ -195,15 +194,51 @@ function updateFullUI(data) {
   if (data.ai_status) {
     updateAllButtonStates(data.ai_status);
   }
+  // Ensure queues are updated *before* stats if both are present
   if (data.queues) {
     updateQueues(data.queues);
   }
   // Update stats based on subtask statuses if available
   if (data.subtasks) {
+    const receivedSubtasksCount = Object.keys(data.subtasks).length;
+    const globalStatusCountBefore = Object.keys(subtask_status).length;
+    console.log(
+      `[Stats Update] Received ${receivedSubtasksCount} task statuses. Global count before merge: ${globalStatusCountBefore}`
+    );
+
     Object.assign(subtask_status, data.subtasks); // Merge all statuses
-    updateStatsFromSubtasks(subtask_status);
+
+    const globalStatusCountAfter = Object.keys(subtask_status).length;
+    console.log(
+      `[Stats Update] Global count after merge: ${globalStatusCountAfter}`
+    );
+
+    // Pass both subtask status and queue data (if available) for the new calculation
+    updateStats(subtask_status, data.queues);
   } else if (data.processed !== undefined && data.efficiency !== undefined) {
+    // Fallback if only legacy stats are available
+    console.log("[Stats Update] Using legacy stats update.");
     updateStatsLegacy(data);
+  } else if (data.queues) {
+    // If only queues updated, still recalculate stats
+    console.log("[Stats Update] Queues updated, recalculating stats.");
+    updateStats(subtask_status, data.queues);
+  } else {
+    // If no relevant data, update stats with current known state
+    console.log(
+      "[Stats Update] No relevant data in message, updating stats from current global state."
+    );
+    // Need current queue counts for the new calculation. Get them from the DOM.
+    const currentQueuesData = {
+      executor: Array(parseInt(queueCounts.executor?.textContent || "0")).fill(
+        {}
+      ), // Dummy array of correct length
+      tester: Array(parseInt(queueCounts.tester?.textContent || "0")).fill({}),
+      documenter: Array(
+        parseInt(queueCounts.documenter?.textContent || "0")
+      ).fill({}),
+    };
+    updateStats(subtask_status, currentQueuesData);
   }
 
   console.log("Calling updateCharts from updateFullUI"); // Log chart update trigger
@@ -213,22 +248,52 @@ function updateFullUI(data) {
     console.log("Calling updateFileStructure from updateFullUI"); // Log structure update trigger
     updateFileStructure(data.structure);
   } else {
-    console.warn("updateFullUI: No structure data received."); // Warn if structure is missing
+    // console.warn("updateFullUI: No structure data received."); // Less noisy warning
   }
 }
 
-function updateStatsFromSubtasks(subtasks) {
-  const total = Object.keys(subtasks).length;
-  const completed = Object.values(subtasks).filter(
+// Renamed function to reflect its purpose better
+function updateStats(current_subtask_statuses, current_queues_data) {
+  // Calculate completed tasks from the status object
+  const completed = Object.values(current_subtask_statuses).filter(
     (status) =>
       status === "accepted" ||
       status === "completed" ||
-      status === "code_received" // Consider these as completed for stats
+      status === "code_received"
   ).length;
-  const efficiency = total > 0 ? ((completed / total) * 100).toFixed(1) : 0;
+
+  // Calculate tasks currently in queues
+  let tasksInQueues = 0;
+  if (current_queues_data) {
+    tasksInQueues =
+      (current_queues_data.executor || []).length +
+      (current_queues_data.tester || []).length +
+      (current_queues_data.documenter || []).length;
+  } else {
+    // Fallback: read counts from DOM if queue data not passed
+    tasksInQueues =
+      parseInt(queueCounts.executor?.textContent || "0", 10) +
+      parseInt(queueCounts.tester?.textContent || "0", 10) +
+      parseInt(queueCounts.documenter?.textContent || "0", 10);
+  }
+
+  // New calculation for Total Tasks
+  const total = completed + tasksInQueues;
+
+  // Calculate efficiency based on the number of tasks we have status for
+  const knownTasksCount = Object.keys(current_subtask_statuses).length;
+  const efficiency =
+    knownTasksCount > 0 ? ((completed / knownTasksCount) * 100).toFixed(1) : 0;
+  // Note: Efficiency is now calculated based on known completed tasks vs total known tasks (not the new 'total')
+  // This might be more meaningful than comparing completed to (completed + in_queues).
+
+  console.log(
+    `[Stats Update] Calculated - Completed: ${completed}, In Queues: ${tasksInQueues}, New Total: ${total}, Efficiency (based on ${knownTasksCount} known): ${efficiency}%`
+  );
 
   if (statElements.total) statElements.total.textContent = total;
   if (statElements.completed) statElements.completed.textContent = completed;
+  // Keep efficiency calculation based on known task statuses for now
   if (statElements.efficiency)
     statElements.efficiency.textContent = `${efficiency}%`;
 }
@@ -244,60 +309,105 @@ function updateStatsLegacy(data) {
 }
 
 function updateQueues(queuesData) {
+  let queuesChanged = false; // Flag to check if queue data actually changed
+
   ["executor", "tester", "documenter"].forEach((role) => {
     const ul = queueLists[role];
     const countSpan = queueCounts[role];
     if (!ul || !countSpan) return; // Skip if elements not found
 
-    ul.innerHTML = ""; // Clear existing list
     const tasks = queuesData[role] || [];
-    countSpan.textContent = tasks.length; // Update count
+    const currentCount = parseInt(countSpan.textContent || "0", 10);
 
-    tasks.forEach((task) => {
-      if (!task || !task.id || !task.text) {
-        console.warn("Skipping invalid task object in queue:", task);
-        return;
-      }
-      const li = document.createElement("li");
-      const status = task.status || subtask_status[task.id] || "unknown"; // Get status from task or global state
-      li.setAttribute("data-status", status);
+    // Check if the count or task list structure might change
+    // Optimization: Only redraw list if counts differ significantly or structure changes
+    if (
+      tasks.length !== currentCount ||
+      ul.children.length !== tasks.length /* Add more checks if needed */
+    ) {
+      queuesChanged = true;
+      ul.innerHTML = ""; // Clear existing list only if needed
+      countSpan.textContent = tasks.length; // Update count
 
-      // --- Summary Row ---
-      const summaryDiv = document.createElement("div");
-      summaryDiv.className = "task-summary";
+      tasks.forEach((task) => {
+        if (!task || !task.id || !task.text) {
+          console.warn("Skipping invalid task object in queue:", task);
+          return;
+        }
+        const li = document.createElement("li");
+        // Use 'pending' as a default if no status is known yet
+        const status = task.status || subtask_status[task.id] || "pending";
+        li.setAttribute("data-status", status);
 
-      const statusIcon = document.createElement("span");
-      statusIcon.className = "status-icon";
-      statusIcon.innerHTML = getStatusIcon(status);
+        // --- Summary Row ---
+        const summaryDiv = document.createElement("div");
+        summaryDiv.className = "task-summary";
 
-      const taskFilename = document.createElement("span");
-      taskFilename.className = "task-filename";
-      taskFilename.textContent =
-        task.filename || `Task ${task.id.substring(0, 8)}`; // Show filename or short ID
+        const statusIcon = document.createElement("span");
+        statusIcon.className = "status-icon";
+        statusIcon.innerHTML = getStatusIcon(status);
 
-      const taskIdSpan = document.createElement("span");
-      taskIdSpan.className = "task-id";
-      taskIdSpan.textContent = `(ID: ${task.id.substring(0, 8)})`;
+        const taskFilename = document.createElement("span");
+        taskFilename.className = "task-filename";
+        taskFilename.textContent =
+          task.filename || `Task ${task.id.substring(0, 8)}`; // Show filename or short ID
 
-      summaryDiv.appendChild(statusIcon);
-      summaryDiv.appendChild(taskFilename);
-      summaryDiv.appendChild(taskIdSpan);
-      li.appendChild(summaryDiv);
+        const taskIdSpan = document.createElement("span");
+        taskIdSpan.className = "task-id";
+        taskIdSpan.textContent = `(ID: ${task.id.substring(0, 8)})`;
 
-      // --- Details Div (Hidden) ---
-      const detailsDiv = document.createElement("div");
-      detailsDiv.className = "task-details";
-      detailsDiv.textContent = task.text; // Full text here
-      li.appendChild(detailsDiv);
+        summaryDiv.appendChild(statusIcon);
+        summaryDiv.appendChild(taskFilename);
+        summaryDiv.appendChild(taskIdSpan);
+        li.appendChild(summaryDiv);
 
-      // --- Click Listener for Expansion ---
-      li.addEventListener("click", () => {
-        li.classList.toggle("expanded");
+        // --- Details Div (Hidden) ---
+        const detailsDiv = document.createElement("div");
+        detailsDiv.className = "task-details";
+        detailsDiv.textContent = task.text; // Full text here
+        li.appendChild(detailsDiv);
+
+        // --- Click Listener for Expansion ---
+        li.addEventListener("click", () => {
+          li.classList.toggle("expanded");
+        });
+
+        ul.appendChild(li);
       });
-
-      ul.appendChild(li);
-    });
+    } else {
+      // Optimization: If count is the same, just update statuses if needed
+      Array.from(ul.children).forEach((li, index) => {
+        const task = tasks[index];
+        if (!task || !task.id) return;
+        const newStatus = task.status || subtask_status[task.id] || "pending";
+        const currentStatus = li.getAttribute("data-status");
+        if (newStatus !== currentStatus) {
+          li.setAttribute("data-status", newStatus);
+          const iconSpan = li.querySelector(".status-icon");
+          if (iconSpan) iconSpan.innerHTML = getStatusIcon(newStatus);
+          queuesChanged = true; // Mark as changed if status updated
+        }
+      });
+    }
   });
+
+  // Update stats using the new function, passing current queue data and global subtask status
+  updateStats(subtask_status, queuesData);
+
+  // Update the task distribution chart if it exists and queues changed
+  if (taskChart && queuesChanged) {
+    console.log("Updating taskChart data due to queue changes:", queuesData);
+    taskChart.data.datasets[0].data = [
+      (queuesData.executor || []).length,
+      (queuesData.tester || []).length,
+      (queuesData.documenter || []).length,
+    ];
+    // Ensure colors are correct for the current theme
+    taskChart.options.scales.y.ticks.color = getChartFontColor();
+    taskChart.options.scales.x.ticks.color = getChartFontColor();
+    taskChart.options.plugins.legend.labels.color = getChartFontColor();
+    taskChart.update(); // Explicitly update the chart visualization
+  }
 }
 
 function getStatusIcon(status) {
