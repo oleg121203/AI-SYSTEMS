@@ -32,7 +32,7 @@
       "executor": "gemini-pro2.5",
       "tester": "groq",
       "documenter": "groq",
-      "fallback_provider": "openrouter-qwen",
+      "fallback_providers": ["openrouter-qwen", "groq", "ollama"],
       "max_tokens": 4096,
       "temperature": 0.4
     },
