@@ -376,8 +376,8 @@ body {
   border-radius: 3px;
   font-size: 0.85em;
   border: 1px solid transparent;
-  display: flex;
-  align-items: center;
+  display: flex; /* Keep flex */
+  flex-direction: column; /* Add this to stack summary and details vertically */
   gap: 5px;
   background-color: var(--container-bg); /* Background for items */
   border: 1px solid var(--border-color);
