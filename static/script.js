@@ -660,11 +660,20 @@ function updateFileStructure(structureData) {
     console.error("File structure container not found!"); // Error if container missing
     return;
   }
-  console.log("updateFileStructure called with data:", structureData); // Log data passed to updateFileStructure
+  // Log the received structure data for debugging
+  console.log(
+    "updateFileStructure received data:",
+    JSON.stringify(structureData, null, 2)
+  ); // Log the actual data
 
   fileStructureDiv.innerHTML = ""; // Clear previous structure
 
-  if (!structureData || Object.keys(structureData).length === 0) {
+  if (
+    !structureData ||
+    typeof structureData !== "object" ||
+    Object.keys(structureData).length === 0
+  ) {
+    console.warn("File structure data is empty or invalid:", structureData); // More specific warning
     fileStructureDiv.innerHTML =
       "<p><em>Project structure is empty or unavailable.</em></p>";
     return;
@@ -677,84 +686,112 @@ function updateFileStructure(structureData) {
     // Sort entries: folders first, then files, alphabetically
     const entries = Object.entries(node).sort(
       ([keyA, valueA], [keyB, valueB]) => {
+        // Ensure valueA and valueB are treated correctly even if null/undefined
         const isDirA = typeof valueA === "object" && valueA !== null;
         const isDirB = typeof valueB === "object" && valueB !== null;
         if (isDirA !== isDirB) {
           return isDirA ? -1 : 1; // Folders first
         }
-        return keyA.localeCompare(keyB); // Then alphabetical
+        // Ensure keys are strings before comparing
+        return String(keyA).localeCompare(String(keyB)); // Then alphabetical
       }
     );
 
     for (const [key, value] of entries) {
-      const li = document.createElement("li");
-      parentUl.appendChild(li);
-      const isDirectory =
-        typeof value === "object" &&
-        value !== null &&
-        Object.keys(value).length >= 0; // Treat empty objects as folders too
-      const itemPath = currentPath ? `${currentPath}/${key}` : key; // Build path
+      try {
+        // Add try...catch around each item processing
+        const li = document.createElement("li");
+        parentUl.appendChild(li);
+        // Check if value is an object (and not null) to determine if it's a directory
+        const isDirectory = typeof value === "object" && value !== null;
+        // Build path carefully, ensuring key is treated as string
+        const itemPath = currentPath
+          ? `${currentPath}/${String(key)}`
+          : String(key);
 
-      if (isDirectory) {
-        li.innerHTML = `<span class="folder"><i class="fas fa-folder"></i> ${key}</span>`;
-        li.classList.add("folder-item");
-        const subUl = document.createElement("ul");
-        li.appendChild(subUl);
-        renderNode(value, subUl, itemPath); // Recurse
+        if (isDirectory) {
+          // It's a directory
+          li.innerHTML = `<span class="folder"><i class="fas fa-folder"></i> ${String(
+            key
+          )}</span>`;
+          li.classList.add("folder-item");
+          const subUl = document.createElement("ul");
+          li.appendChild(subUl);
+          // Recurse only if the directory is not empty
+          if (Object.keys(value).length > 0) {
+            renderNode(value, subUl, itemPath); // Recurse
+          } else {
+            // Optionally add a placeholder for empty folders
+            // subUl.innerHTML = "<li><em>(empty)</em></li>";
+          }
 
-        // Toggle expansion on click
-        li.querySelector(".folder").addEventListener("click", (e) => {
-          li.classList.toggle("expanded");
-          e.stopPropagation(); // Prevent event bubbling
-        });
-      } else {
-        // It's a file (or should be treated as one)
-        li.innerHTML = `<span class="file" data-path="${itemPath}"><i class="fas ${getFileIcon(
-          key
-        )}"></i> ${key}</span>`;
-        // Add click listener to load file content
-        li.querySelector(".file").addEventListener("click", (e) => {
-          const path = e.currentTarget.getAttribute("data-path");
-          loadFileContent(path);
-          e.stopPropagation();
-        });
+          // Toggle expansion on click
+          const folderSpan = li.querySelector(".folder");
+          if (folderSpan) {
+            // Check if element exists before adding listener
+            folderSpan.addEventListener("click", (e) => {
+              li.classList.toggle("expanded");
+              e.stopPropagation(); // Prevent event bubbling
+            });
+          } else {
+            console.warn(
+              "Could not find .folder span for event listener in:",
+              li.innerHTML
+            );
+          }
+        } else {
+          // It's a file (value is null, string, or other non-object type)
+          li.innerHTML = `<span class="file" data-path="${itemPath}"><i class="fas ${getFileIcon(
+            String(key) // Ensure key is string for icon lookup
+          )}"></i> ${String(key)}</span>`;
+          // Add click listener to load file content
+          const fileSpan = li.querySelector(".file");
+          if (fileSpan) {
+            // Check if element exists
+            fileSpan.addEventListener("click", (e) => {
+              const path = e.currentTarget.getAttribute("data-path");
+              if (path) {
+                // Check if path attribute exists
+                loadFileContent(path);
+              } else {
+                console.error(
+                  "File span clicked, but data-path attribute is missing:",
+                  e.currentTarget
+                );
+              }
+              e.stopPropagation();
+            });
+          } else {
+            console.warn(
+              "Could not find .file span for event listener in:",
+              li.innerHTML
+            );
+          }
+        }
+      } catch (error) {
+        console.error(
+          `Error rendering node key "${key}" at path "${currentPath}":`,
+          error,
+          "Node value:",
+          value
+        );
+        // Optionally add an error message to the UI for this specific node
+        const errorLi = document.createElement("li");
+        errorLi.style.color = "red";
+        errorLi.textContent = `Error rendering ${key}`;
+        parentUl.appendChild(errorLi);
       }
     }
   }
 
-  renderNode(structureData, rootUl);
-  console.log("File structure rendering completed");
-}
-
-function getFileIcon(filename) {
-  const ext = filename.split(".").pop().toLowerCase();
-  switch (ext) {
-    case "py":
-      return "fa-python fab"; // Use Font Awesome Brands for Python
-    case "js":
-      return "fa-js fab";
-    case "html":
-      return "fa-html5 fab";
-    case "css":
-      return "fa-css3-alt fab";
-    case "json":
-      return "fa-file-code"; // Generic code icon
-    case "md":
-      return "fa-markdown fab";
-    case "txt":
-      return "fa-file-alt";
-    case "png":
-    case "jpg":
-    case "jpeg":
-    case "gif":
-    case "svg":
-      return "fa-file-image";
-    case "dockerfile":
-      return "fa-docker fab";
-    case "gitignore":
-      return "fa-git-alt fab";
-    default:
-      return "fa-file"; // Default file icon
+  try {
+    // Wrap the initial call in try...catch as well
+    renderNode(structureData, rootUl);
+    console.log("File structure rendering completed.");
+  } catch (error) {
+    console.error("Error during initial call to renderNode:", error);
+    fileStructureDiv.innerHTML =
+      "<p><em>Error rendering file structure. Check console.</em></p>";
   }
 }
 
