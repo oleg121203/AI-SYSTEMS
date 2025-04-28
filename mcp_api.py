@@ -83,7 +83,7 @@ class WebSocketLogHandler(logging.Handler):
 # Configure the handler (do this after basicConfig)
 ws_log_handler = WebSocketLogHandler()
 ws_log_handler.setLevel(logging.INFO)  # Set desired level for WebSocket logs
-formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')  # Simpler format for UI
+formatter = logging.Formatter('%(asctime)s - %(levellevelname)s - %(message)s')  # Simpler format for UI
 ws_log_handler.setFormatter(formatter)
 logging.getLogger().addHandler(ws_log_handler)  # Add to root logger
 
@@ -359,7 +359,7 @@ else:
 # --- API Endpoints ---
 
 
-@app.get("/file_content", response_class=PlainTextResponse)
+@app.get("/file_content")
 async def get_file_content(path: str):
     """Gets the content of a file within the repository."""
     logger.debug(f"Request to get file content for path: {path}")
@@ -368,7 +368,7 @@ async def get_file_content(path: str):
         raise HTTPException(status_code=403, detail="Access denied: Unsafe path")
 
     file_path = repo_path / path
-    logger.debug(f"Attempting to read file at absolute path: {file_path}")
+    logger.debug(f"Attempting to read file content for: {file_path}")
 
     try:
         if not file_path.exists():
@@ -379,19 +379,81 @@ async def get_file_content(path: str):
             logger.warning(f"Path is a directory, not a file: {file_path}")
             raise HTTPException(status_code=400, detail="Path is a directory")
 
-        # Read file content
-        content = file_path.read_text(encoding="utf-8")
-        logger.debug(f"Successfully read file: {file_path}")
-        return content
+        file_ext = file_path.suffix.lower()
+        # More comprehensive list of common binary extensions
+        binary_extensions = [
+            '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.ico', '.tif', '.tiff',
+            '.mp3', '.wav', '.ogg', '.flac', '.aac',
+            '.mp4', '.avi', '.mov', '.wmv', '.mkv',
+            '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+            '.zip', '.rar', '.7z', '.tar', '.gz', '.bz2', '.xz',
+            '.exe', '.dll', '.so', '.dylib', '.app', '.dmg',
+            '.db', '.sqlite', '.mdb', '.accdb',
+            '.pyc', '.pyo', # Python bytecode
+            '.class', # Java bytecode
+            '.o', '.a', # Object files, archives
+            '.woff', '.woff2', '.ttf', '.otf', '.eot' # Fonts
+        ]
+        # Common text extensions/names (including empty for files like .gitignore)
+        text_extensions_or_names = [
+            '', '.txt', '.md', '.py', '.js', '.html', '.css', '.json', '.xml',
+            '.yaml', '.yml', '.ini', '.cfg', '.conf', '.sh', '.bash', '.zsh',
+            '.c', '.h', '.cpp', '.hpp', '.cs', '.java', '.go', '.php', '.rb',
+            '.swift', '.kt', '.kts', '.rs', '.lua', '.pl', '.sql', '.log',
+            '.gitignore', '.gitattributes', '.editorconfig', '.env',
+            '.csv', '.tsv', '.rtf', '.tex', 'makefile', 'dockerfile', # Use lowercase for names
+            'readme' # Common base name
+        ]
 
-    except UnicodeDecodeError:
-        logger.warning(f"Cannot decode file (likely binary): {file_path}")
-        return "File contains binary data and cannot be displayed as text."
+        # Check common names without extension, case-insensitively
+        file_name_lower = file_path.name.lower()
+
+        is_likely_binary = file_ext in binary_extensions
+        is_likely_text = (file_ext in text_extensions_or_names or
+                          file_name_lower in text_extensions_or_names or
+                          any(file_name_lower.startswith(name) for name in ['readme', 'dockerfile', 'makefile']))
+
+
+        if is_likely_binary and not is_likely_text: # Prioritize binary if extension matches and not likely text
+             logger.info(f"Binary file detected by extension: {file_path}")
+             return PlainTextResponse(
+                 content=f"[Binary file: {file_path.name}]\nThis file type cannot be displayed as text.",
+                 media_type="text/plain"
+             )
+
+        # Attempt to read as text (UTF-8 first)
+        try:
+            content = file_path.read_text(encoding="utf-8")
+            logger.debug(f"Successfully read file as UTF-8: {file_path}")
+            return PlainTextResponse(content=content, media_type="text/plain")
+        except UnicodeDecodeError:
+            logger.warning(f"Failed to decode {file_path} as UTF-8. Trying fallback encodings.")
+            try:
+                # Try latin-1 as a common fallback
+                content = file_path.read_text(encoding="latin-1")
+                logger.info(f"Successfully read file {file_path} with latin-1 fallback.")
+                return PlainTextResponse(content=content, media_type="text/plain")
+            except Exception: # Catch potential errors reading with latin-1 too
+                 logger.warning(f"Failed to decode {file_path} with latin-1. Reading bytes with replacement.")
+                 try:
+                     # Last resort: read bytes and decode with replacement characters
+                     content_bytes = file_path.read_bytes()
+                     content = content_bytes.decode("utf-8", errors="replace")
+                     logger.info(f"Read file {file_path} as bytes and decoded with replacement characters.")
+                     return PlainTextResponse(content=content, media_type="text/plain")
+                 except Exception as read_err:
+                     logger.error(f"Failed even reading bytes for {file_path}: {read_err}")
+                     # If even reading bytes fails, report as unreadable
+                     return PlainTextResponse(
+                         content=f"[Unreadable file: {file_path.name}]\nCould not read file content.",
+                         media_type="text/plain"
+                     )
+
     except HTTPException as http_exc:
         # Re-raise known HTTP exceptions
         raise http_exc
     except Exception as e:
-        logger.error(f"Error reading file {file_path}: {e}", exc_info=True)
+        logger.error(f"Error processing file content request for {path}: {e}", exc_info=True)
         raise HTTPException(
             status_code=500, detail=f"Internal server error reading file: {e}"
         )

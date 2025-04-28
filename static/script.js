@@ -804,13 +804,30 @@ async function loadFileContent(path) {
   editor.setValue(`// Loading ${path}...`); // Placeholder content
 
   try {
-    // Використовуємо шлях як є, без видалення початкового слешу
     const response = await fetch(
       `/file_content?path=${encodeURIComponent(path)}`
     );
 
     if (response.ok) {
       const content = await response.text();
+
+      // Перевірка, чи це повідомлення про бінарний файл
+      if (content.startsWith("[Binary file:")) {
+        // Встановлюємо спеціальне повідомлення для бінарних файлів
+        editor.setValue(content);
+
+        // Встановлюємо мову як plaintext для повідомлення про бінарний файл
+        monaco.editor.setModelLanguage(editor.getModel(), "plaintext");
+
+        console.log(`Binary file detected: ${path}`);
+        showNotification(
+          `Файл ${path} є бінарним і не може бути відображений`,
+          "info"
+        );
+        return;
+      }
+
+      // Для текстових файлів - визначаємо мову та встановлюємо вміст
       const fileExt = path.split(".").pop().toLowerCase();
       const language = getMonacoLanguage(fileExt);
 
