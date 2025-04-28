@@ -292,6 +292,18 @@ body {
   flex-shrink: 0; /* Prevent shrinking */
 }
 
+#file-structure > ul {
+  display: block; /* Root list is always visible */
+}
+
+#file-structure li > ul {
+  display: none; /* Hide nested lists by default */
+}
+
+#file-structure li.expanded > ul {
+  display: block; /* Show when parent li is expanded */
+}
+
 #editor {
   border: 1px solid var(--border-color);
   border-radius: 4px;
@@ -327,13 +339,6 @@ body {
 #file-structure .file:hover {
   opacity: 0.8;
 }
-
-#file-structure ul {
-  display: none;
-} /* Hide subfolders by default */
-#file-structure li.expanded > ul {
-  display: block;
-} /* Show when expanded */
 
 /* Queue Panel */
 .queue-list {

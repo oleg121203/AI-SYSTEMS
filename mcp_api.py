@@ -314,6 +314,48 @@ def process_test_results(test_data: Report, subtask_id: str):  # Уточним 
     # ...existing code...
 
 
+def build_directory_structure(start_path):
+    """Build a nested dictionary representing the folder structure at start_path."""
+    if not os.path.exists(start_path):
+        return {}
+    
+    structure = {}
+    
+    try:
+        for item in os.listdir(start_path):
+            # Skip hidden files and directories
+            if item.startswith('.') and item != '.gitignore':
+                continue
+                
+            full_path = os.path.join(start_path, item)
+            
+            # Check if it's a directory
+            if os.path.isdir(full_path):
+                # Recursively scan subdirectories
+                structure[item] = build_directory_structure(full_path)
+            else:
+                # For files, use None to indicate it's a file
+                structure[item] = None
+    except PermissionError:
+        logger.warning(f"Permission denied when scanning directory: {start_path}")
+    except Exception as e:
+        logger.error(f"Error scanning directory {start_path}: {e}")
+    
+    return structure
+
+# Initialize structure from repo directory on startup
+if os.path.exists(repo_path):
+    try:
+        current_structure = build_directory_structure(repo_path)
+        logger.info(f"Initial file structure built from {repo_path}")
+    except Exception as e:
+        logger.error(f"Failed to build initial file structure: {e}")
+        current_structure = {}  # Empty dict as fallback
+else:
+    logger.warning(f"Repository path {repo_path} does not exist, structure will be empty")
+    current_structure = {}
+
+
 # --- API Endpoints ---
 
 
