@@ -1,47 +1,34 @@
 #!/bin/bash
 
-# Stop and remove the existing container
-docker-compose down
+# Script to fully stop all services and then run the regular startup script
 
-# Remove all untagged images
-docker image prune -a -f
-
-# Remove contents of repo and logs directories
-sudo rm -rf /home/vscode/AI-SYSTEMS/repo/*
-sudo rm -rf /home/vscode/AI-SYSTEMS/logs/*
-
-# Remove Python cache files
-find . -name '__pycache__' -type d -exec rm -rf {} +
-
-# Remove the repo directory
-rm -rf repo
-
-# Create the repo directory
-mkdir repo
-
-# Change the ownership of the repo directory to the current user
-sudo chown -R $USER:$USER repo
-
-# Initialize a new Git repository
-git init
-
-# Set global Git user email and name using environment variables if provided,
-# otherwise use default values for automatic initialization on rebuild
-if [ -z "$GIT_USER_EMAIL" ]; then
-  git config --global user.email "oleg1203@gmail.com"
+echo "Stopping all existing MCP services..."
+# Find and kill all related Python processes
+PIDS=$(pgrep -f 'python (mcp_api|ai1|ai2|ai3).py')
+if [ -n "$PIDS" ]; then
+    echo "Killing processes: $PIDS"
+    kill $PIDS
+    sleep 3
+    
+    # Check if any processes are still running and force kill if necessary
+    REMAINING=$(pgrep -f 'python (mcp_api|ai1|ai2|ai3).py')
+    if [ -n "$REMAINING" ]; then
+        echo "Force killing remaining processes: $REMAINING"
+        kill -9 $REMAINING
+    fi
+    echo "All services stopped."
 else
-  git config --global user.email "$GIT_USER_EMAIL"
+    echo "No running services found to stop."
 fi
 
-if [ -z "$GIT_USER_NAME" ]; then
-  git config --global user.name "Oleg Kizyma"
-else
-  git config --global user.name "$GIT_USER_NAME"
-fi
+# Clean up Python cache files
+echo "Cleaning up Python cache files..."
+find . -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null
 
-# Add and commit initial files
-git add .
-git commit -m "Initial commit"
+# Clear logs directory
+echo "Clearing logs directory..."
+mkdir -p logs
+rm -f logs/*.log
 
-# Start the Docker container
-docker-compose up --build
+echo "Starting services using run_async_services.sh..."
+bash ./run_async_services.sh
