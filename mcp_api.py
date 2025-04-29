@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from json_log_formatter import JSONFormatter # Corrected import
 from utils import log_message
+import requests # Додано для repository_dispatch
 # Assuming TestRecommendation is defined in ai3.py
 try:
     from ai3 import TestRecommendation
@@ -1632,3 +1633,161 @@ async def shutdown_event():
         except asyncio.CancelledError:
             pass
         logger.info("Stopped periodic chart updates task")
+
+
+# --- ADDED: Function to send repository_dispatch --- 
+def send_repository_dispatch(commit_sha: Optional[str] = None):
+    """Sends a repository_dispatch event to the main AI-SYSTEMS repo."""
+    # --- CHANGE: Use GITHUB_TOKEN from .env --- 
+    github_token = os.getenv("GITHUB_TOKEN") 
+    if not github_token:
+        logger.warning(f"[MCP API] Environment variable GITHUB_TOKEN not set. Cannot send repository_dispatch.")
+        return
+    # ------------------------------------------
+
+    headers = {
+        "Authorization": f"token {github_token}",
+        "Accept": "application/vnd.github.v3+json",
+        "X-GitHub-Api-Version": "2022-11-28"
+    }
+    dispatch_url = f"https://api.github.com/repos/{GITHUB_MAIN_REPO}/dispatches"
+    event_type = "code-committed-in-repo"
+    payload = {
+        "event_type": event_type,
+        "client_payload": {
+            "repository": "AI-SYSTEMS-REPO", # Можна додати більше деталей
+            "commit_sha": commit_sha or "N/A"
+        }
+    }
+    try:
+        response = requests.post(dispatch_url, headers=headers, json=payload, timeout=15)
+        response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
+        logger.info(f"[MCP API] Sent repository_dispatch event '{event_type}' to {GITHUB_MAIN_REPO} successfully.")
+    except requests.exceptions.RequestException as e:
+        logger.error(f"[MCP API] Failed to send repository_dispatch event '{event_type}' to {GITHUB_MAIN_REPO}: {e}")
+    except Exception as e:
+        logger.error(f"[MCP API] Unexpected error sending repository_dispatch: {e}")
+# -----------------------------------------------------
+
+# --- UPDATED: Commit function to call send_repository_dispatch --- 
+def commit_changes(file_path: str, commit_message: str) -> Optional[str]:
+    """Commits changes for a specific file and returns the commit SHA."""
+    try:
+        repo = Repo(REPO_DIR)
+        # Ensure the file exists relative to the repo root
+        relative_path = os.path.relpath(file_path, REPO_DIR)
+        if not os.path.exists(os.path.join(REPO_DIR, relative_path)):
+             logger.warning(f"[MCP-Git] File not found for commit: {relative_path}")
+             return None
+
+        # Check if the file is tracked and has changes
+        if relative_path in repo.untracked_files or relative_path in [item.a_path for item in repo.index.diff(None)] or repo.is_dirty(path=relative_path):
+            repo.index.add([relative_path])
+            if repo.is_dirty(): # Check again after adding, maybe only untracked
+                commit = repo.index.commit(commit_message)
+                logger.info(f"[MCP-Git] Committed changes for {relative_path}: {commit_message} (SHA: {commit.hexsha})")
+                # --- ADDED CALL --- 
+                send_repository_dispatch(commit.hexsha)
+                # ------------------
+                return commit.hexsha
+            else:
+                logger.info(f"[MCP-Git] No staged changes to commit for {relative_path} after add.")
+                # If there were no staged changes, maybe the latest commit already contains this state
+                try:
+                    latest_commit_sha = repo.head.commit.hexsha
+                    # Optionally, check if the file content matches the last commit version
+                    return latest_commit_sha # Return latest SHA if no new commit needed
+                except Exception:
+                    return None # Should not happen in a valid repo
+        else:
+            logger.info(f"[MCP-Git] No changes detected in {relative_path} to commit.")
+            # Return the latest commit SHA if no changes
+            try:
+                latest_commit_sha = repo.head.commit.hexsha
+                return latest_commit_sha
+            except Exception:
+                 return None # Should not happen in a valid repo
+
+    except GitCommandError as e:
+        logger.error(f"[MCP-Git] Error committing {relative_path}: {e}")
+        return None
+    except Exception as e:
+        logger.error(f"[MCP-Git] Unexpected error during commit for {relative_path}: {e}")
+        return None
+# ----------------------------------------------------------------
+
+@app.post("/report")
+async def receive_report(report_data: Dict):
+    # ... (existing report handling logic) ...
+    report_type = report_data.get("type")
+    file_path_relative = report_data.get("filename")
+    content = report_data.get("code")
+    task_id = report_data.get("task_id")
+    role = report_data.get("role")
+    status = report_data.get("status", "completed") # Assume completed if not specified
+    error_message = report_data.get("error")
+
+    logger.info(f"[MCP API] Received report for task {task_id} from {role}. Type: {report_type}, Status: {status}")
+
+    # Update task status first
+    if task_id:
+        update_task_status(task_id, status, error_message)
+
+    commit_sha = None # Variable to store commit SHA
+    if report_type == "code" and file_path_relative and content is not None:
+        # Ensure content is string
+        if not isinstance(content, str):
+            content = json.dumps(content, indent=2)
+            
+        # Format code blocks before writing
+        formatted_content = format_code_blocks(content)
+            
+        full_path = os.path.join(REPO_DIR, file_path_relative)
+        try:
+            os.makedirs(os.path.dirname(full_path), exist_ok=True)
+            async with aiofiles.open(full_path, "w", encoding="utf-8") as f:
+                await f.write(formatted_content)
+            logger.info(f"[MCP API] Updated file: {full_path}")
+            # Commit changes after writing the file
+            commit_message = f"{role.capitalize()}: Update {file_path_relative} (Task: {task_id})"
+            # --- UPDATED CALL to get commit_sha --- 
+            commit_sha = commit_changes(full_path, commit_message)
+            # --------------------------------------
+            if commit_sha:
+                 update_task_status(task_id, "committed") # Update status after successful commit
+                 # --- REMOVED send_repository_dispatch here, moved inside commit_changes --- 
+
+            # Auto-create tasks for tester and documenter after executor commits
+            if role == "executor" and commit_sha:
+                logger.info(f"[MCP API] Executor finished task {task_id}. Creating tasks for tester and documenter.")
+                # Create tester task
+                tester_task = create_task_data(
+                    role="tester",
+                    prompt=f"Create pytest tests for the code in {file_path_relative}. Ensure good coverage.",
+                    file_path=file_path_relative,
+                    depends_on=task_id
+                )
+                add_task(tester_task)
+                # Create documenter task
+                doc_task = create_task_data(
+                    role="documenter",
+                    prompt=f"Generate documentation (e.g., docstrings, README section) for the code in {file_path_relative}.",
+                    file_path=file_path_relative,
+                    depends_on=task_id
+                )
+                add_task(doc_task)
+
+        except Exception as e:
+            logger.error(f"[MCP API] Error writing or committing file {full_path}: {e}")
+            update_task_status(task_id, "error", f"Failed to write/commit: {e}")
+
+    # Broadcast update (include commit_sha if available)
+    update_payload = {"task_id": task_id, "status": status, "role": role}
+    if error_message:
+        update_payload["error"] = error_message
+    if commit_sha:
+        update_payload["commit_sha"] = commit_sha # Include SHA in broadcast
+        
+    await manager.broadcast(json.dumps({"type": "status_update", "data": update_payload}))
+
+    return {"message": "Report received successfully"}

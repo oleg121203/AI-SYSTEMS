@@ -1,6 +1,43 @@
+# Core & Web
 fastapi
 uvicorn[standard]
+websockets
+aiohttp
+jinja2
+requests # Для GitHub API
+
+# Async & Files
+aiofiles
+
+# LLM Providers
+google-generativeai
+mistralai==1.6.0
+together==1.3.14
+cohere
+openai
+groq
+ollama
+
+# Git & Repo
+GitPython==3.1.28
+
+# Testing & QA
+pytest==7.1.2
+pylint==2.17.5
+coverage==7.3.2
+junitparser==3.1.2
+
+# Linting & Formatting
 flake8
 black
 isort
+
+# Logging & Config
 python-json-logger
+python-dotenv
+
+# Data & Media Processing (from async reqs)
+pillow==10.4.0
+numpy==1.26.4
+pydub==0.25.1
+sqlalchemy==2.0.31

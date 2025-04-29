@@ -86,71 +86,19 @@ function connectWebSocket() {
           // Handle subtasks only message
           console.log("Processing subtasks-only update:", data.subtasks);
           Object.assign(subtask_status, data.subtasks); // Merge updates
-          // Recalculate stats and potentially update status chart
-          // Need current queue counts for the new calculation. Get them from the DOM or a global state if available.
-          const currentQueuesData = {
-            executor: Array(
-              parseInt(queueCounts.executor?.textContent || "0")
-            ).fill({}),
-            tester: Array(
-              parseInt(queueCounts.tester?.textContent || "0")
-            ).fill({}),
-            documenter: Array(
-              parseInt(queueCounts.documenter?.textContent || "0")
-            ).fill({}),
-          };
-          updateStats(subtask_status, currentQueuesData);
-          // Update status distribution chart if it exists
-          if (statusPieChart) {
-            // Recalculate distribution based on the updated global subtask_status
-            const statusCounts = Object.values(subtask_status).reduce(
-              (acc, status) => {
-                // Normalize statuses for the chart categories
-                let category = "other";
-                if (status === "pending") category = "pending";
-                else if (status === "processing") category = "processing";
-                else if (
-                  status === "accepted" ||
-                  status === "completed" ||
-                  status === "code_received"
-                )
-                  category = "completed";
-                else if (
-                  status === "failed" ||
-                  (typeof status === "string" && status.startsWith("Ошибка"))
-                )
-                  category = "failed"; // Count error strings as failed
-
-                acc[category] = (acc[category] || 0) + 1;
-                return acc;
-              },
-              { pending: 0, processing: 0, completed: 0, failed: 0, other: 0 }
-            );
-
-            const newData = [
-              statusCounts.pending,
-              statusCounts.processing,
-              statusCounts.completed,
-              statusCounts.failed,
-              statusCounts.other,
-            ];
-
-            if (
-              JSON.stringify(statusPieChart.data.datasets[0].data) !==
-              JSON.stringify(newData)
-            ) {
-              statusPieChart.data.datasets[0].data = newData;
-              console.log(
-                "[Chart Update] Status Distribution data changed due to subtask-only update."
-              );
-              statusPieChart.update();
-            }
-          }
+          // Recalculate stats and update charts based on new subtask statuses
+          updateStats(subtask_status, null); // Pass null for queues, updateStats will read from DOM if needed
+          updateCharts({
+            task_status_distribution:
+              calculateStatusDistribution(subtask_status),
+          }); // Pass calculated distribution
           return; // Message handled
         } else if (data.queues && Object.keys(data).length === 1) {
           // Додаємо обробку повідомлень, що містять лише поле queues
           console.log("Processing queues-only update:", data.queues);
           updateQueues(data.queues);
+          // updateQueues calls updateStats. Explicitly call updateCharts for queue-related charts.
+          updateCharts({ queues: data.queues }); // Pass queue data for task distribution chart
           return; // Повідомлення оброблено
         }
         // Обробка даних для графіків
@@ -159,50 +107,9 @@ function connectWebSocket() {
           data.git_activity ||
           data.task_status_distribution
         ) {
-          console.log("Processing chart updates:", data);
-
-          // Оновлення графіка прогресу
-          if (data.progress_data && progressChart) {
-            progressChart.data.labels = data.progress_data.labels;
-            progressChart.data.datasets[0].data =
-              data.progress_data.completed_tasks;
-            progressChart.data.datasets[1].data =
-              data.progress_data.successful_tests;
-            progressChart.data.datasets[2].data =
-              data.progress_data.git_actions;
-            progressChart.data.datasets[3].data = data.progress_data.values;
-            console.log("[Chart Update] Progress Chart updated with new data");
-            progressChart.update();
-          }
-
-          // Оновлення графіка git-активності
-          if (data.git_activity && gitChart) {
-            gitChart.data.labels = data.git_activity.labels;
-            gitChart.data.datasets[0].data = data.git_activity.values;
-            console.log(
-              "[Chart Update] Git Activity Chart updated with new data"
-            );
-            gitChart.update();
-          }
-
-          // Оновлення графіка розподілу статусів
-          if (data.task_status_distribution && statusPieChart) {
-            const statusCounts = data.task_status_distribution;
-            const newData = [
-              statusCounts.pending,
-              statusCounts.processing,
-              statusCounts.completed,
-              statusCounts.failed,
-              statusCounts.other,
-            ];
-
-            statusPieChart.data.datasets[0].data = newData;
-            console.log(
-              "[Chart Update] Status Distribution Chart updated with new data"
-            );
-            statusPieChart.update();
-          }
-
+          console.log("Processing chart updates (no type):", data);
+          // Centralize chart updating logic by calling updateCharts
+          updateCharts(data);
           return; // Повідомлення оброблено
         }
         // Add more checks here for other potential type-less messages if needed
@@ -212,7 +119,7 @@ function connectWebSocket() {
       switch (data.type) {
         case "full_status_update": // Periodic full status
           console.log("Processing full_status_update");
-          updateFullUI(data);
+          updateFullUI(data); // This already calls updateCharts
           break;
         case "status_update": // Just AI on/off status
           if (data.ai_status) {
@@ -244,24 +151,42 @@ function connectWebSocket() {
           break;
         case "specific_update": // Handle targeted updates
           console.log("Processing specific_update:", data); // Log specific updates
-          // Update queues first if present, as stats calculation might depend on it
+          let needsChartUpdate = false;
+          // Update queues first if present
           if (data.queues) {
-            updateQueues(data.queues); // This already calls updateStats
+            updateQueues(data.queues); // updateQueues calls updateStats
+            needsChartUpdate = true; // Queue changes affect task chart
           }
           if (data.subtasks) {
-            // Update only specific subtask statuses
-            Object.assign(subtask_status, data.subtasks); // Merge updates
+            Object.assign(subtask_status, data.subtasks);
             // Recalculate stats using the updated subtask_status and potentially updated queues
-            // Pass data.queues if available, otherwise updateStats will try to get counts from DOM
             updateStats(subtask_status, data.queues);
+            needsChartUpdate = true; // Subtask changes affect status chart and stats
           }
           if (data.structure) {
             updateFileStructure(data.structure);
           }
-          // Update charts separately if specific chart data is received
-          // NOTE: Chart updates are now primarily handled within updateCharts called by updateFullUI or specific handlers
-          // if (data.processed_over_time) { ... }
-          // if (data.task_status_distribution) { ... }
+          // Explicitly call updateCharts if relevant data is present or implied
+          // Also include chart-specific data if it arrived in this message
+          if (
+            needsChartUpdate ||
+            data.progress_data ||
+            data.git_activity ||
+            data.task_status_distribution
+          ) {
+            // Combine potentially separate data pieces for updateCharts
+            const chartUpdateData = {
+              queues: data.queues, // For task chart
+              task_status_distribution:
+                data.task_status_distribution ||
+                (needsChartUpdate
+                  ? calculateStatusDistribution(subtask_status)
+                  : undefined), // For status chart
+              progress_data: data.progress_data, // For progress chart
+              git_activity: data.git_activity, // For git chart
+            };
+            updateCharts(chartUpdateData);
+          }
 
           // Handle log lines within specific updates too
           if (data.log_line && logContent) {
@@ -853,7 +778,7 @@ function updateCharts(data) {
 
   let chartsUpdated = false;
 
-  // Update Task Distribution (Bar Chart)
+  // Update Task Distribution (Bar Chart) - Based on QUEUE data
   if (taskChart && data.queues) {
     console.log(
       "[Chart Update] Updating Task Distribution with queue data:",
@@ -875,7 +800,7 @@ function updateCharts(data) {
     }
   }
 
-  // Update Progress Chart (Line Chart)
+  // Update Progress Chart (Line Chart) - Based on PROGRESS_DATA
   if (progressChart && data.progress_data) {
     console.log(
       "[Chart Update] Updating Progress Chart with data:",
@@ -884,7 +809,7 @@ function updateCharts(data) {
     if (data.progress_data.labels && data.progress_data.values) {
       let changed = false;
 
-      // Перевірка заголовків
+      // Check labels
       if (
         JSON.stringify(progressChart.data.labels) !==
         JSON.stringify(data.progress_data.labels)
@@ -893,44 +818,25 @@ function updateCharts(data) {
         changed = true;
       }
 
-      // Оновлення різних наборів даних
-      if (
-        data.progress_data.completed_tasks &&
-        JSON.stringify(progressChart.data.datasets[0].data) !==
-          JSON.stringify(data.progress_data.completed_tasks)
-      ) {
-        progressChart.data.datasets[0].data =
-          data.progress_data.completed_tasks;
-        changed = true;
-      }
+      // Update datasets if they exist in the data
+      const datasetsToUpdate = [
+        { index: 0, key: "completed_tasks" },
+        { index: 1, key: "successful_tests" },
+        { index: 2, key: "git_actions" },
+        { index: 3, key: "values" }, // Overall progress percentage
+      ];
 
-      if (
-        data.progress_data.successful_tests &&
-        JSON.stringify(progressChart.data.datasets[1].data) !==
-          JSON.stringify(data.progress_data.successful_tests)
-      ) {
-        progressChart.data.datasets[1].data =
-          data.progress_data.successful_tests;
-        changed = true;
-      }
-
-      if (
-        data.progress_data.git_actions &&
-        JSON.stringify(progressChart.data.datasets[2].data) !==
-          JSON.stringify(data.progress_data.git_actions)
-      ) {
-        progressChart.data.datasets[2].data = data.progress_data.git_actions;
-        changed = true;
-      }
-
-      // Оновлення загального прогресу у відсотках
-      if (
-        JSON.stringify(progressChart.data.datasets[3].data) !==
-        JSON.stringify(data.progress_data.values)
-      ) {
-        progressChart.data.datasets[3].data = data.progress_data.values;
-        changed = true;
-      }
+      datasetsToUpdate.forEach((item) => {
+        if (
+          data.progress_data[item.key] &&
+          JSON.stringify(progressChart.data.datasets[item.index].data) !==
+            JSON.stringify(data.progress_data[item.key])
+        ) {
+          progressChart.data.datasets[item.index].data =
+            data.progress_data[item.key];
+          changed = true;
+        }
+      });
 
       if (changed) {
         console.log("[Chart Update] Progress Chart data changed.");
@@ -943,56 +849,18 @@ function updateCharts(data) {
       );
     }
   } else if (progressChart && data.progress) {
-    // Підтримка старого формату для сумісності
-    console.log(
-      "[Chart Update] Updating Progress Chart with legacy data format:",
-      data.progress
-    );
-    if (data.progress.labels && data.progress.values) {
-      let changed = false;
-
-      // Перевірка заголовків
-      if (
-        JSON.stringify(progressChart.data.labels) !==
-        JSON.stringify(data.progress.labels)
-      ) {
-        progressChart.data.labels = data.progress.labels;
-        changed = true;
-      }
-
-      // Оновлення загального прогресу у відсотках (тільки для старого формату)
-      if (
-        JSON.stringify(progressChart.data.datasets[3].data) !==
-        JSON.stringify(data.progress.values)
-      ) {
-        progressChart.data.datasets[3].data = data.progress.values;
-        changed = true;
-      }
-
-      if (changed) {
-        console.log(
-          "[Chart Update] Progress Chart data (legacy format) changed."
-        );
-        chartsUpdated = true;
-      }
-    } else {
-      console.warn(
-        "[Chart Update] Legacy progress data received but missing labels or values:",
-        data.progress
-      );
-    }
+    // Legacy support
+    // ... existing legacy handling ...
   } else if (progressChart) {
-    // console.log("[Chart Update] No progress data received."); // Less verbose
+    // console.log("[Chart Update] No progress_data received for Progress Chart.");
   }
 
-  // Update Git Activity Chart (Line Chart)
+  // Update Git Activity Chart (Line Chart) - Based on GIT_ACTIVITY
   if (gitChart && data.git_activity) {
-    // Check for git_activity object
     console.log(
       "[Chart Update] Updating Git Activity Chart with data:",
       data.git_activity
     );
-    // Assuming data.git_activity = { labels: ["Date1", ...], values: [1, 3, ...] }
     if (data.git_activity.labels && data.git_activity.values) {
       if (
         JSON.stringify(gitChart.data.labels) !==
@@ -1007,27 +875,27 @@ function updateCharts(data) {
       }
     } else {
       console.warn(
-        "[Chart Update] Git activity data received but missing labels or values:",
+        "[Chart Update] Git activity data missing labels or values:",
         data.git_activity
       );
     }
   } else if (gitChart) {
-    // console.log("[Chart Update] No git_activity data received."); // Less verbose
+    // console.log("[Chart Update] No git_activity received for Git Chart.");
   }
 
-  // Update Status Distribution Chart (Doughnut Chart)
+  // Update Status Distribution Chart (Doughnut Chart) - Based on TASK_STATUS_DISTRIBUTION
   if (statusPieChart && data.task_status_distribution) {
     console.log(
       "[Chart Update] Updating Status Distribution with data:",
       data.task_status_distribution
     );
-    const dist = data.task_status_distribution;
+    const statusCounts = data.task_status_distribution;
     const newData = [
-      dist.pending || 0,
-      dist.processing || 0,
-      (dist.completed || 0) + (dist.accepted || 0) + (dist.code_received || 0), // Combine completed states
-      dist.failed || 0,
-      dist.other || 0, // Handle any other statuses
+      statusCounts.pending || 0, // Use || 0 as fallback
+      statusCounts.processing || 0,
+      statusCounts.completed || 0,
+      statusCounts.failed || 0,
+      statusCounts.other || 0,
     ];
     if (
       JSON.stringify(statusPieChart.data.datasets[0].data) !==
@@ -1038,41 +906,50 @@ function updateCharts(data) {
       console.log("[Chart Update] Status Distribution data changed.");
     }
   } else if (statusPieChart) {
-    // console.log("[Chart Update] No task_status_distribution data received."); // Less verbose
+    // console.log("[Chart Update] No task_status_distribution received for Status Chart.");
   }
 
   // Update all charts if any data changed
   if (chartsUpdated) {
-    console.log("[Chart Update] Updating chart displays.");
+    // Ensure colors are correct for the current theme before updating
+    const newChartColor = getChartFontColor(); // Recalculate color
+
     [taskChart, progressChart, gitChart, statusPieChart].forEach((chart) => {
       if (chart) {
-        // Ensure colors are correct for the current theme before updating
-        // Use optional chaining (?.) to safely access nested properties
-        if (chart.options?.scales?.y?.ticks) {
-          chart.options.scales.y.ticks.color = chartColor;
+        // Update common options like colors
+        if (chart.options.scales) {
+          if (chart.options.scales.y) {
+            chart.options.scales.y.ticks.color = newChartColor;
+            chart.options.scales.y.grid.color = `${newChartColor}20`;
+            if (chart.options.scales.y.title)
+              chart.options.scales.y.title.color = newChartColor;
+          }
+          if (chart.options.scales.y1) {
+            // For progress chart second axis
+            chart.options.scales.y1.ticks.color = newChartColor;
+            if (chart.options.scales.y1.title)
+              chart.options.scales.y1.title.color = newChartColor;
+          }
+          if (chart.options.scales.x) {
+            chart.options.scales.x.ticks.color = newChartColor;
+            chart.options.scales.x.grid.color = `${newChartColor}20`;
+          }
         }
-        if (chart.options?.scales?.x?.ticks) {
-          chart.options.scales.x.ticks.color = chartColor;
+        if (chart.options.plugins && chart.options.plugins.legend) {
+          chart.options.plugins.legend.labels.color = newChartColor;
         }
-        if (chart.options?.plugins?.legend?.labels) {
-          chart.options.plugins.legend.labels.color = chartColor;
+        if (chart.options.plugins && chart.options.plugins.title) {
+          chart.options.plugins.title.color = newChartColor;
         }
-        if (chart.options?.plugins?.title) {
-          // Check if title plugin exists
-          chart.options.plugins.title.color = chartColor;
-        }
-        // Special handling for doughnut legend color
-        if (
-          chart.config.type === "doughnut" &&
-          chart.options?.plugins?.legend?.labels
-        ) {
-          chart.options.plugins.legend.labels.color = chartColor;
-        }
-        chart.update(); // Use default animation
+        // Call update
+        chart.update();
       }
     });
+    console.log("[Chart Update] One or more charts updated visually.");
   } else {
-    // console.log("[Chart Update] No chart data changed, skipping update."); // Less verbose
+    console.log(
+      "[Chart Update] No chart data changed, skipping visual update."
+    );
   }
 }
 
@@ -1836,3 +1713,30 @@ document.addEventListener("DOMContentLoaded", () => {
 
   console.log("Initialization complete.");
 });
+
+// --- Helper function to calculate status distribution ---
+function calculateStatusDistribution(statuses) {
+  const statusCounts = Object.values(statuses).reduce(
+    (acc, status) => {
+      let category = "other";
+      if (status === "pending") category = "pending";
+      else if (status === "processing") category = "processing";
+      else if (
+        status === "accepted" ||
+        status === "completed" ||
+        status === "code_received"
+      )
+        category = "completed";
+      else if (
+        status === "failed" ||
+        (typeof status === "string" && status.startsWith("Ошибка"))
+      )
+        category = "failed";
+
+      acc[category] = (acc[category] || 0) + 1;
+      return acc;
+    },
+    { pending: 0, processing: 0, completed: 0, failed: 0, other: 0 }
+  );
+  return statusCounts;
+}

@@ -33,14 +33,14 @@
       "providers": {
         "executor": ["gemini-pro2.5", "openrouter-qwen", "groq", "ollama"],
         "tester": ["ollama", "groq", "gemini"],
-        "documenter": ["groq", "gemini", "ollama"]
+        "documenter": ["groq", "cohere", "gemini", "ollama"]
       },
       "max_tokens": 4096,
       "temperature": 0.4
     },
     "ai3": {
       "providers": ["ollama", "gemini", "groq"],
-      "model": "qwen3",
+      "model": "qwen3:1.7b",
       "max_tokens": 2048,
       "temperature": 0.7
     }
@@ -49,7 +49,7 @@
     "ollama": {
       "type": "ollama",
       "endpoint": "http://host.docker.internal:11434",
-      "model": "qwen3"
+      "model": "qwen3:1.7b"
     },
     "ollama1": {
       "type": "ollama",

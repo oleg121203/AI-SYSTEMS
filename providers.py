@@ -476,9 +476,10 @@ class GroqProvider(BaseProvider):
         if not self.api_key:
             raise ValueError("API ключ Groq не установлен.")
         if self._client is None:
-            # Створюємо новий клієнт напряму, без жодних додаткових параметрів
-            import groq
+            # --- FIX: Initialize AsyncGroq only with api_key --- 
+            import groq # Ensure groq module is imported here if not globally
             self._client = groq.AsyncGroq(api_key=self.api_key)
+            # --------------------------------------------------
         return self._client
 
     async def generate(
