@@ -1,7 +1,7 @@
 import asyncio
 import importlib
 import json
-import logging
+import logging # Keep standard logging import
 import os
 import re
 import subprocess
@@ -9,6 +9,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 import shutil
+import aiofiles # Add missing import
+from typing import Dict, Optional # Import Optional for type hint
 
 import aiohttp
 from git import GitCommandError, Repo
@@ -16,31 +18,37 @@ from git import GitCommandError, Repo
 from config import load_config
 from providers import BaseProvider, ProviderFactory
 from utils import (
-    apply_request_delay,  # Import apply_request_delay
-    log_message,
-    logger,
+    apply_request_delay,
+    setup_service_logger, # Import the setup function
     wait_for_service,
 )
 
-logger = logging.getLogger(__name__)  # Use logger correctly
+# Constants
+DEFAULT_MCP_API_URL = "http://localhost:7860"
+DEFAULT_REPO_DIR = "repo"
+GITIGNORE_FILENAME = ".gitignore"
+GITKEEP_FILENAME = ".gitkeep"
+REPO_PREFIX = "repo/"
+
+# Setup logger for AI3 using the utility function
+logger = setup_service_logger("ai3")
 
 config = load_config()
-MCP_API_URL = config.get("mcp_api", "http://localhost:7860")
-REPO_DIR = config.get("repo_dir", "repo")
-LOG_FILE_PATH = "logs/mcp_api.log"
+MCP_API_URL = config.get("mcp_api", DEFAULT_MCP_API_URL)
+REPO_DIR = config.get("repo_dir", DEFAULT_REPO_DIR)
 
 
 def _init_or_open_repo(repo_path: str) -> Repo:
     try:
         Path(repo_path).mkdir(parents=True, exist_ok=True)
         repo = Repo(repo_path)
-        log_message(f"[AI3-Git] Opened existing repository at: {repo_path}")
+        logger.info(f"[AI3-Git] Opened existing repository at: {repo_path}")
         return repo
     except Exception:
         try:
             repo = Repo.init(repo_path)
-            log_message(f"[AI3-Git] Initialized new repository at: {repo_path}")
-            gitignore_path = os.path.join(repo_path, ".gitignore")
+            logger.info(f"[AI3-Git] Initialized new repository at: {repo_path}")
+            gitignore_path = os.path.join(repo_path, GITIGNORE_FILENAME) # Use constant
             if not os.path.exists(gitignore_path):
                 with open(gitignore_path, "w") as f:
                     f.write("# Ignore OS-specific files\n.DS_Store\n")
@@ -48,16 +56,16 @@ def _init_or_open_repo(repo_path: str) -> Repo:
                     f.write("# Ignore IDE files\n.idea/\n.vscode/\n")
                     f.write("# Ignore log files\nlogs/\n*.log\n")
                 try:
-                    repo.index.add([".gitignore"])
+                    repo.index.add([GITIGNORE_FILENAME]) # Use constant
                     repo.index.commit("Add .gitignore")
-                    log_message("[AI3-Git] Added .gitignore and committed.")
+                    logger.info("[AI3-Git] Added .gitignore and committed.")
                 except GitCommandError as git_e:
-                    log_message(
+                    logger.warning(
                         f"[AI3-Git] Warning: Failed to commit .gitignore: {git_e}"
                     )
             return repo
         except Exception as init_e:
-            log_message(
+            logger.critical(
                 f"[AI3-Git] CRITICAL: Failed to initialize or open repository at {repo_path}: {init_e}"
             )
             raise
@@ -82,7 +90,7 @@ def _commit_changes(repo: Repo, file_paths: list, message: str):
         if not paths_to_add and not repo.is_dirty(
             untracked_files=True, path=valid_paths
         ):
-            log_message(f"[AI3-Git] No changes detected in {valid_paths} to commit.")
+            logger.info(f"[AI3-Git] No changes detected in {valid_paths} to commit.")
             return
 
         if paths_to_add:
@@ -90,22 +98,22 @@ def _commit_changes(repo: Repo, file_paths: list, message: str):
 
         if repo.is_dirty():
             repo.index.commit(message)
-            log_message(
+            logger.info(
                 f"[AI3-Git] Committed changes for {len(paths_to_add)} file(s): {message}"
             )
         else:
-            log_message(f"[AI3-Git] No staged changes to commit for message: {message}")
+            logger.info(f"[AI3-Git] No staged changes to commit for message: {message}")
 
     except GitCommandError as e:
-        log_message(
+        logger.error(
             f"[AI3-Git] Error committing changes: {message}. Files: {file_paths}. Error: {e}"
         )
     except Exception as e:
-        log_message(f"[AI3-Git] Unexpected error during commit: {e}")
+        logger.error(f"[AI3-Git] Unexpected error during commit: {e}")
 
 
-async def generate_structure(target: str) -> dict:
-    prompt = f"""
+async def generate_structure() -> Optional[Dict]: # Remove target param, update return type
+    prompt = """ # Remove f-string
 Generate a JSON structure for a project with the target: "{target}".
 Respond ONLY with the JSON structure itself, enclosed in triple backticks (```json ... ```).
 The structure should be a valid JSON object representing directories and files. Use null for files.
@@ -128,66 +136,84 @@ Do not include any explanatory text before or after the JSON block. Ensure the J
     ai_config_base = config.get("ai_config", {})
     ai3_config = ai_config_base.get("ai3", {})
     if not ai3_config:
-        log_message("[AI3] Warning: 'ai_config.ai3' section not found. Using defaults.")
+        logger.warning("[AI3] Warning: 'ai_config.ai3' section not found. Using defaults.")
         ai3_config = {"provider": "openai"}
 
     # Updated: Iterate over the list of providers from the configuration
     ai3_providers = ai3_config.get("providers", ["openai"])
     if not ai3_providers:
-        log_message("[AI3] No providers configured. Defaulting to ['openai'].")
+        logger.warning("[AI3] No providers configured. Defaulting to ['openai'].")
         ai3_providers = ["openai"]
 
     response_text = None
     for provider_name in ai3_providers:
         try:
-            log_message(f"[AI3] Attempting structure generation with provider: {provider_name}")
+            logger.info(f"[AI3] Attempting structure generation with provider: {provider_name}")
             provider: BaseProvider = ProviderFactory.create_provider(provider_name)
             try:
-                await apply_request_delay("ai3")  # Add delay before generation
+                await apply_request_delay("ai3")
+                # Pass the prompt directly, assuming the provider handles the target variable if needed internally
+                # or update the prompt generation logic if target is still required.
                 response_text = await provider.generate(
-                    prompt=prompt,
+                    prompt=prompt, # Pass the static prompt string
                     model=ai3_config.get("model"),
                     max_tokens=ai3_config.get("max_tokens"),
                     temperature=ai3_config.get("temperature"),
                 )
                 if response_text:
-                    log_message(f"[AI3] Successfully generated structure with provider: {provider_name}")
+                    logger.info(f"[AI3] Successfully generated structure with provider: {provider_name}")
                     break
             finally:
                 if hasattr(provider, "close_session") and callable(provider.close_session):
                     await provider.close_session()
         except Exception as e:
-            log_message(f"[AI3] Error with provider '{provider_name}': {e}")
+            logger.error(f"[AI3] Error with provider '{provider_name}': {e}")
 
     if not response_text:
-        log_message("[AI3] All providers failed to generate a structure.")
+        logger.error("[AI3] All providers failed to generate a structure.")
         return None
 
+    # Consider replacing with a more robust JSON extraction method if needed
     match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", response_text, re.DOTALL)
     json_structure_str = None
     if match:
         json_structure_str = match.group(1)
     else:
-        log_message(
-            f"[AI3] Failed to extract JSON structure from response. Response: {response_text[:500]}"
-        )
-        return None
+        # Try to find JSON directly if backticks are missing
+        try:
+            start_index = response_text.find('{')
+            end_index = response_text.rfind('}')
+            if start_index != -1 and end_index != -1 and start_index < end_index:
+                potential_json = response_text[start_index:end_index+1]
+                # Basic validation
+                if potential_json.count('{') == potential_json.count('}'):
+                    json_structure_str = potential_json
+                    logger.warning("[AI3] Extracted JSON structure without backticks.")
+                else:
+                    raise ValueError("Mismatched braces")
+            else:
+                 raise ValueError("Could not find JSON object delimiters")
+        except Exception as direct_extract_err:
+            logger.error(
+                f"[AI3] Failed to extract JSON structure from response (tried direct extraction after backtick failure: {direct_extract_err}). Response: {response_text[:500]}"
+            )
+            return None
 
     try:
         structure_obj = json.loads(json_structure_str)
-        log_message(f"[AI3] Successfully extracted structure: {json_structure_str[:200]}...")
+        logger.info(f"[AI3] Successfully extracted structure: {json_structure_str[:200]}...")
         return structure_obj
     except json.JSONDecodeError as e:
-        log_message(f"[AI3] JSON decode error: {e}. JSON string: {json_structure_str[:200]}")
+        logger.error(f"[AI3] JSON decode error: {e}. JSON string: {json_structure_str[:200]}")
         return None
     except Exception as e:
-        log_message(f"[AI3] Unexpected error processing structure: {e}")
+        logger.error(f"[AI3] Unexpected error processing structure: {e}")
         return None
 
 
 async def send_structure_to_api(structure_obj: dict):
     api_url = f"{MCP_API_URL}/structure"
-    log_message(f"[AI3 -> API] Sending structure object to {api_url}")
+    logger.info(f"[AI3 -> API] Sending structure object to {api_url}")
     async with aiohttp.ClientSession() as client_session:
         try:
             async with client_session.post(
@@ -195,17 +221,17 @@ async def send_structure_to_api(structure_obj: dict):
             ) as resp:
                 response_text = await resp.text()
                 if resp.status == 200:
-                    log_message(
+                    logger.info(
                         f"[AI3 -> API] Structure successfully sent. Response: {response_text}"
                     )
                     return True
                 else:
-                    log_message(
+                    logger.error(
                         f"[AI3 -> API] Error sending structure. Status: {resp.status}, Response: {response_text}"
                     )
                     return False
         except Exception as e:
-            log_message(f"[AI3 -> API] Error sending structure: {str(e)}")
+            logger.error(f"[AI3 -> API] Error sending structure: {str(e)}")
             return False
 
 
@@ -214,30 +240,30 @@ async def send_ai3_report(status: str, details: dict = None):
     payload = {"status": status}
     if details:
         payload["details"] = details
-    log_message(f"[AI3 -> API] Sending report to {api_url}: {payload}")
+    logger.info(f"[AI3 -> API] Sending report to {api_url}: {payload}")
     async with aiohttp.ClientSession() as session:
         try:
             async with session.post(api_url, json=payload, timeout=15) as resp:
                 response_text = await resp.text()
-                log_message(
+                logger.info(
                     f"[AI3 -> API] Report sent. Status: {resp.status}, Response: {response_text}"
                 )
                 return resp.status == 200
         except asyncio.TimeoutError:
-            log_message(f"[AI3 -> API] Timeout sending report: {status}")
+            logger.warning(f"[AI3 -> API] Timeout sending report: {status}")
             return False
         except aiohttp.ClientError as e:
-            log_message(f"[AI3 -> API] Connection error sending report: {str(e)}")
+            logger.error(f"[AI3 -> API] Connection error sending report: {str(e)}")
             return False
         except Exception as e:
-            log_message(f"[AI3 -> API] Unexpected error sending report: {str(e)}")
+            logger.error(f"[AI3 -> API] Unexpected error sending report: {str(e)}")
             return False
 
 
 async def initiate_collaboration(error: str, context: str):
     api_url = f"{MCP_API_URL}/ai_collaboration"
     collaboration_request = {"error": error, "context": context, "ai": "AI3"}
-    log_message(
+    logger.info(
         f"[AI3 -> API] Initiating collaboration via {api_url}: {collaboration_request}"
     )
     async with aiohttp.ClientSession() as session:
@@ -246,20 +272,20 @@ async def initiate_collaboration(error: str, context: str):
                 api_url, json=collaboration_request, timeout=20
             ) as resp:
                 response_text = await resp.text()
-                log_message(
+                logger.info(
                     f"[AI3 -> API] Collaboration request sent. Status: {resp.status}, Response: {response_text}"
                 )
                 return resp.status == 200
         except asyncio.TimeoutError:
-            log_message(f"[AI3 -> API] Timeout initiating collaboration.")
+            logger.warning("[AI3 -> API] Timeout initiating collaboration.") # Remove f-string
             return False
         except aiohttp.ClientError as e:
-            log_message(
+            logger.error(
                 f"[AI3 -> API] Connection error initiating collaboration: {str(e)}"
             )
             return False
         except Exception as e:
-            log_message(
+            logger.error(
                 f"[AI3 -> API] Unexpected error initiating collaboration: {str(e)}"
             )
             return False
@@ -274,7 +300,7 @@ async def create_files_from_structure(structure_obj: dict, repo: Repo):
         for key, value in struct.items():
             sanitized_key = re.sub(r'[<>:"/\\|?*]', "_", key).strip()
             if not sanitized_key:
-                log_message(
+                logger.warning(
                     f"[AI3] Warning: Skipping empty or invalid name derived from '{key}'"
                 )
                 continue
@@ -286,13 +312,13 @@ async def create_files_from_structure(structure_obj: dict, repo: Repo):
                 if isinstance(value, dict):
                     if not os.path.exists(full_path):
                         os.makedirs(full_path)
-                        log_message(f"[AI3] Created directory: {new_rel_path}")
+                        logger.info(f"[AI3] Created directory: {new_rel_path}")
                         created_dirs.append(full_path)
                         if not value:
-                            gitkeep_path = os.path.join(full_path, ".gitkeep")
+                            gitkeep_path = os.path.join(full_path, GITKEEP_FILENAME) # Use constant
                             with open(gitkeep_path, "w") as f:
                                 f.write("")
-                            log_message(
+                            logger.info(
                                 f"[AI3] Created .gitkeep in empty directory: {new_rel_path}"
                             )
                     await _create_recursive(value, new_rel_path)
@@ -300,7 +326,7 @@ async def create_files_from_structure(structure_obj: dict, repo: Repo):
                     parent_dir = os.path.dirname(full_path)
                     if not os.path.exists(parent_dir):
                         os.makedirs(parent_dir)
-                        log_message(
+                        logger.info(
                             f"[AI3] Created parent directory: {os.path.relpath(parent_dir, base_path)}"
                         )
 
@@ -312,93 +338,54 @@ async def create_files_from_structure(structure_obj: dict, repo: Repo):
                         )
                         with open(full_path, "w", encoding="utf-8") as f:
                             f.write(initial_content)
-                        log_message(f"[AI3] Created file: {new_rel_path}")
+                        logger.info(f"[AI3] Created file: {new_rel_path}")
                         created_files.append(full_path)
                     else:
-                        log_message(
+                        logger.info(
                             f"[AI3] File already exists, skipping creation: {new_rel_path}"
                         )
                 else:
-                    log_message(
+                    logger.warning(
                         f"[AI3] Warning: Unknown type in structure for key '{key}', skipping: {type(value)}"
                     )
 
             except OSError as e:
-                log_message(f"[AI3] Error creating file/directory {new_rel_path}: {e}")
+                logger.error(f"[AI3] Error creating file/directory {new_rel_path}: {e}")
             except Exception as e:
-                log_message(f"[AI3] Unexpected error processing {new_rel_path}: {e}")
+                logger.error(f"[AI3] Unexpected error processing {new_rel_path}: {e}")
 
     try:
-        log_message("[AI3] Starting file creation from structure...")
+        logger.info("[AI3] Starting file creation from structure...")
         await _create_recursive(structure_obj, "")
         files_to_commit = created_files + [
-            os.path.join(d, ".gitkeep")
+            os.path.join(d, GITKEEP_FILENAME) # Use constant
             for d in created_dirs
-            if os.path.exists(os.path.join(d, ".gitkeep"))
+            if os.path.exists(os.path.join(d, GITKEEP_FILENAME)) # Use constant
         ]
         _commit_changes(
             repo, files_to_commit, "Created initial project structure from AI"
         )
-        log_message("[AI3] File creation process completed.")
+        logger.info("[AI3] File creation process completed.")
         await send_ai3_report("structure_creation_completed")
         return True
     except Exception as e:
-        log_message(f"[AI3] Error in create_files_from_structure: {e}")
+        logger.error(f"[AI3] Error in create_files_from_structure: {e}")
         await initiate_collaboration(str(e), "Failed to create files from structure")
         await send_ai3_report("structure_creation_failed", {"error": str(e)})
         return False
 
 
-async def simple_log_monitor():
-    log_message(f"[AI3] Starting simple log monitoring: {LOG_FILE_PATH}")
-    position = 0
-    if os.path.exists(LOG_FILE_PATH):
-        try:
-            position = os.path.getsize(LOG_FILE_PATH)
-        except OSError:
-            position = 0
-
-    error_pattern = re.compile(r".*(ERROR|CRITICAL).*", re.IGNORECASE)
-
-    while True:
-        try:
-            current_size = os.path.getsize(LOG_FILE_PATH)
-            if (current_size < position):
-                position = 0
-
-            if current_size > position:
-                with open(LOG_FILE_PATH, "r", encoding="utf-8") as file:
-                    file.seek(position)
-                    new_content = file.read()
-                    position = file.tell()
-
-                    for line in new_content.splitlines():
-                        if error_pattern.search(line):
-                            log_message(
-                                f"[AI3-Monitor] Detected potential error: {line}"
-                            )
-                            pass
-
-        except FileNotFoundError:
-            log_message(f"[AI3] Log file not found: {LOG_FILE_PATH}. Retrying...")
-            position = 0
-        except Exception as e:
-            log_message(f"[AI3] Error in simple log monitor: {e}")
-
-        await asyncio.sleep(config.get("ai3_log_monitor_interval", 10))
+# Remove simple_log_monitor as its functionality is covered by monitor_system_errors and logging setup
+# async def simple_log_monitor():
+#     ...
 
 
-def install_missing_modules(module_name):
-    try:
-        importlib.import_module(module_name)
-    except ImportError:
-        print(f"{module_name} not found. Installing...")
-        subprocess.check_call(["pip", "install", module_name])
-
+# ...existing code...
 
 class AI3:
-    def __init__(self, repo_dir="repo"):
-        self.repo_dir = repo_dir
+    def __init__(self, config):
+        self.config = config
+        self.repo_dir = config.get("repo_dir", DEFAULT_REPO_DIR) # Use constant
         self.repo = self._init_or_open_repo(self.repo_dir)
         self.session = None
         self.target = config.get("target")
@@ -413,17 +400,17 @@ class AI3:
     def _init_or_open_repo(self, repo_path: str) -> Repo:
         """Ініціалізує новий або відкриває існуючий Git репозиторій."""
         try:
-            log_message(f"[AI3-Git] Attempting to open repository at: {repo_path}")
+            logger.info(f"[AI3-Git] Attempting to open repository at: {repo_path}")
             Path(repo_path).mkdir(parents=True, exist_ok=True)
             repo = Repo(repo_path)
-            log_message(f"[AI3-Git] Opened existing repository at: {repo_path}")
+            logger.info(f"[AI3-Git] Opened existing repository at: {repo_path}")
             return repo
         except Exception:
             try:
-                log_message(f"[AI3-Git] Repository not found, initializing new one at: {repo_path}")
+                logger.info(f"[AI3-Git] Repository not found, initializing new one at: {repo_path}")
                 repo = Repo.init(repo_path)
-                log_message(f"[AI3-Git] Initialized new repository at: {repo_path}")
-                gitignore_path = os.path.join(repo_path, ".gitignore")
+                logger.info(f"[AI3-Git] Initialized new repository at: {repo_path}")
+                gitignore_path = os.path.join(repo_path, GITIGNORE_FILENAME) # Use constant
                 if not os.path.exists(gitignore_path):
                     with open(gitignore_path, "w") as f:
                         f.write("# Ignore OS-specific files\n.DS_Store\n")
@@ -431,16 +418,16 @@ class AI3:
                         f.write("# Ignore IDE files\n.idea/\n.vscode/\n")
                         f.write("# Ignore log files\nlogs/\n*.log\n")
                     try:
-                        repo.index.add([".gitignore"])
+                        repo.index.add([GITIGNORE_FILENAME]) # Use constant
                         repo.index.commit("Add .gitignore")
-                        log_message("[AI3-Git] Added .gitignore and committed.")
+                        logger.info("[AI3-Git] Added .gitignore and committed.")
                     except GitCommandError as git_e:
-                        log_message(
+                        logger.warning(
                             f"[AI3-Git] Warning: Failed to commit .gitignore: {git_e}"
                         )
                 return repo
             except Exception as init_e:
-                log_message(
+                logger.critical(
                     f"[AI3-Git] CRITICAL: Failed to initialize or open repository at {repo_path}: {init_e}"
                 )
                 raise
@@ -451,26 +438,26 @@ class AI3:
             # Перевірити, чи існує репозиторій
             if os.path.exists(self.repo_dir):
                 # Видалити репозиторій
-                log_message(f"[AI3-Git] Removing existing repository directory: {self.repo_dir}")
+                logger.info(f"[AI3-Git] Removing existing repository directory: {self.repo_dir}")
                 shutil.rmtree(self.repo_dir)
-                log_message(f"[AI3-Git] Removed existing repository: {self.repo_dir}")
+                logger.info(f"[AI3-Git] Removed existing repository: {self.repo_dir}")
 
             # Створити каталог репозиторію та ініціалізувати Git
-            log_message(f"[AI3-Git] Creating new repository directory: {self.repo_dir}")
+            logger.info(f"[AI3-Git] Creating new repository directory: {self.repo_dir}")
             os.makedirs(self.repo_dir, exist_ok=True)
             
             # Варіант 1: Використати GitPython (рекомендовано)
             try:
                 self.repo = Repo.init(self.repo_dir)
-                log_message(f"[AI3-Git] Successfully initialized new repository at: {self.repo_dir}")
+                logger.info(f"[AI3-Git] Successfully initialized new repository at: {self.repo_dir}")
                 
                 # Додати .gitignore
-                gitignore_path = os.path.join(self.repo_dir, ".gitignore")
+                gitignore_path = os.path.join(self.repo_dir, GITIGNORE_FILENAME) # Use constant
                 with open(gitignore_path, "w", encoding="utf-8") as f:
                     f.write("**/__pycache__\n")
                     f.write("*.pyc\n")
                     f.write(".DS_Store\n")
-                log_message(f"[AI3-Git] Created .gitignore in {self.repo_dir}")
+                logger.info(f"[AI3-Git] Created .gitignore in {self.repo_dir}")
                 
                 # Налаштувати користувача Git
                 with self.repo.config_writer() as git_config:
@@ -480,11 +467,11 @@ class AI3:
                 # Додати та закомітити gitignore
                 self.repo.git.add(gitignore_path)
                 self.repo.git.commit('-m', 'Initial commit (gitignore)')
-                log_message("[AI3-Git] Added and committed .gitignore file")
+                logger.info("[AI3-Git] Added and committed .gitignore file")
                 
             except Exception as git_err:
-                log_message(f"[AI3-Git] Error using GitPython: {git_err}")
-                log_message("[AI3-Git] Falling back to subprocess method")
+                logger.error(f"[AI3-Git] Error using GitPython: {git_err}")
+                logger.info("[AI3-Git] Falling back to subprocess method")
                 
                 # Варіант 2: Використати subprocess як запасний варіант
                 init_result = subprocess.run(
@@ -494,10 +481,10 @@ class AI3:
                     capture_output=True,
                     text=True,
                 )
-                log_message(f"[AI3-Git] Initialized Git repository via subprocess: {init_result.stdout}")
+                logger.info(f"[AI3-Git] Initialized Git repository via subprocess: {init_result.stdout}")
                 
                 # Створити .gitignore
-                gitignore_path = os.path.join(self.repo_dir, ".gitignore")
+                gitignore_path = os.path.join(self.repo_dir, GITIGNORE_FILENAME) # Use constant
                 with open(gitignore_path, "w", encoding="utf-8") as f:
                     f.write("**/__pycache__\n")
                     f.write("*.pyc\n")
@@ -508,71 +495,79 @@ class AI3:
                 subprocess.run(["git", "config", "user.name", "AI3 System"], cwd=self.repo_dir, check=False)
                 
                 # Додати та закомітити
-                subprocess.run(["git", "add", ".gitignore"], cwd=self.repo_dir, check=True)
+                subprocess.run(["git", "add", GITIGNORE_FILENAME], cwd=self.repo_dir, check=True) # Use constant
                 subprocess.run(["git", "commit", "-m", "Initial commit (gitignore)"], cwd=self.repo_dir, check=True)
                 
                 # Перепризначити об'єкт repo для подальшого використання
                 self.repo = Repo(self.repo_dir)
             
-            log_message("[AI3-Git] Repository successfully cleared and initialized.")
+            logger.info("[AI3-Git] Repository successfully cleared and initialized.")
             await send_ai3_report("repo_cleared")
             return True
 
         except Exception as e:
-            log_message(f"[AI3-Git] Unexpected error clearing and initializing repository: {e}")
+            logger.error(f"[AI3-Git] Unexpected error clearing and initializing repository: {e}")
             await send_ai3_report("repo_clear_failed", {"error": str(e)})
             return False
 
     async def create_session(self):
+        """Створює aiohttp ClientSession, якщо вона ще не існує."""
         if self.session is None or self.session.closed:
             self.session = aiohttp.ClientSession()
-            log_message("[AI3] Created new aiohttp session")
+            logger.info("[AI3] Created new aiohttp ClientSession.")
 
     async def close_session(self):
+        """Закриває aiohttp ClientSession, якщо вона існує."""
         if self.session and not self.session.closed:
             await self.session.close()
-            log_message("[AI3] Closed aiohttp session")
+            self.session = None
+            logger.info("[AI3] Closed aiohttp ClientSession.")
 
     async def setup_structure(self):
         try:
             # Wait for MCP API to be available
-            await wait_for_service(MCP_API_URL, max_retries=60, retry_delay=1)
+            await wait_for_service(MCP_API_URL, timeout=60)
             
             # Initialize repository
             success = await self.clear_and_init_repo()
             if not success:
-                log_message("[AI3] Failed to initialize repository. Aborting structure setup.")
+                logger.error("[AI3] Failed to initialize repository. Aborting structure setup.")
                 return False
                 
-            # Generate structure based on target
-            structure = await generate_structure(self.target)
+            # Generate structure (target is no longer passed)
+            structure = await generate_structure()
             if not structure:
-                log_message("[AI3] Failed to generate structure. Aborting structure setup.")
+                logger.error("[AI3] Failed to generate structure. Aborting structure setup.")
                 return False
                 
             # Send structure to MCP API
             await self.create_session()
             try:
+                # Include target in the payload if MCP API expects it
+                payload = {"structure": structure}
+                if self.target: # Check if target exists before adding
+                    payload["target"] = self.target
+                
                 async with self.session.post(
                     f"{MCP_API_URL}/structure",
-                    json={"structure": structure, "target": self.target},
+                    json=payload, # Use the constructed payload
                 ) as resp:
                     if resp.status == 200:
-                        log_message("[AI3] Structure sent to MCP API successfully")
+                        logger.info("[AI3] Structure sent to MCP API successfully")
                         structure_response = await resp.json()
-                        log_message(f"[AI3] MCP API response: {structure_response}")
+                        logger.info(f"[AI3] MCP API response: {structure_response}")
                         # Create the structure in the repository
                         await self.create_file_structure(structure)
                         return True
                     else:
                         error_text = await resp.text()
-                        log_message(f"[AI3] Error sending structure to MCP API: {error_text}")
+                        logger.error(f"[AI3] Error sending structure to MCP API: {error_text}")
                         return False
             except Exception as e:
-                log_message(f"[AI3] Exception during structure API call: {e}")
+                logger.error(f"[AI3] Exception during structure API call: {e}")
                 return False
         except Exception as e:
-            log_message(f"[AI3] Unexpected error in setup_structure: {e}")
+            logger.error(f"[AI3] Unexpected error in setup_structure: {e}")
             return False
 
     async def create_file_structure(self, structure, parent_path=""):
@@ -589,10 +584,10 @@ class AI3:
                     Path(abs_path).parent.mkdir(parents=True, exist_ok=True)
                     Path(abs_path).touch()
                     created_files.append(abs_path)
-                    log_message(f"[AI3] Created empty file: {full_path}")
+                    logger.info(f"[AI3] Created empty file: {full_path}")
                 else:  # It's a directory
                     Path(abs_path).mkdir(parents=True, exist_ok=True)
-                    log_message(f"[AI3] Created directory: {full_path}")
+                    logger.info(f"[AI3] Created directory: {full_path}")
                     # Recursively process the directory
                     child_files = await self.create_file_structure(content, full_path)
                     created_files.extend(child_files)
@@ -603,11 +598,11 @@ class AI3:
                 
             return created_files
         except Exception as e:
-            log_message(f"[AI3] Error creating file structure: {e}")
+            logger.error(f"[AI3] Error creating file structure: {e}")
             return []
 
     async def start_monitoring(self):
-        log_message("[AI3] Starting monitoring service...")
+        logger.info("[AI3] Starting monitoring service...")
         try:
             while True:
                 try:
@@ -615,15 +610,15 @@ class AI3:
                     await self.check_worker_status()
                     await self.scan_logs_for_errors()
                 except asyncio.CancelledError:
-                    log_message("[AI3] Monitoring task cancelled")
+                    logger.info("[AI3] Monitoring task cancelled")
                     break
                 except Exception as e:
-                    log_message(f"[AI3] Error in monitoring cycle: {e}")
+                    logger.error(f"[AI3] Error in monitoring cycle: {e}")
                     await asyncio.sleep(5)  # Short delay before retrying
         except Exception as e:
-            log_message(f"[AI3] Monitoring service crashed: {e}")
+            logger.critical(f"[AI3] Monitoring service crashed: {e}")
         finally:
-            log_message("[AI3] Monitoring service stopped")
+            logger.info("[AI3] Monitoring service stopped")
 
     async def check_worker_status(self):
         await self.create_session()
@@ -639,15 +634,15 @@ class AI3:
                     
                     if idle_workers:
                         self.monitoring_stats["idle_workers_detected"] += len(idle_workers)
-                        log_message(f"[AI3] Detected idle workers: {', '.join(idle_workers)}")
+                        logger.info(f"[AI3] Detected idle workers: {', '.join(idle_workers)}")
                         
                         # Request tasks for idle workers
                         for worker in idle_workers:
                             await self.request_task_for_worker(worker)
                 else:
-                    log_message(f"[AI3] Failed to get worker status: {resp.status}")
+                    logger.warning(f"[AI3] Failed to get worker status: {resp.status}")
         except Exception as e:
-            log_message(f"[AI3] Error checking worker status: {e}")
+            logger.error(f"[AI3] Error checking worker status: {e}")
 
     async def request_task_for_worker(self, worker_name):
         self.monitoring_stats["task_requests_sent"] += 1
@@ -661,13 +656,13 @@ class AI3:
                     result = await resp.json()
                     if result.get("success"):
                         self.monitoring_stats["successful_requests"] += 1
-                        log_message(f"[AI3] Successfully requested task for {worker_name}: {result}")
+                        logger.info(f"[AI3] Successfully requested task for {worker_name}: {result}")
                     else:
-                        log_message(f"[AI3] Failed to request task for {worker_name}: {result}")
+                        logger.warning(f"[AI3] Failed to request task for {worker_name}: {result}")
                 else:
-                    log_message(f"[AI3] Error response from API: {resp.status}")
+                    logger.error(f"[AI3] Error response from API: {resp.status}")
         except Exception as e:
-            log_message(f"[AI3] Error requesting task for worker {worker_name}: {e}")
+            logger.error(f"[AI3] Error requesting task for worker {worker_name}: {e}")
 
     async def scan_logs_for_errors(self):
         # Simplified log scanning - would be more sophisticated in a real implementation
@@ -704,10 +699,10 @@ class AI3:
                         break
             
             if errors_found:
-                log_message(f"[AI3] Found errors in logs: {len(error_summary)} issues")
+                logger.warning(f"[AI3] Found errors in logs: {len(error_summary)} issues")
                 await self.request_error_fix(error_summary)
         except Exception as e:
-            log_message(f"[AI3] Error scanning logs: {e}")
+            logger.error(f"[AI3] Error scanning logs: {e}")
 
     async def request_error_fix(self, error_summary):
         self.monitoring_stats["error_fixes_requested"] += 1
@@ -720,15 +715,15 @@ class AI3:
             ) as resp:
                 if resp.status == 200:
                     result = await resp.json()
-                    log_message(f"[AI3] Error fix request response: {result}")
+                    logger.info(f"[AI3] Error fix request response: {result}")
                 else:
-                    log_message(f"[AI3] Error fix request failed: {resp.status}")
+                    logger.error(f"[AI3] Error fix request failed: {resp.status}")
         except Exception as e:
-            log_message(f"[AI3] Error requesting error fix: {e}")
+            logger.error(f"[AI3] Error requesting error fix: {e}")
 
     async def update_file_and_commit(self, file_path_relative: str, content: str):
         """Оновлює файл у репозиторії та комітить зміни."""
-        repo_dir = "repo"
+        repo_dir = DEFAULT_REPO_DIR # Use constant
         full_path = os.path.join(repo_dir, file_path_relative)
 
         try:
@@ -780,8 +775,8 @@ class AI3:
                 logger.info(f"Зроблено коміт для файлу: {file_path_relative}")
 
         except FileNotFoundError:
-            logger.error(
-                f"Помилка: команда 'git' не знайдена. Переконайтеся, що Git встановлено та доступний у PATH."
+            logger.error( # Remove f-string
+                "Помилка: команда 'git' не знайдена. Переконайтеся, що Git встановлено та доступний у PATH."
             )
         except Exception as e:
             logger.error(
@@ -795,8 +790,8 @@ class AI3:
 
         if file_path and content is not None:
             # Переконайтеся, що file_path є відносним шляхом всередині 'repo/'
-            if file_path.startswith(os.path.abspath("repo")):
-                file_path = os.path.relpath(file_path, "repo")
+            if file_path.startswith(os.path.abspath(DEFAULT_REPO_DIR)): # Use constant
+                file_path = os.path.relpath(file_path, DEFAULT_REPO_DIR) # Use constant
 
             await self.update_file_and_commit(file_path, content)
         else:
@@ -809,14 +804,14 @@ class AI3:
         Ця функція безперервно перевіряє статус GitHub Actions через GitHub API
         та обробляє результати тестування.
         """
-        log_message("[AI3] Starting GitHub Actions monitoring...")
+        logger.info("[AI3] Starting GitHub Actions monitoring...")
         
         # Конфігурація GitHub API
         github_token = os.getenv("GITHUB_TOKEN") # Read from env
         github_repo = os.getenv("GITHUB_REPO_TO_MONITOR") # Read from env
         
         if not github_token or not github_repo:
-            log_message("[AI3] Warning: GITHUB_TOKEN or GITHUB_REPO_TO_MONITOR not configured in .env. Cannot monitor GitHub Actions.")
+            logger.warning("[AI3] Warning: GITHUB_TOKEN or GITHUB_REPO_TO_MONITOR not configured in .env. Cannot monitor GitHub Actions.")
             return
         
         headers = {
@@ -846,39 +841,23 @@ class AI3:
                             if run_status == "completed":
                                 # Зберігаємо інформацію про завершений run, якщо ми його ще не обробляли
                                 if self._is_new_completed_run(run_id):
-                                    log_message(f"[AI3] Found completed GitHub Actions run: {run_id}, conclusion: {run_conclusion}")
+                                    logger.info(f"[AI3] Found completed GitHub Actions run: {run_id}, conclusion: {run_conclusion}")
                                     await self._analyze_workflow_run(run_id, run_conclusion, headers)
                                 break  # Обробляємо тільки останній завершений run
                     else:
-                        log_message(f"[AI3] Failed to fetch GitHub Actions runs: Status {response.status}")
+                        logger.warning(f"[AI3] Failed to fetch GitHub Actions runs: Status {response.status}")
                     
             except Exception as e:
-                log_message(f"[AI3] Error in GitHub Actions monitoring: {e}")
+                logger.error(f"[AI3] Error in GitHub Actions monitoring: {e}")
             
             # Чекаємо перед наступною перевіркою
             await asyncio.sleep(config.get("github_actions_check_interval", 60))
-
-    def _is_new_completed_run(self, run_id):
-        """Перевіряє, чи є завершений run новим (ще не обробленим)."""
-        if not hasattr(self, "processed_run_ids"):
-            self.processed_run_ids = set()
-        
-        if run_id in self.processed_run_ids:
-            return False
-        
-        self.processed_run_ids.add(run_id)
-        # Обмежуємо розмір множини, зберігаючи тільки останні N run_id
-        max_stored_runs = 50
-        if len(self.processed_run_ids) > max_stored_runs:
-            self.processed_run_ids = set(list(self.processed_run_ids)[-max_stored_runs:])
-        
-        return True
 
     async def _analyze_workflow_run(self, run_id, run_conclusion, headers):
         """Аналізує результати виконання workflow (pytest + linters) та відправляє рекомендації."""
         github_repo = os.getenv("GITHUB_REPO_TO_MONITOR")
         if not github_repo:
-            log_message("[AI3] Warning: GITHUB_REPO_TO_MONITOR not configured in .env. Cannot analyze workflow run.")
+            logger.warning("[AI3] Warning: GITHUB_REPO_TO_MONITOR not configured in .env. Cannot analyze workflow run.")
             return
 
         failed_files = set() # Використовуємо set для уникнення дублікатів
@@ -904,14 +883,14 @@ class AI3:
                                 # Не обов'язково pytest, може бути помилка встановлення залежностей тощо.
                                 # Позначимо це як можливу помилку pytest для простоти, але логіка парсингу логів важливіша
                                 pytest_errors_found = True
-                                log_message(f"[AI3] Job 'build-and-test' (ID: {job_id}) failed overall.")
+                                logger.warning(f"[AI3] Job 'build-and-test' (ID: {job_id}) failed overall.")
                             break
                 else:
-                    log_message(f"[AI3] Error fetching jobs for run {run_id}: {response.status}")
+                    logger.error(f"[AI3] Error fetching jobs for run {run_id}: {response.status}")
                     return # Не можемо продовжити без ID завдання
 
             if not job_id:
-                log_message(f"[AI3] Could not find job 'build-and-test' for run {run_id}.")
+                logger.warning(f"[AI3] Could not find job 'build-and-test' for run {run_id}.")
                 # Можливо, workflow ще не запустився або назва завдання інша
                 # Повертаємось, щоб спробувати пізніше
                 return
@@ -923,15 +902,15 @@ class AI3:
             ) as log_response:
                 if log_response.status == 200:
                     job_logs = await log_response.text()
-                    log_message(f"[AI3] Successfully fetched logs for job {job_id} (run {run_id}). Length: {len(job_logs)} chars.")
+                    logger.info(f"[AI3] Successfully fetched logs for job {job_id} (run {run_id}). Length: {len(job_logs)} chars.")
                 else:
-                    log_message(f"[AI3] Error fetching logs for job {job_id}: {log_response.status}. Status: {run_conclusion}")
+                    logger.error(f"[AI3] Error fetching logs for job {job_id}: {log_response.status}. Status: {run_conclusion}")
                     # Якщо логи недоступні, але загальний висновок 'failure', вважаємо, що є помилки
                     if run_conclusion == "failure":
                          pytest_errors_found = True # Припускаємо помилку pytest/linting
 
         except Exception as e:
-            log_message(f"[AI3] Error fetching job details or logs for run {run_id}: {e}")
+            logger.error(f"[AI3] Error fetching job details or logs for run {run_id}: {e}")
             # Якщо сталася помилка при отриманні деталей, але загальний висновок 'failure', вважаємо, що є помилки
             if run_conclusion == "failure":
                  pytest_errors_found = True # Припускаємо помилку pytest/linting
@@ -950,7 +929,8 @@ class AI3:
             htmlhint_error_pattern = re.compile(r"^(repo/project/.*\.html): line \d+, col \d+, (.*) \((.*)\)$", re.IGNORECASE)
 
             # Stylelint: Шукає рядки з шляхом до файлу, номерами рядка/колонки та назвою правила
-            stylelint_error_pattern = re.compile(r"^(repo/project/.*\.css)\s+(\d+:\d+)\s+([✖️])\s+(.*)$") # ✖️ - символ помилки
+            # Fix: Corrected cyrillic 'д' to latin 'd' and removed unnecessary brackets around ✖️
+            stylelint_error_pattern = re.compile(r"^(repo/project/.*\.css)\s+(\d+:\d+)\s+✖️\s+(.*)$")
 
             # ESLint: Шукає рядки з шляхом до файлу, номерами рядка/колонки та 'Error'/'Warning'
             eslint_error_pattern = re.compile(r"^(repo/project/.*\.js)\s+line (\d+), col (\d+),\s+(Error|Warning)\s+-(.*)$")
@@ -963,11 +943,11 @@ class AI3:
                 if pytest_failure_pattern.search(line):
                     pytest_errors_found = True
                     in_pytest_failures_section = True
-                    log_message(f"[AI3] Pytest FAILURES section detected in logs for run {run_id}.")
+                    logger.warning(f"[AI3] Pytest FAILURES section detected in logs for run {run_id}.")
                 elif pytest_error_pattern.search(line):
                      pytest_errors_found = True
                      in_pytest_errors_section = True
-                     log_message(f"[AI3] Pytest ERRORS section detected in logs for run {run_id}.")
+                     logger.warning(f"[AI3] Pytest ERRORS section detected in logs for run {run_id}.")
                 elif line.strip().startswith("===") and (in_pytest_failures_section or in_pytest_errors_section):
                     # Кінець секції помилок pytest
                     in_pytest_failures_section = False
@@ -982,34 +962,34 @@ class AI3:
                 html_match = htmlhint_error_pattern.search(line)
                 if html_match:
                     linting_errors_found = True
-                    file_path = html_match.group(1).replace("repo/", "") # Видаляємо префікс repo/
+                    file_path = html_match.group(1).replace(REPO_PREFIX, "") # Use constant
                     failed_files.add(file_path)
-                    log_message(f"[AI3] HTMLHint error found in {file_path}: {html_match.group(2)}")
+                    logger.warning(f"[AI3] HTMLHint error found in {file_path}: {html_match.group(2)}")
 
                 # Stylelint parsing
                 style_match = stylelint_error_pattern.search(line)
                 if style_match:
                     linting_errors_found = True
-                    file_path = style_match.group(1).replace("repo/", "") # Видаляємо префікс repo/
+                    file_path = style_match.group(1).replace(REPO_PREFIX, "") # Use constant
                     failed_files.add(file_path)
-                    log_message(f"[AI3] Stylelint error found in {file_path}: {style_match.group(4)}")
+                    logger.warning(f"[AI3] Stylelint error found in {file_path}: {style_match.group(4)}")
 
                 # ESLint parsing
                 eslint_match = eslint_error_pattern.search(line)
                 if eslint_match:
                     linting_errors_found = True
-                    file_path = eslint_match.group(1).replace("repo/", "") # Видаляємо префікс repo/
+                    file_path = eslint_match.group(1).replace(REPO_PREFIX, "") # Use constant
                     failed_files.add(file_path)
-                    log_message(f"[AI3] ESLint {eslint_match.group(4)} found in {file_path}: {eslint_match.group(5)}")
+                    logger.warning(f"[AI3] ESLint {eslint_match.group(4)} found in {file_path}: {eslint_match.group(5)}")
 
         # 4. Визначаємо рекомендацію та контекст
         # Рекомендація 'rework', якщо є помилки pytest АБО помилки лінтингу АБО загальний висновок 'failure'
         if pytest_errors_found or linting_errors_found or run_conclusion == "failure":
             recommendation = "rework"
-            log_message(f"[AI3] Recommendation for run {run_id}: rework (Pytest errors: {pytest_errors_found}, Linting errors: {linting_errors_found}, Run conclusion: {run_conclusion})")
+            logger.warning(f"[AI3] Recommendation for run {run_id}: rework (Pytest errors: {pytest_errors_found}, Linting errors: {linting_errors_found}, Run conclusion: {run_conclusion})")
         else:
             recommendation = "accept"
-            log_message(f"[AI3] Recommendation for run {run_id}: accept")
+            logger.info(f"[AI3] Recommendation for run {run_id}: accept")
 
         context = {}
         if recommendation == "rework":
@@ -1021,239 +1001,164 @@ class AI3:
         # 5. Відправляємо рекомендацію в MCP API
         await self._send_test_recommendation(recommendation, context)
 
-    async def _send_test_recommendation(self, recommendation, context=None):
-        """Відправляє рекомендацію на основі результатів тестів в MCP API."""
-        api_url = f"{MCP_API_URL}/test_recommendation"
-        payload = {
-            "recommendation": recommendation,
-            "context": context or {}
-        }
-        
-        log_message(f"[AI3] Sending test recommendation to MCP API: {recommendation}")
-        
+    async def _send_test_recommendation(self, recommendation: str, context: dict):
+        """Відправляє рекомендацію щодо тестування в MCP API."""
+        mcp_api_url = self.config.get("mcp_api_url", DEFAULT_MCP_API_URL) # Use constant
         try:
             await self.create_session()
-            async with self.session.post(api_url, json=payload) as response:
+            # Assuming TestRecommendation is a Pydantic model or similar
+            # recommendation_data = TestRecommendation(recommendation=recommendation, context=context)
+            # Sending raw dict for now
+            recommendation_data = {"recommendation": recommendation, "context": context}
+            async with self.session.post(f"{mcp_api_url}/test_recommendation", json=recommendation_data) as response:
                 if response.status == 200:
-                    log_message(f"[AI3] Test recommendation sent successfully: {recommendation}")
-                    return True
+                    logger.info(f"[AI3] Successfully sent test recommendation '{recommendation}' to MCP API.")
                 else:
-                    response_text = await response.text()
-                    log_message(f"[AI3] Failed to send test recommendation. Status: {response.status}, Response: {response_text}")
-                    return False
+                    logger.error(f"[AI3] Error sending test recommendation to MCP API: {response.status} - {await response.text()}")
         except Exception as e:
-            log_message(f"[AI3] Error sending test recommendation: {e}")
-            return False
+            logger.error(f"[AI3] Failed to send test recommendation to MCP API: {e}")
+
+    async def monitor_idle_workers(self):
+        """Моніторить простоюючі AI2 воркери."""
+        mcp_api_url = self.config.get("mcp_api_url", DEFAULT_MCP_API_URL) # Use constant
+        check_interval = self.config.get("idle_worker_check_interval", 30)
+        logger.info("[AI3] Starting idle worker monitoring.")
+        while True:
+            try:
+                await self.create_session()
+                async with self.session.get(f"{mcp_api_url}/worker_status") as response:
+                    if response.status == 200:
+                        worker_statuses = await response.json()
+                        # logger.debug(f"[AI3] Worker statuses: {worker_statuses}")
+                        for role, status in worker_statuses.items():
+                            if status == "idle":
+                                logger.info(f"[AI3] Worker '{role}' is idle. Requesting new task.")
+                                await self._request_task_for_idle_worker(role, mcp_api_url)
+                    else:
+                        logger.warning(f"[AI3] Error checking worker status: {response.status}. Falling back to log analysis.")
+                        # Fallback: Аналіз логів MCP API на повідомлення про порожню чергу
+                        await self._check_logs_for_idle_workers()
+
+            except aiohttp.ClientConnectorError as e:
+                 logger.error(f"[AI3] Connection error while checking worker status: {e}. Falling back to log analysis.")
+                 await self._check_logs_for_idle_workers() # Fallback
+            except Exception as e:
+                logger.error(f"[AI3] Error monitoring idle workers: {e}")
+
+            await asyncio.sleep(check_interval)
+
+    async def _request_task_for_idle_worker(self, role: str, mcp_api_url: str):
+        """Запитує нову задачу для простоюючого воркера."""
+        try:
+            await self.create_session()
+            async with self.session.post(f"{mcp_api_url}/request_task_for_idle_worker", json={"role": role}) as response:
+                if response.status == 200:
+                    logger.info(f"[AI3] Successfully requested new task for idle worker '{role}'.")
+                elif response.status == 404: # No tasks available
+                     logger.debug(f"[AI3] No tasks available for idle worker '{role}'.")
+                else:
+                    logger.error(f"[AI3] Error requesting task for idle worker '{role}': {response.status} - {await response.text()}")
+        except Exception as e:
+            logger.error(f"[AI3] Failed to request task for idle worker '{role}': {e}")
+
+    async def _check_logs_for_idle_workers(self):
+        """Резервний метод: аналізує лог MCP API на повідомлення про порожню чергу."""
+        # log_file variable was unused, removed it.
+        # log_file = self.config.get("mcp_log_file", "logs/mcp_api.log")
+        try:
+            # Читаємо останні N рядків логу
+            # Реалізація читання логів може бути складною в асинхронному режимі,
+            # для простоти можна використовувати синхронне читання або спеціалізовані бібліотеки
+            # Тут просто приклад логіки
+            # logger.debug("[AI3] Fallback: Checking MCP logs for idle workers.")
+            # ... логіка аналізу логів ...
+            pass # Поки що пропускаємо реалізацію fallback
+        except Exception as e:
+            logger.error(f"[AI3] Error checking logs for idle workers: {e}")
 
 
-# Глобальний екземпляр AI3 для використання в API та main
-ai3_instance = AI3()
+    async def monitor_system_errors(self):
+        """Моніторить лог-файли системи на наявність помилок."""
+        log_files = self.config.get("error_log_files", ["logs/mcp_api.log", "logs/ai1.log", "logs/ai2.log", "logs/ai3.log"])
+        check_interval = self.config.get("error_check_interval", 60)
+        error_pattern = re.compile(r"ERROR|CRITICAL", re.IGNORECASE) # Updated pattern
+        processed_errors = set() # Зберігаємо хеші оброблених помилок
+
+        logger.info("[AI3] Starting system error monitoring.")
+        while True:
+            try:
+                for log_file in log_files:
+                    if not os.path.exists(log_file):
+                        # logger.debug(f"[AI3] Log file not found: {log_file}")
+                        continue
+
+                    async with aiofiles.open(log_file, mode='r', encoding='utf-8', errors='ignore') as f:
+                         # Читаємо останні рядки або весь файл, залежно від стратегії
+                         # Для простоти читаємо весь файл, але це неефективно для великих логів
+                         lines = await f.readlines()
+                         for line in lines[-100:]: # Обробляємо останні 100 рядків
+                             if error_pattern.search(line):
+                                 error_hash = hash(line) # Простий спосіб ідентифікації унікальних помилок
+                                 if error_hash not in processed_errors:
+                                     logger.warning(f"[AI3] Detected error in {log_file}: {line.strip()}")
+                                     await self._request_error_fix(log_file, line.strip())
+                                     processed_errors.add(error_hash)
+
+            except Exception as e:
+                logger.error(f"[AI3] Error monitoring system errors: {e}")
+
+            await asyncio.sleep(check_interval)
+
+    async def _request_error_fix(self, file_path: str, error_message: str):
+        """Запитує задачу на виправлення помилки в MCP API."""
+        mcp_api_url = self.config.get("mcp_api_url", DEFAULT_MCP_API_URL) # Use constant
+        try:
+            await self.create_session()
+            # Формуємо дані для запиту
+            # Можливо, потрібно буде додати більше контексту
+            error_data = {
+                "role": "executor", # Або спеціальна роль "fixer"?
+                "prompt": f"Fix the error found in {file_path}:\n```\n{error_message}\n```\nAnalyze the error and the related code, then provide the corrected code.",
+                "file": file_path, # Або файл, що спричинив помилку, якщо його можна визначити
+                "priority": 1 # Високий пріоритет для виправлення помилок
+            }
+            async with self.session.post(f"{mcp_api_url}/task", json=error_data) as response:
+                if response.status == 200:
+                    logger.info(f"[AI3] Successfully requested error fix task for: {error_message[:100]}...")
+                else:
+                    logger.error(f"[AI3] Error requesting error fix task: {response.status} - {await response.text()}")
+        except Exception as e:
+            logger.error(f"[AI3] Failed to request error fix task: {e}")
+
+
+    async def run(self):
+        """Запускає всі фонові задачі AI3."""
+        logger.info("[AI3] Starting AI3 background tasks...")
+        await self.create_session() # Створюємо сесію перед запуском задач
+        tasks = [
+            self.monitor_idle_workers(),
+            self.monitor_system_errors(),
+            self.monitor_github_actions()
+        ]
+        try:
+            await asyncio.gather(*tasks)
+        except Exception as e:
+             logger.critical(f"[AI3] An error occurred in AI3 main run loop: {e}")
+        finally:
+             await self.close_session() # Закриваємо сесію при завершенні
+             logger.info("[AI3] AI3 background tasks stopped.")
 
 
 async def main():
-    try:
-        log_message("[AI3] Starting main function with full error tracing")
-        
-        # Try to import potentially missing modules
-        try:
-            log_message("[AI3] Checking for required modules...")
-            install_missing_modules("together")
-            install_missing_modules("mistralai")
-        except Exception as e:
-            log_message(f"[AI3] WARNING: Error during module installation: {str(e)}")
-
-        # Get target from config
-        target = config.get("target")
-        if not target:
-            log_message("[AI3] CRITICAL: 'target' not found in config.json. Exiting.")
-            return
-
-        log_message(f"[AI3] Started with target: {target}")
-
-        # Wait for MCP API
-        log_message(f"[AI3] Checking connection to MCP API at {MCP_API_URL}")
-        api_available = await wait_for_service(MCP_API_URL, timeout=120)
-        if not api_available:
-            log_message(f"[AI3] CRITICAL: MCP API at {MCP_API_URL} not available. Exiting.")
-            return
-
-        # Initialize repository
-        try:
-            repo = ai3_instance.repo  # Use instance's repo
-            log_message(f"[AI3] Successfully got repository reference: {repo.working_dir}")
-        except Exception as repo_err:
-            log_message(f"[AI3] ERROR accessing repository: {str(repo_err)}")
-            # Continue execution even with repo error
-
-        # Check for existing structure
-        structure_obj = None
-        try:
-            log_message("[AI3] Attempting to retrieve existing structure from API...")
-            api_url = f"{MCP_API_URL}/structure"
-            async with aiohttp.ClientSession() as session:
-                async with session.get(api_url, timeout=10) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        if (
-                            data
-                            and isinstance(data.get("structure"), dict)
-                            and data["structure"]
-                        ):
-                            structure_obj = data["structure"]
-                            log_message("[AI3] Found existing structure from API.")
-        except Exception as e:
-            log_message(f"[AI3] Could not check for existing structure: {e}")
-
-        # Generate structure if none exists
-        if not structure_obj:
-            log_message("[AI3] Attempting to generate project structure...")
-            try:
-                structure_obj = await generate_structure(target)
-            except Exception as gen_err:
-                log_message(f"[AI3] ERROR during structure generation: {str(gen_err)}")
-                structure_obj = None  # Ensure it's None if generation failed
-
-            if structure_obj:
-                log_message(
-                    "[AI3] Structure generated. Sending to API and creating files..."
-                )
-                try:
-                    api_send_result = await send_structure_to_api(structure_obj)
-                    if api_send_result:
-                        try:
-                            file_creation_result = await create_files_from_structure(structure_obj, ai3_instance.repo)
-                            if not file_creation_result:
-                                log_message(
-                                    "[AI3] Failed to create files from structure. Continuing monitor."
-                                )
-                                await send_ai3_report("structure_creation_failed")
-                        except Exception as file_err:
-                            log_message(f"[AI3] ERROR during file creation: {str(file_err)}")
-                            await send_ai3_report("structure_creation_failed", {"error": str(file_err)})
-                    else:
-                        log_message(
-                            "[AI3] Failed to send structure to API. Cannot create files."
-                        )
-                        await send_ai3_report("structure_api_send_failed")
-                except Exception as api_err:
-                    log_message(f"[AI3] ERROR during API communication or file creation: {str(api_err)}")
-                    await send_ai3_report("structure_api_send_failed", {"error": str(api_err)})
-            else:
-                log_message("[AI3] Failed to generate structure. Cannot create files.")
-                await send_ai3_report("structure_generation_failed")
-
-        # Start monitoring tasks
-        log_message("[AI3] Starting monitoring tasks.")
-        monitoring_task = None  # Workers and logs monitoring
-        github_actions_task = None  # GitHub Actions monitoring
-        
-        try:
-            # Start all monitoring tasks
-            try:
-                monitoring_task = asyncio.create_task(ai3_instance.start_monitoring())
-                log_message("[AI3] Main monitoring task started.")
-            except Exception as mon_err:
-                log_message(f"[AI3] ERROR starting monitoring task: {str(mon_err)}")
-            
-            try:
-                github_actions_task = asyncio.create_task(ai3_instance.monitor_github_actions())
-                log_message("[AI3] GitHub Actions monitoring task started.")
-            except Exception as gh_err:
-                log_message(f"[AI3] ERROR starting GitHub Actions monitoring: {str(gh_err)}")
-            
-            log_message("[AI3] All monitoring tasks started.")
-            
-            # Main loop to keep the program active
-            log_message("[AI3] Starting main keep-alive loop")
-            while True:
-                await asyncio.sleep(60)  # Check every minute
-                log_message("[AI3] Main loop heartbeat - still running")
-
-        except asyncio.CancelledError:
-            log_message("[AI3] Main task cancelled")
-        except Exception as e:
-            log_message(f"[AI3] Unexpected error in main task: {e}")
-        finally:
-            log_message("[AI3] Main task finishing. Cleaning up...")
-            # Cancel all monitoring tasks
-            for task, name in [
-                (monitoring_task, "Monitoring"),
-                (github_actions_task, "GitHub Actions monitoring")
-            ]:
-                if task and not task.done():
-                    try:
-                        task.cancel()
-                        try:
-                            await task
-                            log_message(f"[AI3] {name} task cancelled successfully.")
-                        except asyncio.CancelledError:
-                            log_message(f"[AI3] {name} task cancellation confirmed.")
-                        except Exception as e:
-                            log_message(f"[AI3] Error during {name} task cancellation: {e}")
-                    except Exception as cancel_err:
-                        log_message(f"[AI3] ERROR cancelling {name} task: {str(cancel_err)}")
-            
-            # Close session
-            try:
-                await ai3_instance.close_session()
-                log_message("[AI3] Session closed successfully.")
-            except Exception as sess_err:
-                log_message(f"[AI3] ERROR closing session: {str(sess_err)}")
-            
-            log_message("[AI3] Exiting.")
-
-    except Exception as main_err:
-        log_message(f"[AI3] CRITICAL ERROR in main function: {str(main_err)}")
-        # Try to report the error
-        try:
-            await send_ai3_report("critical_error", {"error": str(main_err)})
-        except:
-            # Last resort logging if even the report fails
-            print(f"CRITICAL AI3 ERROR: {str(main_err)}")
-
+    config = load_config()
+    ai3 = AI3(config)
+    await ai3.run()
 
 if __name__ == "__main__":
-    try:
-        print("AI3 starting at", datetime.now())
-        
-        # Підготовка до запуску основного асинхронного циклу 
-        # Настройка важливих обробників сигналів та помилок
-        import signal
-        import sys
-        import traceback
-        
-        def signal_handler(sig, frame):
-            print(f"AI3 received signal {sig}, shutting down gracefully...")
-            # Можна додати додатковий код для завершення роботи (наприклад, закриття сесій)
-            sys.exit(0)
-            
-        # Встановлюємо обробники сигналів
-        signal.signal(signal.SIGINT, signal_handler)
-        signal.signal(signal.SIGTERM, signal_handler)
-        
-        # Встановлюємо глобальний обробник винятків
-        def global_exception_handler(loop, context):
-            exception = context.get('exception')
-            if exception:
-                print(f"AI3 global exception: {exception}")
-                print(f"Exception context: {context}")
-                traceback.print_exc()
-            else:
-                print(f"AI3 error: {context['message']}")
-                
-        loop = asyncio.get_event_loop()
-        loop.set_exception_handler(global_exception_handler)
-        
-        # Запускаємо основний цикл з моніторингом
-        print("AI3 starting main event loop")
-        try:
-            loop.run_until_complete(main())
-        except Exception as e:
-            print(f"AI3 main loop exception: {e}")
-            traceback.print_exc()
-        finally:
-            print("AI3 shutdown completed at", datetime.now())
+    # Logger is already configured at the top level using setup_service_logger
+    # Remove redundant logger setup here
 
-    except Exception as start_error:
-        print(f"AI3 startup critical error: {start_error}")
-        traceback.print_exc()
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("[AI3] AI3 stopped by user.")

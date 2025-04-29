@@ -3,3 +3,4 @@ uvicorn[standard]
 flake8
 black
 isort
+python-json-logger

@@ -15,18 +15,22 @@
     />
   </head>
   <body>
-    <h1>AI-SYSTEMS Dashboard</h1>
+    <!-- Заголовок з перемикачем тем -->
+    <div class="header">
+      <h1>AI-SYSTEMS Dashboard</h1>
+      <div class="theme-switcher">
+        <button onclick="setTheme('dark')">Dark</button>
+        <button onclick="setTheme('light')">Light</button>
+        <button onclick="setTheme('winter')">Winter</button>
+        <button onclick="setTheme('autumn')">Autumn</button>
+        <button onclick="setTheme('midnight')">Midnight</button>
+        <button onclick="setTheme('forest')">Forest</button>
+        <button onclick="setTheme('spring')">Spring</button>
+        <button onclick="setTheme('summer')">Summer</button>
+      </div>
+    </div>
 
-    <div class="container">
-      <div class="main-content">
-        <!-- Замінюємо старий графік на новий -->
-        <div class="chart-container">
-          <h2>Project Statistics</h2>
-          <canvas id="progressStatsChart"></canvas>
-          <!-- Новий ID для графіка -->
-        </div>
-
-        <div class="task-list">
+    <!-- Основний контейнер вмісту -->
     <div class="container">
       <!-- Control Panel -->
       <section class="panel control-panel">
@@ -43,13 +47,11 @@
             AI3: <span id="ai3-status">Off</span>
           </button>
           <button id="start-all-button" onclick="startAll()">Start All</button>
-          <!-- Added ID -->
           <button id="stop-all-button" onclick="stopAll()">Stop All</button>
           <button onclick="resetSystem()">Reset & Restart</button>
           <button id="clear-log-button" onclick="clearLogs()">
             Clear Logs
           </button>
-          <!-- Added ID -->
           <button
             id="clear-repo-button"
             onclick="clearRepo()"
@@ -57,7 +59,6 @@
           >
             Clear Repo
           </button>
-          <!-- Added Clear Repo Button -->
         </div>
         <div class="prompt-editor">
           <h3><i class="fas fa-edit"></i> Edit Prompts & Target</h3>
@@ -94,7 +95,7 @@
           <p>Completed: <span id="completed-tasks">0</span></p>
           <p>Efficiency: <span id="efficiency">0%</span></p>
         </div>
-        <!-- Додано поле для налаштування буфера -->
+        <!-- Поле для налаштування буфера -->
         <div class="config-item">
           <label for="ai1-buffer">Desired Active Buffer:</label>
           <input
@@ -111,7 +112,6 @@
           </button>
         </div>
         <div class="charts">
-          <!-- Removed nested chart-container divs -->
           <div class="chart-item">
             <canvas id="taskChart"></canvas>
           </div>

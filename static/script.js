@@ -4,18 +4,20 @@ const reconnectInterval = 5000; // Reconnect interval 5 seconds
 const maxReconnectAttempts = 10;
 let reconnectAttempts = 0;
 
-// --- Global DOM Elements (cache them) ---
-let logContent; // Will be assigned in DOMContentLoaded
+// --- Global DOM Elements (cache them, assign in DOMContentLoaded) ---
+let logContent;
+let taskTableBody;
 let aiButtons = {};
 let queueLists = {};
 let queueCounts = {};
 let statElements = {};
 let subtask_status = {}; // Add global status object
 
-const logsElement = document.getElementById('logs');
-const taskTableBody = document.getElementById('taskTable').querySelector('tbody');
-const wsUrl = `ws://${window.location.host}/ws`;
-let socket;
+// Remove immediate assignment:
+// const logsElement = document.getElementById('logs'); // Assign inside DOMContentLoaded
+// const taskTableBody = document.getElementById('taskTable').querySelector('tbody'); // Assign inside DOMContentLoaded
+// const wsUrl = `ws://${window.location.host}/ws`; // Define inside connectWebSocket
+// let socket; // Not used globally, ws is used
 
 // --- Monaco Editor Setup ---
 require.config({
@@ -36,8 +38,10 @@ require(["vs/editor/editor.main"], function () {
 
 // --- WebSocket Connection ---
 function connectWebSocket() {
+  // Define wsUrl inside the function scope
   const wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   const wsUrl = `${wsProtocol}//${window.location.host}/ws`;
+
   console.log(`Attempting to connect to WebSocket: ${wsUrl}`);
   if (logContent)
     logContent.innerHTML += `<p><em>Attempting to connect to WebSocket: ${wsUrl}</em></p>`;
@@ -605,41 +609,94 @@ function updateCharts(data) {
   }
 
   // Progress Chart (Line)
-  // ... (initialization code remains the same)
   if (!progressChart) {
     const ctx = document.getElementById("progressChart")?.getContext("2d");
     if (ctx) {
       progressChart = new Chart(ctx, {
         type: "line",
         data: {
-          labels: [],
+          labels: [], // Часові мітки або етапи проекту
           datasets: [
             {
-              label: "Project Progress %",
+              label: "Виконані завдання",
               data: [],
               backgroundColor: "rgba(75, 192, 192, 0.2)",
               borderColor: "rgba(75, 192, 192, 1)",
               borderWidth: 2,
               tension: 0.4,
-              fill: true,
+              fill: false,
+              yAxisID: "y",
+            },
+            {
+              label: "Успішні тести",
+              data: [],
+              backgroundColor: "rgba(54, 162, 235, 0.2)",
+              borderColor: "rgba(54, 162, 235, 1)",
+              borderWidth: 2,
+              tension: 0.4,
+              fill: false,
+              yAxisID: "y",
+            },
+            {
+              label: "Git дії",
+              data: [],
+              backgroundColor: "rgba(255, 159, 64, 0.2)",
+              borderColor: "rgba(255, 159, 64, 1)",
+              borderWidth: 2,
+              tension: 0.4,
+              fill: false,
+              yAxisID: "y",
+            },
+            {
+              label: "Загальний прогрес %",
+              data: [],
+              backgroundColor: "rgba(153, 102, 255, 0.2)",
+              borderColor: "rgba(153, 102, 255, 1)",
+              borderWidth: 3,
+              tension: 0.4,
+              fill: false,
+              yAxisID: "y1",
             },
           ],
         },
         options: {
           ...chartOptions,
           scales: {
-            // Ensure Y-axis goes to 100 for percentage
             ...chartOptions.scales,
             y: {
               ...chartOptions.scales.y,
+              position: "left",
+              title: {
+                display: true,
+                text: "Кількість",
+                color: getChartFontColor(),
+              },
+            },
+            y1: {
+              type: "linear",
+              position: "right",
+              title: {
+                display: true,
+                text: "Відсоток завершення",
+                color: getChartFontColor(),
+              },
               max: 100,
+              grid: {
+                drawOnChartArea: false,
+              },
+              ticks: {
+                color: getChartFontColor(),
+                callback: function (value) {
+                  return value + "%";
+                },
+              },
             },
           },
           plugins: {
             ...chartOptions.plugins,
             title: {
               ...chartOptions.plugins.title,
-              text: "Project Progress",
+              text: "Деталі прогресу проєкту",
             },
           },
         },
@@ -759,28 +816,108 @@ function updateCharts(data) {
   }
 
   // Update Progress Chart (Line Chart)
-  if (progressChart && data.progress) {
-    // Check for progress object
+  if (progressChart && data.progress_data) {
     console.log(
       "[Chart Update] Updating Progress Chart with data:",
-      data.progress
+      data.progress_data
     );
-    // Assuming data.progress = { labels: ["Stage1", ...], values: [10, 25, ...] }
-    if (data.progress.labels && data.progress.values) {
+    if (data.progress_data.labels && data.progress_data.values) {
+      let changed = false;
+
+      // Перевірка заголовків
       if (
         JSON.stringify(progressChart.data.labels) !==
-          JSON.stringify(data.progress.labels) ||
-        JSON.stringify(progressChart.data.datasets[0].data) !==
-          JSON.stringify(data.progress.values)
+        JSON.stringify(data.progress_data.labels)
       ) {
-        progressChart.data.labels = data.progress.labels;
-        progressChart.data.datasets[0].data = data.progress.values;
-        chartsUpdated = true;
+        progressChart.data.labels = data.progress_data.labels;
+        changed = true;
+      }
+
+      // Оновлення різних наборів даних
+      if (
+        data.progress_data.completed_tasks &&
+        JSON.stringify(progressChart.data.datasets[0].data) !==
+          JSON.stringify(data.progress_data.completed_tasks)
+      ) {
+        progressChart.data.datasets[0].data =
+          data.progress_data.completed_tasks;
+        changed = true;
+      }
+
+      if (
+        data.progress_data.successful_tests &&
+        JSON.stringify(progressChart.data.datasets[1].data) !==
+          JSON.stringify(data.progress_data.successful_tests)
+      ) {
+        progressChart.data.datasets[1].data =
+          data.progress_data.successful_tests;
+        changed = true;
+      }
+
+      if (
+        data.progress_data.git_actions &&
+        JSON.stringify(progressChart.data.datasets[2].data) !==
+          JSON.stringify(data.progress_data.git_actions)
+      ) {
+        progressChart.data.datasets[2].data = data.progress_data.git_actions;
+        changed = true;
+      }
+
+      // Оновлення загального прогресу у відсотках
+      if (
+        JSON.stringify(progressChart.data.datasets[3].data) !==
+        JSON.stringify(data.progress_data.values)
+      ) {
+        progressChart.data.datasets[3].data = data.progress_data.values;
+        changed = true;
+      }
+
+      if (changed) {
         console.log("[Chart Update] Progress Chart data changed.");
+        chartsUpdated = true;
       }
     } else {
       console.warn(
         "[Chart Update] Progress data received but missing labels or values:",
+        data.progress_data
+      );
+    }
+  } else if (progressChart && data.progress) {
+    // Підтримка старого формату для сумісності
+    console.log(
+      "[Chart Update] Updating Progress Chart with legacy data format:",
+      data.progress
+    );
+    if (data.progress.labels && data.progress.values) {
+      let changed = false;
+
+      // Перевірка заголовків
+      if (
+        JSON.stringify(progressChart.data.labels) !==
+        JSON.stringify(data.progress.labels)
+      ) {
+        progressChart.data.labels = data.progress.labels;
+        changed = true;
+      }
+
+      // Оновлення загального прогресу у відсотках (тільки для старого формату)
+      if (
+        JSON.stringify(progressChart.data.datasets[3].data) !==
+        JSON.stringify(data.progress.values)
+      ) {
+        progressChart.data.datasets[3].data = data.progress.values;
+        changed = true;
+      }
+
+      if (changed) {
+        console.log(
+          "[Chart Update] Progress Chart data (legacy format) changed."
+        );
+        chartsUpdated = true;
+      }
+    } else {
+      console.warn(
+        "[Chart Update] Legacy progress data received but missing labels or values:",
         data.progress
       );
     }
@@ -1363,16 +1500,39 @@ function setTheme(theme) {
     monaco.editor.setTheme(editorTheme);
   }
 
-  // Update chart colors if charts exist
-  const chartColor = getChartFontColor();
-  [taskChart, progressChart, gitChart, statusPieChart].forEach((chart) => {
-    if (chart) {
-      chart.options.scales.y.ticks.color = chartColor;
-      chart.options.scales.x.ticks.color = chartColor;
-      chart.options.plugins.legend.labels.color = chartColor;
-      chart.update();
-    }
-  });
+  // Update chart colors ONLY if charts have been initialized
+  if (taskChart) {
+    // Check if the first chart exists as a proxy for all charts being initialized
+    const chartColor = getChartFontColor();
+    [taskChart, progressChart, gitChart, statusPieChart].forEach((chart) => {
+      if (chart && chart.options) {
+        // Check if chart and options exist
+        try {
+          // Update axis colors only if scales exist (for bar/line charts)
+          if (chart.options.scales?.y?.ticks) {
+            chart.options.scales.y.ticks.color = chartColor;
+          }
+          if (chart.options.scales?.x?.ticks) {
+            chart.options.scales.x.ticks.color = chartColor;
+          }
+
+          // Update legend colors if legend exists
+          if (chart.options.plugins?.legend?.labels) {
+            chart.options.plugins.legend.labels.color = chartColor;
+          }
+
+          // Update title color if title exists
+          if (chart.options.plugins?.title) {
+            chart.options.plugins.title.color = chartColor;
+          }
+
+          chart.update(); // Update the chart to apply color changes
+        } catch (error) {
+          console.error("Error updating chart theme:", error, "Chart:", chart);
+        }
+      }
+    });
+  }
 
   console.log(`Theme set to: ${theme}`);
 }
@@ -1615,147 +1775,4 @@ document.addEventListener("DOMContentLoaded", () => {
   updateStatsFromSubtasks({});
 
   console.log("Initialization complete.");
-});
-
-const ctxStats = document.getElementById('progressStatsChart').getContext('2d');
-let progressStatsChart;
-
-function initializeChart() {
-    progressStatsChart = new Chart(ctxStats, {
-        type: 'bar', // Або 'doughnut', 'pie'
-        data: {
-            labels: ['Tasks Completed', 'Files Created', 'Files Accepted', 'Files Rejected'],
-            datasets: [{
-                label: 'Count',
-                data: [0, 0, 0, 0], // Початкові дані
-                backgroundColor: [
-                    'rgba(75, 192, 192, 0.6)', // Completed
-                    'rgba(54, 162, 235, 0.6)', // Created
-                    'rgba(153, 102, 255, 0.6)', // Accepted
-                    'rgba(255, 99, 132, 0.6)'  // Rejected
-                ],
-                borderColor: [
-                    'rgba(75, 192, 192, 1)',
-                    'rgba(54, 162, 235, 1)',
-                    'rgba(153, 102, 255, 1)',
-                    'rgba(255, 99, 132, 1)'
-                ],
-                borderWidth: 1
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            scales: {
-                y: {
-                    beginAtZero: true,
-                    ticks: {
-                       stepSize: 1 // Показувати цілі числа на осі Y
-                    }
-                }
-            },
-            plugins: {
-                legend: {
-                    display: false // Можна приховати легенду для bar chart
-                }
-            }
-        }
-    });
-}
-
-function updateChart(stats) {
-    if (progressStatsChart && stats) {
-        progressStatsChart.data.datasets[0].data = [
-            stats.tasks_completed || 0,
-            stats.files_created || 0,
-            stats.files_tested_accepted || 0,
-            stats.files_rejected || 0
-        ];
-        progressStatsChart.update();
-    }
-}
-
-
-// --- WebSocket Connection ---
-function connectWebSocket() {
-    socket = new WebSocket(wsUrl);
-
-    socket.onopen = function(event) {
-        console.log("WebSocket connection established");
-        logsElement.textContent += "WebSocket connection established\n";
-    };
-
-    socket.onmessage = function(event) {
-        try {
-            const data = JSON.parse(event.data);
-            // console.log("Received data:", data); // Debugging
-
-            // Оновлення логів
-            if (data.type === 'log' && data.content) {
-                logsElement.textContent += data.content + '\n';
-                logsElement.scrollTop = logsElement.scrollHeight; // Auto-scroll
-            }
-
-            // Оновлення таблиці завдань
-            if (data.tasks) {
-                updateTaskTable(data.tasks);
-            }
-
-            // Оновлення графіка статистики
-            if (data.stats) {
-                 updateChart(data.stats);
-            }
-
-        } catch (e) {
-            console.error("Failed to parse WebSocket message or update UI:", e);
-            logsElement.textContent += `Error processing message: ${event.data}\n`;
-        }
-    };
-
-    socket.onclose = function(event) {
-        console.log("WebSocket connection closed. Attempting to reconnect...");
-        logsElement.textContent += "WebSocket connection closed. Attempting to reconnect...\n";
-        // Спроба перепідключення через 5 секунд
-        setTimeout(connectWebSocket, 5000);
-    };
-
-    socket.onerror = function(error) {
-        console.error("WebSocket error:", error);
-        logsElement.textContent += `WebSocket error: ${error}\n`;
-        // Закриття може викликати onclose, який спробує перепідключитися
-    };
-}
-
-// --- Task Table Update ---
-function updateTaskTable(tasks) {
-    // Очищаємо поточні рядки
-    taskTableBody.innerHTML = '';
-
-    // Сортуємо завдання за часом створення або ID для послідовності
-    const sortedTaskIds = Object.keys(tasks).sort((a, b) => {
-         // Спробуємо сортувати за timestamp, якщо є, інакше за ID
-         const timeA = tasks[a]?.timestamp || a;
-         const timeB = tasks[b]?.timestamp || b;
-         return timeA.localeCompare(timeB);
-    });
-
-
-    // Додаємо рядки для кожного завдання
-    sortedTaskIds.forEach(taskId => {
-        const task = tasks[taskId];
-        const row = taskTableBody.insertRow();
-        row.insertCell().textContent = taskId.substring(0, 8); // Скорочений ID
-        row.insertCell().textContent = task.file || 'N/A';
-        row.insertCell().textContent = task.role || 'N/A';
-        const statusCell = row.insertCell();
-        statusCell.textContent = task.status || 'pending';
-        statusCell.className = `status-${(task.status || 'pending').replace('_', '-')}`; // Додаємо клас для стилізації
-        row.insertCell().textContent = task.timestamp ? new Date(task.timestamp).toLocaleTimeString() : (task.report_timestamp ? new Date(task.report_timestamp).toLocaleTimeString() : 'N/A');
-    });
-}
-
-// --- Initial Load ---
-document.addEventListener('DOMContentLoaded', (event) => {
-    initializeChart(); // Ініціалізуємо графік при завантаженні сторінки
-    connectWebSocket(); // Підключаємося до WebSocket
 });

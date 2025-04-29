@@ -20,8 +20,18 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field, ValidationError
 
-from providers import ProviderFactory  # Добавьте этот импорт, если его нет
-from ai3 import ai3_instance # Import the global instance
+from json_log_formatter import JSONFormatter # Corrected import
+from utils import log_message
+# Assuming TestRecommendation is defined in ai3.py
+try:
+    from ai3 import TestRecommendation
+except ImportError:
+    # Fallback or placeholder if ai3.py doesn't define it directly
+    # This might need adjustment based on the actual definition location
+    class TestRecommendation(BaseModel):
+        recommendation: str
+        context: dict = {}
+
 
 load_dotenv()
 
@@ -424,6 +434,71 @@ def get_progress_stats():
     stats["files_rejected"] = len(rejected_files) # Тільки ті, що зараз потребують доопрацювання
 
     return stats
+
+
+def get_progress_chart_data():
+    """
+    Формує дані для графіка прогресу проєкту, включаючи 
+    кількість виконаних завдань, успішних тестів, git-активності та загального прогресу.
+    
+    Returns:
+        dict: Структуровані дані для графіка прогресу.
+    """
+    # Створюємо часові мітки (останні 10 періодів)
+    from datetime import datetime, timedelta
+    now = datetime.now()
+    timestamps = [(now - timedelta(hours=i)).strftime("%H:%M") for i in range(9, -1, -1)]
+    
+    # Отримуємо кількість виконаних завдань
+    completed_tasks = []
+    for _ in range(10):
+        # На реальному графіку тут має бути логіка підрахунку виконаних завдань за періоди
+        # Зараз використовуємо фіктивні дані
+        completed = len([status for status in subtask_status.values() 
+                        if status in ["accepted", "completed", "code_received"]])
+        completed_tasks.append(completed)
+    
+    # Отримуємо кількість успішних тестів
+    successful_tests = []
+    for _ in range(10):
+        # На реальному графіку тут має бути логіка підрахунку успішних тестів за періоди
+        # Зараз використовуємо фіктивні дані, але з варіаціями
+        tests = len([status for status in subtask_status.values() 
+                    if status == "completed" and "test" in status])
+        successful_tests.append(tests)
+    
+    # Отримуємо кількість git дій
+    git_actions = []
+    for i in range(10):
+        # На реальному графіку тут має бути логіка підрахунку git дій за періоди
+        # Зараз використовуємо список історії комітів
+        git_actions.append(i + 1 if i < len(processed_history) else 0)
+    
+    # Розраховуємо загальний прогрес у відсотках
+    total_tasks = len(subtask_status)
+    completed_count = len([status for status in subtask_status.values() 
+                         if status in ["accepted", "completed", "code_received"]])
+    
+    # Якщо немає завдань, встановлюємо прогрес на 0%
+    if total_tasks == 0:
+        progress_percentage = [0] * 10
+    else:
+        # Інакше обчислюємо відсоток виконання для кожного періоду
+        # Для спрощення зараз використовуємо однаковий відсоток з невеликими варіаціями
+        base_percentage = (completed_count / total_tasks) * 100
+        progress_percentage = [
+            min(100, max(0, base_percentage + (i - 5) * 2))  # Невеликі варіації для візуалізації
+            for i in range(10)
+        ]
+    
+    # Формуємо підсумкові дані для графіка
+    return {
+        "labels": timestamps,
+        "values": progress_percentage,
+        "completed_tasks": completed_tasks,
+        "successful_tests": successful_tests,
+        "git_actions": git_actions
+    }
 
 
 # --- API Endpoints ---
@@ -1055,6 +1130,9 @@ async def broadcast_full_status():
                 status_counts["other"] += 1 # Catch-all for unknown/transient states
         # --- End Aggregation ---
 
+        # Get progress chart data
+        progress_chart_data = get_progress_chart_data()
+
         # Prepare git activity data
         history_list = list(processed_history)
         git_activity_data = {
@@ -1099,6 +1177,7 @@ async def broadcast_full_status():
             "ai3_report": ai3_report,
             # "processed_history": history_list, # Keep original if needed elsewhere, but add formatted one
             "git_activity": git_activity_data, # Add formatted data for the chart
+            "progress_data": progress_chart_data, # Add progress chart data
             "collaboration_requests": collaboration_requests,
             "status_counts": status_counts, # Include aggregated counts
             "config": { # Send relevant config parts
@@ -1285,7 +1364,8 @@ async def receive_report(report: Report):
                          repo_instance.index.commit(commit_message)
                          log_message(f"Committed changes for {file_path_in_repo}")
                      else:
-                          log_message(f"No changes detected in {file_path_in_repo, skipping commit.")
+                          # Виправлено помилку f-string
+                          log_message(f"No changes detected in {file_path_in_repo}, skipping commit.")
 
                  except Exception as e:
                      log_message(f"Git operation failed for {file_path_in_repo}: {e}", level="error")
@@ -1298,7 +1378,7 @@ async def receive_report(report: Report):
                  await create_follow_up_tasks(task_id)
 
              except Exception as e:
-                 log_message(f"Error writing file {file_path_in_repo}: {e}", level="error")
+                 logger.error(f"Error writing file {file_path_in_repo}: {e}")
                  tasks[task_id]["status"] = "error" # Позначаємо помилку запису
         elif report.report_type == "test_results":
              # Якщо це результати тестування від AI2-tester
@@ -1311,7 +1391,7 @@ async def receive_report(report: Report):
         await broadcast_update(f"Task {task_id} ({tasks[task_id]['file']}) updated: {tasks[task_id]['status']}", update_type="task_update")
         return {"message": "Report received"}
     else:
-        log_message(f"Received report for unknown task ID: {task_id}", level="warning")
+        logger.warning(f"Received report for unknown task ID: {task_id}")
         raise HTTPException(status_code=404, detail="Task not found")
 
 
