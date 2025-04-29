@@ -6,7 +6,7 @@ import os
 import re
 import subprocess
 import time
-from datetime import datetime
+from datetime import datetime # Ensure datetime is imported
 from pathlib import Path
 import shutil
 import aiofiles # Add missing import
@@ -1106,7 +1106,7 @@ class AI3:
 
     async def monitor_system_errors(self):
         """Моніторить лог-файли системи на наявність помилок, але з обмеженням
-        щоб уникнути переповнення черги executor."""
+        щоб уникнути переповнення черги executor. Повідомляє AI1 про знайдені помилки."""
         log_files = self.config.get("error_log_files", ["logs/mcp_api.log", "logs/ai1.log", "logs/ai2.log", "logs/ai3.log"])
         check_interval = self.config.get("error_check_interval", 60)
         # Специфічний патерн для критичних помилок, а не всіх логів з ERROR/CRITICAL
@@ -1121,85 +1121,145 @@ class AI3:
                 async with self.session.get(f"{self.config.get('mcp_api_url', DEFAULT_MCP_API_URL)}/worker_status") as response:
                     if response.status == 200:
                         worker_status = await response.json()
-                        executor_status = worker_status.get("executor", {})
-                        queue_size = executor_status.get("queue_size", 0)
-                        return queue_size
+                        # Збираємо розміри черг для всіх воркерів
+                        queue_sizes = {}
+                        for worker_name, status in worker_status.items():
+                            queue_sizes[worker_name] = status.get("queue_size", 0)
+                        
+                        # Повертаємо як загальний розмір executor черги, так і інформацію про всі черги
+                        return queue_sizes.get("executor", 0), queue_sizes
                     else:
-                        logger.warning(f"[AI3] Failed to get executor queue size: {response.status}")
-                        return 1000  # Припускаємо велику чергу у разі помилки
+                        logger.warning(f"[AI3] Failed to get worker status: {response.status}")
+                        return 1000, {}  # Припускаємо велику чергу у разі помилки
             except Exception as e:
-                logger.error(f"[AI3] Error checking executor queue size: {e}")
-                return 1000  # Припускаємо велику чергу у разі помилки
+                logger.error(f"[AI3] Error checking worker status: {e}")
+                return 1000, {}  # Припускаємо велику чергу у разі помилки
 
-        logger.info("[AI3] Starting system error monitoring (with queue control).")
+        logger.info("[AI3] Starting system error monitoring (reporting to AI1).")
         while True:
             try:
                 # Перевіряємо розмір черги перед обробкою помилок
-                queue_size = await check_executor_queue_size()
+                executor_queue_size, all_queue_sizes = await check_executor_queue_size()
                 queue_threshold = self.config.get("executor_queue_threshold", 10)
                 
-                if queue_size >= queue_threshold:
-                    logger.info(f"[AI3] Executor queue size ({queue_size}) exceeds threshold ({queue_threshold}). Skipping error processing.")
-                    await asyncio.sleep(check_interval * 2)  # Чекаємо довше, якщо черга завантажена
+                if executor_queue_size >= queue_threshold:
+                    logger.info(f"[AI3] Executor queue size ({executor_queue_size}) exceeds threshold ({queue_threshold}). Notifying AI1 for queue rebalancing.")
+                    
+                    # Відправляємо інформацію про розміри черг до AI1 для прийняття рішення про перерозподіл
+                    await self.send_queue_info_to_ai1(all_queue_sizes)
+                    
+                    # Чекаємо довше перед наступною перевіркою, якщо черга завантажена
+                    await asyncio.sleep(check_interval * 2)
                     continue
                 
                 # Обробляємо тільки обмежену кількість помилок
-                errors_processed = 0
+                errors_processed_this_cycle = 0
                 for log_file in log_files:
                     if not os.path.exists(log_file):
                         continue
                     
                     # Перевіряємо чи не перевищили ліміт
-                    if errors_processed >= max_errors_per_cycle:
+                    if errors_processed_this_cycle >= max_errors_per_cycle:
                         break
                         
-                    async with aiofiles.open(log_file, mode='r', encoding='utf-8', errors='ignore') as f:
-                         # Читаємо останні рядки
-                         lines = await f.readlines()
-                         for line in lines[-100:]: # Обробляємо останні 100 рядків
-                             # Перевіряємо чи не перевищили ліміт
-                             if errors_processed >= max_errors_per_cycle:
-                                 break
-                                 
-                             if error_pattern.search(line):
-                                 error_hash = hash(line) # Простий спосіб ідентифікації унікальних помилок
-                                 if error_hash not in processed_errors:
-                                     logger.info(f"[AI3] Detected critical error in {log_file}: {line.strip()}")
-                                     await self._request_error_fix(log_file, line.strip())
-                                     processed_errors.add(error_hash)
-                                     errors_processed += 1
-                
+                    try:
+                        async with aiofiles.open(log_file, mode='r', encoding='utf-8', errors='ignore') as f:
+                             # Читаємо останні рядки
+                             lines = await f.readlines()
+                             for i, line in enumerate(lines[-100:]): # Обробляємо останні 100 рядків
+                                 # Перевіряємо чи не перевищили ліміт
+                                 if errors_processed_this_cycle >= max_errors_per_cycle:
+                                     break
+                                     
+                                 if error_pattern.search(line):
+                                     error_hash = hash(line) # Простий спосіб ідентифікації унікальних помилок
+                                     if error_hash not in processed_errors:
+                                         logger.info(f"[AI3] Detected critical error in {log_file}: {line.strip()}")
+                                         # --- CHANGE: Report error to AI1 instead of requesting fix directly ---
+                                         # Extract context (e.g., surrounding lines)
+                                         context_lines = lines[max(0, len(lines) - 100 + i - 2) : min(len(lines), len(lines) - 100 + i + 3)]
+                                         error_context = "".join(context_lines)
+                                         await self._report_system_error_to_ai1(log_file, line.strip(), error_context)
+                                         # --------------------------------------------------------------------
+                                         processed_errors.add(error_hash)
+                                         errors_processed_this_cycle += 1
+                                         self.monitoring_stats["error_fixes_requested"] += 1 # Keep stat, but rename if needed
+                    except Exception as file_read_err:
+                         logger.error(f"[AI3] Error reading log file {log_file}: {file_read_err}")
+
+
                 # Якщо обробляли помилки, фіксуємо кількість
-                if errors_processed > 0:
-                    logger.info(f"[AI3] Processed {errors_processed} critical errors this cycle")
+                if errors_processed_this_cycle > 0:
+                    logger.info(f"[AI3] Reported {errors_processed_this_cycle} critical system errors to AI1 this cycle")
 
             except Exception as e:
                 logger.error(f"[AI3] Error monitoring system errors: {e}")
 
             await asyncio.sleep(check_interval)
 
-    async def _request_error_fix(self, file_path: str, error_message: str):
-        """Запитує задачу на виправлення помилки в MCP API."""
-        mcp_api_url = self.config.get("mcp_api_url", DEFAULT_MCP_API_URL) # Use constant
+    async def _report_system_error_to_ai1(self, log_file: str, error_line: str, context: str):
+        """Надсилає звіт про системну помилку до AI1 через MCP API."""
+        mcp_api_url = self.config.get("mcp_api_url", DEFAULT_MCP_API_URL)
         try:
             await self.create_session()
-            # Формуємо дані для запиту, використовуючи ключі, які очікує API
-            error_data = {
-                "errors": error_message, # Ключ, який очікує API: "errors", а не "error_message"
-                "file_path": file_path,  # Залишаємо цей ключ без змін 
-                "priority": 1 # Високий пріоритет для виправлення помилок
+            payload = {
+                "source": "AI3",
+                "type": "system_error_report", # New type field
+                "details": {
+                    "log_file": log_file,
+                    "error_line": error_line,
+                    "context": context, # Include surrounding lines
+                    "timestamp": datetime.now().isoformat()
+                }
             }
-            # ADD DEBUG LOGGING HERE
-            logger.debug(f"[AI3] Sending error fix request to {mcp_api_url}/request_error_fix with data: {error_data}")
-            # logger.debug(f"[AI3] Sending error fix request: {error_data}") # Debug log
-            async with self.session.post(f"{mcp_api_url}/request_error_fix", json=error_data) as response:
+            logger.info(f"[AI3 -> AI1] Reporting system error: {error_line[:100]}...")
+            async with self.session.post(
+                f"{mcp_api_url}/ai_collaboration", # Use the collaboration endpoint
+                json=payload,
+                timeout=15
+            ) as response:
                 if response.status == 200:
-                    logger.info(f"[AI3] Successfully requested error fix task for: {error_message[:100]}...")
+                    logger.info(f"[AI3 -> AI1] System error report sent successfully.")
+                    return True
                 else:
-                    logger.error(f"[AI3] Error requesting error fix task: {response.status} - {await response.text()}")
+                    logger.error(f"[AI3 -> AI1] Error sending system error report: {response.status} - {await response.text()}")
+                    return False
         except Exception as e:
-            logger.error(f"[AI3] Failed to request error fix task: {e}")
+            logger.error(f"[AI3 -> AI1] Failed to send system error report: {e}")
+            return False
 
+    async def send_queue_info_to_ai1(self, queue_sizes):
+        """Надсилає інформацію про розміри черг до AI1 для перерозподілу завдань."""
+        # Оскільки спілкування з AI1 відбувається через MCP API, використовуємо ендпоінт для комунікації
+        mcp_api_url = self.config.get("mcp_api_url", DEFAULT_MCP_API_URL)
+        try:
+            await self.create_session()
+            
+            payload = {
+                "source": "AI3",
+                "type": "queue_rebalance_request", # Changed field name to 'type' for consistency
+                "details": { # Nest details under a 'details' key
+                    "queue_sizes": queue_sizes,
+                    "timestamp": datetime.now().isoformat()
+                }
+            }
+            
+            # Відправляємо дані через ендпоінт ai_collaboration
+            logger.info(f"[AI3 -> AI1] Sending queue info to AI1: {queue_sizes}") # Simplified log
+            async with self.session.post(
+                f"{mcp_api_url}/ai_collaboration", 
+                json=payload,
+                timeout=15
+            ) as response:
+                if response.status == 200:
+                    logger.info(f"[AI3 -> AI1] Queue info sent successfully.") # Simplified log
+                    return True
+                else:
+                    logger.error(f"[AI3 -> AI1] Error sending queue info: {response.status} - {await resp.text()}") # Simplified log
+                    return False
+        except Exception as e:
+            logger.error(f"[AI3 -> AI1] Failed to send queue info: {e}") # Simplified log
+            return False
 
     async def run(self):
         """Запускає всі фонові задачі AI3."""

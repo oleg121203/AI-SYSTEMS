@@ -471,13 +471,14 @@ class GroqProvider(BaseProvider):
             self.groq = None
 
     def get_client(self) -> Any:
-        if not self.groq:
+        if not AsyncGroq:
             raise ValueError("Модуль groq не импортирован.")
         if not self.api_key:
             raise ValueError("API ключ Groq не установлен.")
         if self._client is None:
-            # Створюємо клієнт без параметра proxies, він не підтримується в новій версії
-            self._client = self.groq.AsyncGroq(api_key=self.api_key)
+            # Створюємо новий клієнт напряму, без жодних додаткових параметрів
+            import groq
+            self._client = groq.AsyncGroq(api_key=self.api_key)
         return self._client
 
     async def generate(
