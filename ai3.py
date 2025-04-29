@@ -665,7 +665,7 @@ class AI3:
             logger.error(f"[AI3] Error requesting task for worker {worker_name}: {e}")
 
     async def scan_logs_for_errors(self):
-        # Simplified log scanning - would be more sophisticated in a real implementation
+        # Шукаємо помилки у файлах логів, спеціально фокусуючись на помилках пов'язаних з файлами в repo/
         logs_dir = Path("logs")
         if not logs_dir.exists():
             return
@@ -676,9 +676,25 @@ class AI3:
             time_threshold = self.last_check_time
             self.last_check_time = current_time
             
+            # Паттерни для ідентифікації реальних помилок, виключаючи системні повідомлення
             error_patterns = [
-                "Error", "Exception", "Failed", "Timeout", "CRITICAL"
+                r"Error in .*?repo/.*?:", # Помилки пов'язані з файлами в repo/
+                r"Exception .* in .*?repo/", # Винятки що виникли під час роботи з файлами в repo/
+                r"Failed to execute .* in .*?repo/", # Невдалі операції з файлами в repo/
+                r"CRITICAL: .* repo/", # Критичні помилки пов'язані з репозиторієм
             ]
+            
+            # Шаблони для виключення - це повідомлення не є помилками
+            exclude_patterns = [
+                r"\[AI3\] Detected error", # Рекурсивні повідомлення про виявлення помилок
+                r"\[AI3\] Error requesting error fix task", # Повідомлення про власні помилки AI3
+                r"Active tasks list", # Список активних завдань
+                r"Successfully", # Успішні операції
+                r"Updating status", # Оновлення статусу
+            ]
+            
+            compiled_error_patterns = [re.compile(pattern) for pattern in error_patterns]
+            compiled_exclude_patterns = [re.compile(pattern) for pattern in exclude_patterns]
             
             errors_found = False
             error_summary = []
@@ -689,7 +705,14 @@ class AI3:
                         lines = f.readlines()
                         # Only check the last 100 lines for efficiency
                         for line in lines[-100:]:
-                            if any(pattern in line for pattern in error_patterns):
+                            # Перевіряємо, чи відповідає лінія одному з шаблонів помилок
+                            is_error = any(pattern.search(line) for pattern in compiled_error_patterns)
+                            
+                            # Перевіряємо, чи не відповідає лінія одному з шаблонів виключень
+                            is_excluded = any(pattern.search(line) for pattern in compiled_exclude_patterns)
+                            
+                            # Якщо це справжня помилка (і не виключення), додаємо її до списку
+                            if is_error and not is_excluded:
                                 error_summary.append(f"{log_file.name}: {line.strip()}")
                                 errors_found = True
                                 if len(error_summary) >= 5:  # Limit to 5 errors per check
@@ -699,7 +722,7 @@ class AI3:
                         break
             
             if errors_found:
-                logger.warning(f"[AI3] Found errors in logs: {len(error_summary)} issues")
+                logger.info(f"[AI3] Found {len(error_summary)} real errors in repo files")
                 await self.request_error_fix(error_summary)
         except Exception as e:
             logger.error(f"[AI3] Error scanning logs: {e}")
@@ -710,16 +733,20 @@ class AI3:
         try:
             error_report = "\n".join(error_summary[:5])  # Limit to first 5 errors
             async with self.session.post(
-                f"{MCP_API_URL}/request_error_fix",
-                json={"errors": error_report},
+                f"{MCP_API_URL}/task",  # Змінюємо ендпоінт з /request_error_fix на /task
+                json={
+                    "role": "executor", 
+                    "prompt": f"Fix errors detected in logs:\n```\n{error_report}\n```\nAnalyze these errors and provide the corrected code.",
+                    "priority": 1  # Високий пріоритет для виправлення помилок
+                },
             ) as resp:
                 if resp.status == 200:
                     result = await resp.json()
-                    logger.info(f"[AI3] Error fix request response: {result}")
+                    logger.info(f"[AI3] Error fix task request response: {result}")
                 else:
-                    logger.error(f"[AI3] Error fix request failed: {resp.status}")
+                    logger.error(f"[AI3] Error fix task request failed: {resp.status} - {await resp.text()}")
         except Exception as e:
-            logger.error(f"[AI3] Error requesting error fix: {e}")
+            logger.error(f"[AI3] Error requesting error fix task: {e}")
 
     async def update_file_and_commit(self, file_path_relative: str, content: str):
         """Оновлює файл у репозиторії та комітить зміни."""
@@ -1078,31 +1105,73 @@ class AI3:
 
 
     async def monitor_system_errors(self):
-        """Моніторить лог-файли системи на наявність помилок."""
+        """Моніторить лог-файли системи на наявність помилок, але з обмеженням
+        щоб уникнути переповнення черги executor."""
         log_files = self.config.get("error_log_files", ["logs/mcp_api.log", "logs/ai1.log", "logs/ai2.log", "logs/ai3.log"])
         check_interval = self.config.get("error_check_interval", 60)
-        error_pattern = re.compile(r"ERROR|CRITICAL", re.IGNORECASE) # Updated pattern
+        # Специфічний патерн для критичних помилок, а не всіх логів з ERROR/CRITICAL
+        error_pattern = re.compile(r"(CRITICAL|ERROR).*(failed|exception|crash|timeout)", re.IGNORECASE)
         processed_errors = set() # Зберігаємо хеші оброблених помилок
+        max_errors_per_cycle = self.config.get("max_errors_per_cycle", 2) # Обмеження кількості помилок за цикл
+        
+        # Перевіряємо поточну зайнятість черги executor
+        async def check_executor_queue_size():
+            try:
+                await self.create_session()
+                async with self.session.get(f"{self.config.get('mcp_api_url', DEFAULT_MCP_API_URL)}/worker_status") as response:
+                    if response.status == 200:
+                        worker_status = await response.json()
+                        executor_status = worker_status.get("executor", {})
+                        queue_size = executor_status.get("queue_size", 0)
+                        return queue_size
+                    else:
+                        logger.warning(f"[AI3] Failed to get executor queue size: {response.status}")
+                        return 1000  # Припускаємо велику чергу у разі помилки
+            except Exception as e:
+                logger.error(f"[AI3] Error checking executor queue size: {e}")
+                return 1000  # Припускаємо велику чергу у разі помилки
 
-        logger.info("[AI3] Starting system error monitoring.")
+        logger.info("[AI3] Starting system error monitoring (with queue control).")
         while True:
             try:
+                # Перевіряємо розмір черги перед обробкою помилок
+                queue_size = await check_executor_queue_size()
+                queue_threshold = self.config.get("executor_queue_threshold", 10)
+                
+                if queue_size >= queue_threshold:
+                    logger.info(f"[AI3] Executor queue size ({queue_size}) exceeds threshold ({queue_threshold}). Skipping error processing.")
+                    await asyncio.sleep(check_interval * 2)  # Чекаємо довше, якщо черга завантажена
+                    continue
+                
+                # Обробляємо тільки обмежену кількість помилок
+                errors_processed = 0
                 for log_file in log_files:
                     if not os.path.exists(log_file):
-                        # logger.debug(f"[AI3] Log file not found: {log_file}")
                         continue
-
+                    
+                    # Перевіряємо чи не перевищили ліміт
+                    if errors_processed >= max_errors_per_cycle:
+                        break
+                        
                     async with aiofiles.open(log_file, mode='r', encoding='utf-8', errors='ignore') as f:
-                         # Читаємо останні рядки або весь файл, залежно від стратегії
-                         # Для простоти читаємо весь файл, але це неефективно для великих логів
+                         # Читаємо останні рядки
                          lines = await f.readlines()
                          for line in lines[-100:]: # Обробляємо останні 100 рядків
+                             # Перевіряємо чи не перевищили ліміт
+                             if errors_processed >= max_errors_per_cycle:
+                                 break
+                                 
                              if error_pattern.search(line):
                                  error_hash = hash(line) # Простий спосіб ідентифікації унікальних помилок
                                  if error_hash not in processed_errors:
-                                     logger.warning(f"[AI3] Detected error in {log_file}: {line.strip()}")
+                                     logger.info(f"[AI3] Detected critical error in {log_file}: {line.strip()}")
                                      await self._request_error_fix(log_file, line.strip())
                                      processed_errors.add(error_hash)
+                                     errors_processed += 1
+                
+                # Якщо обробляли помилки, фіксуємо кількість
+                if errors_processed > 0:
+                    logger.info(f"[AI3] Processed {errors_processed} critical errors this cycle")
 
             except Exception as e:
                 logger.error(f"[AI3] Error monitoring system errors: {e}")
@@ -1114,15 +1183,16 @@ class AI3:
         mcp_api_url = self.config.get("mcp_api_url", DEFAULT_MCP_API_URL) # Use constant
         try:
             await self.create_session()
-            # Формуємо дані для запиту
-            # Можливо, потрібно буде додати більше контексту
+            # Формуємо дані для запиту, використовуючи ключі, які очікує API
             error_data = {
-                "role": "executor", # Або спеціальна роль "fixer"?
-                "prompt": f"Fix the error found in {file_path}:\n```\n{error_message}\n```\nAnalyze the error and the related code, then provide the corrected code.",
-                "file": file_path, # Або файл, що спричинив помилку, якщо його можна визначити
+                "errors": error_message, # Ключ, який очікує API: "errors", а не "error_message"
+                "file_path": file_path,  # Залишаємо цей ключ без змін 
                 "priority": 1 # Високий пріоритет для виправлення помилок
             }
-            async with self.session.post(f"{mcp_api_url}/task", json=error_data) as response:
+            # ADD DEBUG LOGGING HERE
+            logger.debug(f"[AI3] Sending error fix request to {mcp_api_url}/request_error_fix with data: {error_data}")
+            # logger.debug(f"[AI3] Sending error fix request: {error_data}") # Debug log
+            async with self.session.post(f"{mcp_api_url}/request_error_fix", json=error_data) as response:
                 if response.status == 200:
                     logger.info(f"[AI3] Successfully requested error fix task for: {error_message[:100]}...")
                 else:

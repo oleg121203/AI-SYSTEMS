@@ -79,7 +79,7 @@ class AI2:
             self.providers = ["openai"]
 
         # Initialize fallback_providers
-        self.fallback_providers = self.ai_config.get("fallback_providers", ["openai"])
+        self.fallback_providers = self.ai_config.get("fallback_providers", ["ollama"])
         
         # Initialize providers_config
         self.providers_config = self._setup_providers_config()
@@ -120,7 +120,7 @@ class AI2:
 
         # Получаем конфигурацию провайдера
         providers_list = self.config.get("providers", {})
-        if provider_name in providers_list:
+        if (provider_name in providers_list):
             common_config = providers_list[provider_name]
         else:
             logger.warning(
@@ -488,10 +488,13 @@ class AI2:
                 if response.status == 200:
                     data = await response.json()
                     if data and "subtask" in data and data["subtask"]:
+                        subtask_data = data["subtask"]
+                        task_id = subtask_data.get('id')
+                        task_filename = subtask_data.get('filename')
                         logger.info(
-                            f"Получена задача: ID={data['subtask'].get('id')}, File={data['subtask'].get('filename')}"
+                            f"Получена задача: ID={task_id}, File={task_filename}"
                         )
-                        return data["subtask"]
+                        return subtask_data
                     elif data and "message" in data:
                         logger.debug(f"Нет доступных задач: {data['message']}")
                         return None

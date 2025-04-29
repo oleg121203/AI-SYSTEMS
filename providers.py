@@ -476,7 +476,7 @@ class GroqProvider(BaseProvider):
         if not self.api_key:
             raise ValueError("API ключ Groq не установлен.")
         if self._client is None:
-            # Видаляємо параметр proxies, який викликає помилку
+            # Створюємо клієнт без параметра proxies, він не підтримується в новій версії
             self._client = self.groq.AsyncGroq(api_key=self.api_key)
         return self._client
 
