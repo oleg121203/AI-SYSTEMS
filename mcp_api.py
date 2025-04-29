@@ -1109,6 +1109,87 @@ async def get_all_subtask_statuses():
     return subtask_status
 
 
+@app.get("/worker_status")
+async def get_worker_status():
+    """Повертає поточний статус всіх воркерів AI2."""
+    worker_status = {
+        "executor": {
+            "status": "idle" if executor_queue.empty() else "busy",
+            "queue_empty": executor_queue.empty(),
+            "queue_size": executor_queue.qsize()
+        },
+        "tester": {
+            "status": "idle" if tester_queue.empty() else "busy",
+            "queue_empty": tester_queue.empty(),
+            "queue_size": tester_queue.qsize()
+        },
+        "documenter": {
+            "status": "idle" if documenter_queue.empty() else "busy",
+            "queue_empty": documenter_queue.empty(),
+            "queue_size": documenter_queue.qsize()
+        }
+    }
+    return worker_status
+
+
+@app.post("/request_task_for_idle_worker")
+async def request_task_for_idle_worker(data: dict):
+    """Запитує нову задачу для воркера, що простоює."""
+    worker = data.get("worker")
+    if not worker or worker not in ["executor", "tester", "documenter"]:
+        raise HTTPException(status_code=400, detail="Invalid worker specified")
+    
+    # Перевіряємо, чи є задачі у відповідній черзі
+    queue = None
+    if worker == "executor":
+        queue = executor_queue
+    elif worker == "tester":
+        queue = tester_queue
+    elif worker == "documenter":
+        queue = documenter_queue
+    
+    if queue.empty():
+        return {"success": False, "message": f"No tasks available for {worker}"}
+    
+    try:
+        # Спробуємо отримати задачу (не блокуючий виклик)
+        task = queue.get_nowait()
+        logger.info(f"Task requested for idle worker {worker}. Task ID: {task.get('id')}")
+        return {"success": True, "task": task}
+    except asyncio.QueueEmpty:
+        return {"success": False, "message": f"Queue for {worker} is empty"}
+    except Exception as e:
+        logger.error(f"Error requesting task for {worker}: {e}")
+        return {"success": False, "message": str(e)}
+
+
+@app.post("/request_error_fix")
+async def request_error_fix(data: dict):
+    """Обробляє запит на виправлення помилок, виявлених у логах."""
+    errors = data.get("errors")
+    if not errors:
+        raise HTTPException(status_code=400, detail="No errors provided")
+    
+    logger.info(f"Received error fix request: {errors[:200]}...")  # Логуємо перші 200 символів
+    
+    # Додаємо помилки до черги задач executor'а для виправлення
+    try:
+        task_id = str(uuid4())
+        error_task = {
+            "id": task_id,
+            "role": "executor",
+            "filename": "error_fix.txt",  # Тимчасовий файл
+            "text": f"Fix the following errors:\n{errors}",
+            "type": "error_fix"
+        }
+        await executor_queue.put(error_task)
+        logger.info(f"Added error fix task to executor queue. Task ID: {task_id}")
+        return {"success": True, "task_id": task_id}
+    except Exception as e:
+        logger.error(f"Failed to create error fix task: {e}")
+        return {"success": False, "error": str(e)}
+
+
 # --- Main Execution ---
 if __name__ == "__main__":
     web_port = config.get("web_port", 7860)

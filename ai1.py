@@ -26,33 +26,39 @@ class AI1:
 
     def __init__(self, target: str):
         self.target = target
-        ai1_config_base = config.get("ai_config", {})
-        ai1_config = ai1_config_base.get("ai1", {})
-        if not ai1_config:
-            log_message(
-                "[AI1] Warning: 'ai_config.ai1' section not found in configuration. Using defaults."
-            )
-            ai1_config = {"provider": "openai"}
+        # Видаляємо ініціалізацію self.llm, оскільки вона не використовується
+        # ai1_config_base = config.get("ai_config", {})
+        # ai1_config = ai1_config_base.get("ai1", {})
+        # if not ai1_config:
+        #     log_message(
+        #         "[AI1] Warning: 'ai_config.ai1' section not found in configuration. Using defaults."
+        #     )
+        #     # ai1_config = {"provider": "openai"} # Стара логіка
 
-        provider_name = ai1_config.get("provider", "openai")
-        log_message(f"[AI1] Initializing with provider: {provider_name}")
+        # # Нова логіка: читаємо список провайдерів, але не створюємо екземпляр, бо він не потрібен
+        # provider_names = ai1_config.get("providers", ["openai"]) # Отримуємо список
+        # if not provider_names:
+        #      log_message("[AI1] Warning: No providers specified for AI1 in config. Defaulting to ['openai']")
+        #      provider_names = ["openai"]
+        # log_message(f"[AI1] Configured providers (not initialized): {provider_names}")
 
-        try:
-            # Передаем только имя провайдера, фабрика сама найдет конфиг
-            self.llm: BaseProvider = ProviderFactory.create_provider(provider_name)
-            log_message(f"[AI1] Provider '{provider_name}' created successfully.")
-        except ValueError as e:
-            log_message(
-                f"[AI1] CRITICAL ERROR: Failed to create provider '{provider_name}'. {e}. Exiting."
-            )
-            raise SystemExit(f"AI1 failed to initialize provider: {e}")
-        except Exception as e:
-            log_message(
-                f"[AI1] CRITICAL ERROR: Unexpected error creating provider '{provider_name}'. {e}. Exiting."
-            )
-            raise SystemExit(
-                f"AI1 failed with unexpected error during provider init: {e}"
-            )
+        # # Видалено створення екземпляра self.llm
+        # # try:
+        # #     # Передаем только имя провайдера, фабрика сама найдет конфиг
+        # #     self.llm: BaseProvider = ProviderFactory.create_provider(provider_name)
+        # #     log_message(f"[AI1] Provider '{provider_name}' created successfully.")
+        # # except ValueError as e:
+        # #     log_message(
+        # #         f"[AI1] CRITICAL ERROR: Failed to create provider '{provider_name}'. {e}. Exiting."
+        # #     )
+        # #     raise SystemExit(f"AI1 failed to initialize provider: {e}")
+        # # except Exception as e:
+        # #     log_message(
+        # #         f"[AI1] CRITICAL ERROR: Unexpected error creating provider '{provider_name}'. {e}. Exiting."
+        # #     )
+        # #     raise SystemExit(
+        # #         f"AI1 failed with unexpected error during provider init: {e}"
+        # #     )
 
         self.status = "initializing"
         self.project_structure: Optional[Dict] = None

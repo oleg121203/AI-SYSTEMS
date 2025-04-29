@@ -131,78 +131,36 @@ Do not include any explanatory text before or after the JSON block. Ensure the J
         log_message("[AI3] Warning: 'ai_config.ai3' section not found. Using defaults.")
         ai3_config = {"provider": "openai"}
 
-    provider_name = ai3_config.get("provider", "openai")
+    # Updated: Iterate over the list of providers from the configuration
+    ai3_providers = ai3_config.get("providers", ["openai"])
+    if not ai3_providers:
+        log_message("[AI3] No providers configured. Defaulting to ['openai'].")
+        ai3_providers = ["openai"]
 
     response_text = None
-    primary_provider = None
-    fallback_provider = None
-    try:
-        log_message(
-            f"[AI3] Attempting structure generation with provider: {provider_name}"
-        )
-        primary_provider: BaseProvider = ProviderFactory.create_provider(provider_name)
+    for provider_name in ai3_providers:
         try:
-            await apply_request_delay("ai3")  # Add delay before primary generation
-            response_text = await primary_provider.generate(
-                prompt=prompt,
-                model=ai3_config.get("model"),
-                max_tokens=ai3_config.get("max_tokens"),
-                temperature=ai3_config.get("temperature"),
-            )
-            if isinstance(response_text, str) and response_text.startswith(
-                "Ошибка генерации"
-            ):
-                raise Exception(
-                    f"Primary provider '{provider_name}' failed: {response_text}"
-                )
-        finally:
-            if hasattr(primary_provider, "close_session") and callable(
-                primary_provider.close_session
-            ):
-                await primary_provider.close_session()
-
-        log_message(
-            f"[AI3] Raw response preview from '{provider_name}': {response_text[:200] if response_text else 'None'}"
-        )
-
-    except Exception as e:
-        primary_provider_name_for_log = (
-            primary_provider.name if primary_provider else provider_name
-        )
-        log_message(
-            f"[AI3] Error calling primary provider '{primary_provider_name_for_log}': {e}"
-        )
-        fallback_provider_name = ai3_config.get("fallback_provider")
-        if fallback_provider_name:
-            log_message(f"[AI3] Attempting fallback provider: {fallback_provider_name}")
+            log_message(f"[AI3] Attempting structure generation with provider: {provider_name}")
+            provider: BaseProvider = ProviderFactory.create_provider(provider_name)
             try:
-                fallback_provider: BaseProvider = ProviderFactory.create_provider(
-                    fallback_provider_name
+                await apply_request_delay("ai3")  # Add delay before generation
+                response_text = await provider.generate(
+                    prompt=prompt,
+                    model=ai3_config.get("model"),
+                    max_tokens=ai3_config.get("max_tokens"),
+                    temperature=ai3_config.get("temperature"),
                 )
-                try:
-                    await apply_request_delay("ai3")  # Add delay before fallback generation
-                    response_text = await fallback_provider.generate(
-                        prompt=prompt,
-                        model=ai3_config.get("fallback_model"),
-                        max_tokens=ai3_config.get("max_tokens"),
-                        temperature=ai3_config.get("temperature"),
-                    )
-                finally:
-                    if hasattr(fallback_provider, "close_session") and callable(
-                        fallback_provider.close_session
-                    ):
-                        await fallback_provider.close_session()
-            except Exception as fallback_e:
-                log_message(
-                    f"[AI3] Error calling fallback provider '{fallback_provider_name}': {fallback_e}"
-                )
-        else:
-            log_message("[AI3] No fallback provider configured. Structure generation failed.")
+                if response_text:
+                    log_message(f"[AI3] Successfully generated structure with provider: {provider_name}")
+                    break
+            finally:
+                if hasattr(provider, "close_session") and callable(provider.close_session):
+                    await provider.close_session()
+        except Exception as e:
+            log_message(f"[AI3] Error with provider '{provider_name}': {e}")
 
     if not response_text:
-        log_message(
-            "[AI3] No response received from AI model for structure generation."
-        )
+        log_message("[AI3] All providers failed to generate a structure.")
         return None
 
     match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", response_text, re.DOTALL)
@@ -405,7 +363,7 @@ async def simple_log_monitor():
     while True:
         try:
             current_size = os.path.getsize(LOG_FILE_PATH)
-            if current_size < position:
+            if (current_size < position):
                 position = 0
 
             if current_size > position:
@@ -453,13 +411,16 @@ class AI3:
         self.last_check_time = time.time()
 
     def _init_or_open_repo(self, repo_path: str) -> Repo:
+        """Ініціалізує новий або відкриває існуючий Git репозиторій."""
         try:
+            log_message(f"[AI3-Git] Attempting to open repository at: {repo_path}")
             Path(repo_path).mkdir(parents=True, exist_ok=True)
             repo = Repo(repo_path)
             log_message(f"[AI3-Git] Opened existing repository at: {repo_path}")
             return repo
         except Exception:
             try:
+                log_message(f"[AI3-Git] Repository not found, initializing new one at: {repo_path}")
                 repo = Repo.init(repo_path)
                 log_message(f"[AI3-Git] Initialized new repository at: {repo_path}")
                 gitignore_path = os.path.join(repo_path, ".gitignore")
@@ -485,23 +446,81 @@ class AI3:
                 raise
 
     async def clear_and_init_repo(self):
+        """Очищає існуючий репозиторій та ініціалізує новий."""
         try:
-            # If the repo_dir exists, clear it completely
-            repo_path = Path(self.repo_dir)
-            if repo_path.exists():
-                try:
-                    # Try to delete the entire directory
-                    shutil.rmtree(self.repo_dir)
-                    log_message(f"[AI3-Git] Cleared existing repository: {self.repo_dir}")
-                except Exception as e:
-                    log_message(f"[AI3-Git] Error clearing repository: {e}")
-                    
-            # Create or initialize the repository
-            self.repo = _init_or_open_repo(self.repo_dir)
-            log_message(f"[AI3-Git] Repository initialized at: {self.repo_dir}")
+            # Перевірити, чи існує репозиторій
+            if os.path.exists(self.repo_dir):
+                # Видалити репозиторій
+                log_message(f"[AI3-Git] Removing existing repository directory: {self.repo_dir}")
+                shutil.rmtree(self.repo_dir)
+                log_message(f"[AI3-Git] Removed existing repository: {self.repo_dir}")
+
+            # Створити каталог репозиторію та ініціалізувати Git
+            log_message(f"[AI3-Git] Creating new repository directory: {self.repo_dir}")
+            os.makedirs(self.repo_dir, exist_ok=True)
+            
+            # Варіант 1: Використати GitPython (рекомендовано)
+            try:
+                self.repo = Repo.init(self.repo_dir)
+                log_message(f"[AI3-Git] Successfully initialized new repository at: {self.repo_dir}")
+                
+                # Додати .gitignore
+                gitignore_path = os.path.join(self.repo_dir, ".gitignore")
+                with open(gitignore_path, "w", encoding="utf-8") as f:
+                    f.write("**/__pycache__\n")
+                    f.write("*.pyc\n")
+                    f.write(".DS_Store\n")
+                log_message(f"[AI3-Git] Created .gitignore in {self.repo_dir}")
+                
+                # Налаштувати користувача Git
+                with self.repo.config_writer() as git_config:
+                    git_config.set_value('user', 'email', 'ai3@example.com')
+                    git_config.set_value('user', 'name', 'AI3 System')
+                
+                # Додати та закомітити gitignore
+                self.repo.git.add(gitignore_path)
+                self.repo.git.commit('-m', 'Initial commit (gitignore)')
+                log_message("[AI3-Git] Added and committed .gitignore file")
+                
+            except Exception as git_err:
+                log_message(f"[AI3-Git] Error using GitPython: {git_err}")
+                log_message("[AI3-Git] Falling back to subprocess method")
+                
+                # Варіант 2: Використати subprocess як запасний варіант
+                init_result = subprocess.run(
+                    ["git", "init"],
+                    cwd=self.repo_dir,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                log_message(f"[AI3-Git] Initialized Git repository via subprocess: {init_result.stdout}")
+                
+                # Створити .gitignore
+                gitignore_path = os.path.join(self.repo_dir, ".gitignore")
+                with open(gitignore_path, "w", encoding="utf-8") as f:
+                    f.write("**/__pycache__\n")
+                    f.write("*.pyc\n")
+                    f.write(".DS_Store\n")
+                
+                # Налаштувати користувача Git
+                subprocess.run(["git", "config", "user.email", "ai3@example.com"], cwd=self.repo_dir, check=False)
+                subprocess.run(["git", "config", "user.name", "AI3 System"], cwd=self.repo_dir, check=False)
+                
+                # Додати та закомітити
+                subprocess.run(["git", "add", ".gitignore"], cwd=self.repo_dir, check=True)
+                subprocess.run(["git", "commit", "-m", "Initial commit (gitignore)"], cwd=self.repo_dir, check=True)
+                
+                # Перепризначити об'єкт repo для подальшого використання
+                self.repo = Repo(self.repo_dir)
+            
+            log_message("[AI3-Git] Repository successfully cleared and initialized.")
+            await send_ai3_report("repo_cleared")
             return True
+
         except Exception as e:
-            log_message(f"[AI3-Git] Error initializing repository: {e}")
+            log_message(f"[AI3-Git] Unexpected error clearing and initializing repository: {e}")
+            await send_ai3_report("repo_clear_failed", {"error": str(e)})
             return False
 
     async def create_session(self):
@@ -706,69 +725,6 @@ class AI3:
                     log_message(f"[AI3] Error fix request failed: {resp.status}")
         except Exception as e:
             log_message(f"[AI3] Error requesting error fix: {e}")
-
-    async def clear_and_init_repo(self):
-        """Очищає репозиторій та ініціалізує новий."""
-        try:
-            # Перевірити, чи існує репозиторій
-            if os.path.exists(self.repo_dir):
-                # Видалити репозиторій
-                shutil.rmtree(self.repo_dir)
-                log_message(f"[AI3] Видалено існуючий репозиторій: {self.repo_dir}")
-
-            # Створити каталог репозиторію
-            os.makedirs(self.repo_dir, exist_ok=True)
-
-            # Ініціалізувати новий Git репозиторій
-            init_result = subprocess.run(
-                ["git", "init"],
-                cwd=self.repo_dir,
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            log_message(f"[AI3] Ініціалізовано новий Git репозиторій: {self.repo_dir}. Output: {init_result.stdout}")
-            self.repo = Repo(self.repo_dir)  # Re-assign the repo object
-
-            # Додати .gitignore
-            gitignore_path = os.path.join(self.repo_dir, ".gitignore")
-            with open(gitignore_path, "w", encoding="utf-8") as f:
-                f.write("**/__pycache__\n")
-                f.write("*.pyc\n")
-                f.write(".DS_Store\n")
-            log_message(f"[AI3] Створено .gitignore у {self.repo_dir}")
-
-            # Додати та закомітити .gitignore
-            add_result = subprocess.run(
-                ["git", "add", ".gitignore"],
-                cwd=repo_dir,
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-            log_message(f"[AI3] git add .gitignore: {add_result.stdout}")
-
-            # Налаштування користувача Git (важливо для коміту)
-            subprocess.run(["git", "config", "user.email", "ai3@example.com"], cwd=self.repo_dir, check=False)
-            subprocess.run(["git", "config", "user.name", "AI3 System"], cwd=self.repo_dir, check=False)
-
-            commit_result = subprocess.run(
-                ["git", "commit", "-m", "Initial commit (gitignore)"],
-                cwd=self.repo_dir,
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            log_message(f"[AI3] git commit: {commit_result.stdout}")
-            log_message("[AI3] Репозиторій успішно очищено та ініціалізовано.")
-            await send_ai3_report("repo_cleared")  # Повідомити API
-
-        except subprocess.CalledProcessError as e:
-            log_message(f"[AI3] Помилка subprocess під час очищення/ініціалізації репо: {e.stderr}")
-            await send_ai3_report("repo_clear_failed", {"error": str(e.stderr)})
-        except Exception as e:
-            log_message(f"[AI3] Неочікувана помилка при очищенні та ініціалізації репозиторію: {e}")
-            await send_ai3_report("repo_clear_failed", {"error": str(e)})
 
     async def update_file_and_commit(self, file_path_relative: str, content: str):
         """Оновлює файл у репозиторії та комітить зміни."""
@@ -1012,99 +968,209 @@ ai3_instance = AI3()
 
 
 async def main():
-    install_missing_modules("together")
-    install_missing_modules("mistralai")
-
-    target = config.get("target")
-    if not target:
-        log_message("[AI3] CRITICAL: 'target' not found in config.json. Exiting.")
-        return
-
-    log_message(f"[AI3] Started with target: {target}")
-
-    log_message(f"[AI3] Checking connection to MCP API at {MCP_API_URL}")
-    if not await wait_for_service(MCP_API_URL, timeout=120):
-        log_message(f"[AI3] CRITICAL: MCP API at {MCP_API_URL} not available. Exiting.")
-        return
-
-    repo = ai3_instance.repo  # Use instance's repo
-
-    structure_obj = None
     try:
-        api_url = f"{MCP_API_URL}/structure"
-        async with aiohttp.ClientSession() as session:
-            async with session.get(api_url, timeout=10) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    if (
-                        data
-                        and isinstance(data.get("structure"), dict)
-                        and data["structure"]
-                    ):
-                        structure_obj = data["structure"]
-                        log_message("[AI3] Found existing structure from API.")
-    except Exception as e:
-        log_message(f"[AI3] Could not check for existing structure: {e}")
+        log_message("[AI3] Starting main function with full error tracing")
+        
+        # Try to import potentially missing modules
+        try:
+            log_message("[AI3] Checking for required modules...")
+            install_missing_modules("together")
+            install_missing_modules("mistralai")
+        except Exception as e:
+            log_message(f"[AI3] WARNING: Error during module installation: {str(e)}")
 
-    if not structure_obj:
-        log_message("[AI3] Attempting to generate project structure...")
-        structure_obj = await generate_structure(target)
+        # Get target from config
+        target = config.get("target")
+        if not target:
+            log_message("[AI3] CRITICAL: 'target' not found in config.json. Exiting.")
+            return
 
-        if structure_obj:
-            log_message(
-                "[AI3] Structure generated. Sending to API and creating files..."
-            )
-            if await send_structure_to_api(structure_obj):
-                if not await create_files_from_structure(structure_obj, ai3_instance.repo):
-                    log_message(
-                        "[AI3] Failed to create files from structure. Continuing monitor."
-                    )
-                    await send_ai3_report("structure_creation_failed")
-            else:
+        log_message(f"[AI3] Started with target: {target}")
+
+        # Wait for MCP API
+        log_message(f"[AI3] Checking connection to MCP API at {MCP_API_URL}")
+        api_available = await wait_for_service(MCP_API_URL, timeout=120)
+        if not api_available:
+            log_message(f"[AI3] CRITICAL: MCP API at {MCP_API_URL} not available. Exiting.")
+            return
+
+        # Initialize repository
+        try:
+            repo = ai3_instance.repo  # Use instance's repo
+            log_message(f"[AI3] Successfully got repository reference: {repo.working_dir}")
+        except Exception as repo_err:
+            log_message(f"[AI3] ERROR accessing repository: {str(repo_err)}")
+            # Continue execution even with repo error
+
+        # Check for existing structure
+        structure_obj = None
+        try:
+            log_message("[AI3] Attempting to retrieve existing structure from API...")
+            api_url = f"{MCP_API_URL}/structure"
+            async with aiohttp.ClientSession() as session:
+                async with session.get(api_url, timeout=10) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        if (
+                            data
+                            and isinstance(data.get("structure"), dict)
+                            and data["structure"]
+                        ):
+                            structure_obj = data["structure"]
+                            log_message("[AI3] Found existing structure from API.")
+        except Exception as e:
+            log_message(f"[AI3] Could not check for existing structure: {e}")
+
+        # Generate structure if none exists
+        if not structure_obj:
+            log_message("[AI3] Attempting to generate project structure...")
+            try:
+                structure_obj = await generate_structure(target)
+            except Exception as gen_err:
+                log_message(f"[AI3] ERROR during structure generation: {str(gen_err)}")
+                structure_obj = None  # Ensure it's None if generation failed
+
+            if structure_obj:
                 log_message(
-                    "[AI3] Failed to send structure to API. Cannot create files."
+                    "[AI3] Structure generated. Sending to API and creating files..."
                 )
-                await send_ai3_report("structure_api_send_failed")
-        else:
-            log_message("[AI3] Failed to generate structure. Cannot create files.")
-            await send_ai3_report("structure_generation_failed")
-
-    log_message("[AI3] Starting monitoring tasks.")
-    monitoring_task = None  # Моніторинг воркерів та логів
-    github_actions_task = None  # Моніторинг GitHub Actions
-    
-    try:
-        # Запускаємо одночасно всі моніторингові завдання
-        monitoring_task = asyncio.create_task(ai3_instance.start_monitoring())
-        github_actions_task = asyncio.create_task(ai3_instance.monitor_github_actions())
-        
-        log_message("[AI3] All monitoring tasks started.")
-        
-        # Головний цикл, що просто підтримує програму активною
-        while True:
-            await asyncio.sleep(3600)  # Перевірка раз на годину
-
-    except asyncio.CancelledError:
-        log_message("[AI3] Main task cancelled")
-    except Exception as e:
-        log_message(f"[AI3] Unexpected error in main task: {e}")
-    finally:
-        log_message("[AI3] Main task finishing. Cleaning up...")
-        # Скасовуємо всі моніторингові завдання
-        for task, name in [
-            (monitoring_task, "Monitoring"),
-            (github_actions_task, "GitHub Actions monitoring")
-        ]:
-            if task and not task.done():
-                task.cancel()
                 try:
-                    await task
-                    log_message(f"[AI3] {name} task cancelled successfully.")
-                except asyncio.CancelledError:
-                    log_message(f"[AI3] {name} task cancellation confirmed.")
-                except Exception as e:
-                    log_message(f"[AI3] Error during {name} task cancellation: {e}")
+                    api_send_result = await send_structure_to_api(structure_obj)
+                    if api_send_result:
+                        try:
+                            file_creation_result = await create_files_from_structure(structure_obj, ai3_instance.repo)
+                            if not file_creation_result:
+                                log_message(
+                                    "[AI3] Failed to create files from structure. Continuing monitor."
+                                )
+                                await send_ai3_report("structure_creation_failed")
+                        except Exception as file_err:
+                            log_message(f"[AI3] ERROR during file creation: {str(file_err)}")
+                            await send_ai3_report("structure_creation_failed", {"error": str(file_err)})
+                    else:
+                        log_message(
+                            "[AI3] Failed to send structure to API. Cannot create files."
+                        )
+                        await send_ai3_report("structure_api_send_failed")
+                except Exception as api_err:
+                    log_message(f"[AI3] ERROR during API communication or file creation: {str(api_err)}")
+                    await send_ai3_report("structure_api_send_failed", {"error": str(api_err)})
+            else:
+                log_message("[AI3] Failed to generate structure. Cannot create files.")
+                await send_ai3_report("structure_generation_failed")
+
+        # Start monitoring tasks
+        log_message("[AI3] Starting monitoring tasks.")
+        monitoring_task = None  # Workers and logs monitoring
+        github_actions_task = None  # GitHub Actions monitoring
         
-        # Закриваємо сесію
-        await ai3_instance.close_session()
-        log_message("[AI3] Exiting.")
+        try:
+            # Start all monitoring tasks
+            try:
+                monitoring_task = asyncio.create_task(ai3_instance.start_monitoring())
+                log_message("[AI3] Main monitoring task started.")
+            except Exception as mon_err:
+                log_message(f"[AI3] ERROR starting monitoring task: {str(mon_err)}")
+            
+            try:
+                github_actions_task = asyncio.create_task(ai3_instance.monitor_github_actions())
+                log_message("[AI3] GitHub Actions monitoring task started.")
+            except Exception as gh_err:
+                log_message(f"[AI3] ERROR starting GitHub Actions monitoring: {str(gh_err)}")
+            
+            log_message("[AI3] All monitoring tasks started.")
+            
+            # Main loop to keep the program active
+            log_message("[AI3] Starting main keep-alive loop")
+            while True:
+                await asyncio.sleep(60)  # Check every minute
+                log_message("[AI3] Main loop heartbeat - still running")
+
+        except asyncio.CancelledError:
+            log_message("[AI3] Main task cancelled")
+        except Exception as e:
+            log_message(f"[AI3] Unexpected error in main task: {e}")
+        finally:
+            log_message("[AI3] Main task finishing. Cleaning up...")
+            # Cancel all monitoring tasks
+            for task, name in [
+                (monitoring_task, "Monitoring"),
+                (github_actions_task, "GitHub Actions monitoring")
+            ]:
+                if task and not task.done():
+                    try:
+                        task.cancel()
+                        try:
+                            await task
+                            log_message(f"[AI3] {name} task cancelled successfully.")
+                        except asyncio.CancelledError:
+                            log_message(f"[AI3] {name} task cancellation confirmed.")
+                        except Exception as e:
+                            log_message(f"[AI3] Error during {name} task cancellation: {e}")
+                    except Exception as cancel_err:
+                        log_message(f"[AI3] ERROR cancelling {name} task: {str(cancel_err)}")
+            
+            # Close session
+            try:
+                await ai3_instance.close_session()
+                log_message("[AI3] Session closed successfully.")
+            except Exception as sess_err:
+                log_message(f"[AI3] ERROR closing session: {str(sess_err)}")
+            
+            log_message("[AI3] Exiting.")
+
+    except Exception as main_err:
+        log_message(f"[AI3] CRITICAL ERROR in main function: {str(main_err)}")
+        # Try to report the error
+        try:
+            await send_ai3_report("critical_error", {"error": str(main_err)})
+        except:
+            # Last resort logging if even the report fails
+            print(f"CRITICAL AI3 ERROR: {str(main_err)}")
+
+
+if __name__ == "__main__":
+    try:
+        print("AI3 starting at", datetime.now())
+        
+        # Підготовка до запуску основного асинхронного циклу 
+        # Настройка важливих обробників сигналів та помилок
+        import signal
+        import sys
+        import traceback
+        
+        def signal_handler(sig, frame):
+            print(f"AI3 received signal {sig}, shutting down gracefully...")
+            # Можна додати додатковий код для завершення роботи (наприклад, закриття сесій)
+            sys.exit(0)
+            
+        # Встановлюємо обробники сигналів
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
+        
+        # Встановлюємо глобальний обробник винятків
+        def global_exception_handler(loop, context):
+            exception = context.get('exception')
+            if exception:
+                print(f"AI3 global exception: {exception}")
+                print(f"Exception context: {context}")
+                traceback.print_exc()
+            else:
+                print(f"AI3 error: {context['message']}")
+                
+        loop = asyncio.get_event_loop()
+        loop.set_exception_handler(global_exception_handler)
+        
+        # Запускаємо основний цикл з моніторингом
+        print("AI3 starting main event loop")
+        try:
+            loop.run_until_complete(main())
+        except Exception as e:
+            print(f"AI3 main loop exception: {e}")
+            traceback.print_exc()
+        finally:
+            print("AI3 shutdown completed at", datetime.now())
+
+    except Exception as start_error:
+        print(f"AI3 startup critical error: {start_error}")
+        traceback.print_exc()

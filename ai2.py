@@ -15,7 +15,7 @@ from utils import apply_request_delay, log_message  # Import apply_request_delay
 
 # Настройка логирования
 logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levellevelname)s - %(message)s"
 )
 logger = logging.getLogger("AI2")
 
@@ -69,13 +69,22 @@ class AI2:
                 "You are a technical writer. Generate documentation (e.g., docstrings, comments) for the code in file {filename}. Respond ONLY with the raw documentation text. Do NOT use markdown code blocks (```).",
             ]
 
-        # Обновлено: используем список fallback_providers вместо одного fallback_provider
+        # Updated: Use the new provider configuration structure
+        self.providers = self.ai_config.get("providers", {}).get(self.role, [])
+        if not self.providers:
+            logger.warning(
+                f"No providers configured for role '{self.role}'. Defaulting to ['openai']"
+            )
+            self.providers = ["openai"]
+
+        # Initialize fallback_providers
         self.fallback_providers = self.ai_config.get("fallback_providers", ["openai"])
-        if isinstance(self.fallback_providers, str):
-            self.fallback_providers = [self.fallback_providers]
         
-        logger.info(f"Настроены fallback провайдеры: {', '.join(self.fallback_providers)}")
+        # Initialize providers_config
         self.providers_config = self._setup_providers_config()
+
+        logger.info(f"Configured providers for role '{self.role}': {', '.join(self.providers)}")
+
         self.api_session = None
 
     async def _get_api_session(self) -> aiohttp.ClientSession:
@@ -86,7 +95,7 @@ class AI2:
 
     async def close_session(self):
         """Закрывает сессию aiohttp."""
-        if self.api_session and not self.api_session.closed:
+        if self.api_session or not self.api_session.closed:
             await self.api_session.close()
             logger.info("API сессия закрыта.")
 
@@ -98,21 +107,8 @@ class AI2:
         Returns:
             Dict[str, Dict[str, Any]]: Словарь с конфигурацией для текущей роли
         """
-        providers_cfg = {}
-
-        # Получаем имя провайдера для текущей роли из конфигурации
-        provider_name = None
-        if isinstance(self.ai_config, dict):
-            if self.role in self.ai_config:
-                # Если есть прямое указание провайдера для роли
-                provider_name = self.ai_config.get(self.role)
-            elif "provider" in self.ai_config:
-                # Если провайдер указан в поле "provider"
-                provider_setting = self.ai_config.get("provider")
-                if isinstance(provider_setting, dict) and self.role in provider_setting:
-                    provider_name = provider_setting.get(self.role)
-                elif isinstance(provider_setting, str):
-                    provider_name = provider_setting
+        # Используем первый провайдер из списка настроенных провайдеров
+        provider_name = self.providers[0] if self.providers else None
 
         # Если не смогли найти провайдер для роли, используем fallback
         if not provider_name:
