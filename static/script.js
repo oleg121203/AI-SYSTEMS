@@ -58,6 +58,9 @@ function connectWebSocket() {
     // Request initial full status upon connection
     ws.send(JSON.stringify({ action: "get_full_status" }));
     showNotification("Connected to server, requesting full status...", "info");
+
+    // Запит на оновлення графіків
+    ws.send(JSON.stringify({ action: "get_chart_updates" }));
   };
 
   ws.onmessage = function (event) {
@@ -144,6 +147,63 @@ function connectWebSocket() {
             }
           }
           return; // Message handled
+        } else if (data.queues && Object.keys(data).length === 1) {
+          // Додаємо обробку повідомлень, що містять лише поле queues
+          console.log("Processing queues-only update:", data.queues);
+          updateQueues(data.queues);
+          return; // Повідомлення оброблено
+        }
+        // Обробка даних для графіків
+        else if (
+          data.progress_data ||
+          data.git_activity ||
+          data.task_status_distribution
+        ) {
+          console.log("Processing chart updates:", data);
+
+          // Оновлення графіка прогресу
+          if (data.progress_data && progressChart) {
+            progressChart.data.labels = data.progress_data.labels;
+            progressChart.data.datasets[0].data =
+              data.progress_data.completed_tasks;
+            progressChart.data.datasets[1].data =
+              data.progress_data.successful_tests;
+            progressChart.data.datasets[2].data =
+              data.progress_data.git_actions;
+            progressChart.data.datasets[3].data = data.progress_data.values;
+            console.log("[Chart Update] Progress Chart updated with new data");
+            progressChart.update();
+          }
+
+          // Оновлення графіка git-активності
+          if (data.git_activity && gitChart) {
+            gitChart.data.labels = data.git_activity.labels;
+            gitChart.data.datasets[0].data = data.git_activity.values;
+            console.log(
+              "[Chart Update] Git Activity Chart updated with new data"
+            );
+            gitChart.update();
+          }
+
+          // Оновлення графіка розподілу статусів
+          if (data.task_status_distribution && statusPieChart) {
+            const statusCounts = data.task_status_distribution;
+            const newData = [
+              statusCounts.pending,
+              statusCounts.processing,
+              statusCounts.completed,
+              statusCounts.failed,
+              statusCounts.other,
+            ];
+
+            statusPieChart.data.datasets[0].data = newData;
+            console.log(
+              "[Chart Update] Status Distribution Chart updated with new data"
+            );
+            statusPieChart.update();
+          }
+
+          return; // Повідомлення оброблено
         }
         // Add more checks here for other potential type-less messages if needed
       }
@@ -1630,7 +1690,7 @@ async function resetSystem() {
       // Clear local UI elements immediately for responsiveness
       logContent.innerHTML = "<p><em>System reset requested...</em></p>";
       updateQueues({ executor: [], tester: [], documenter: [] }); // Clear queues visually
-      updateStatsFromSubtasks({}); // Reset stats
+      updateStats({}, {}); // Reset stats
       // Charts might need explicit clearing or will update on next WS message
     } catch (error) {
       // Error handled by sendRequest
@@ -1772,7 +1832,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Initial UI state (optional, WebSocket should provide data)
   updateQueues({ executor: [], tester: [], documenter: [] });
-  updateStatsFromSubtasks({});
+  updateStats({}, {}); // Виправлено виклик функції з updateStatsFromSubtasks на updateStats
 
   console.log("Initialization complete.");
 });

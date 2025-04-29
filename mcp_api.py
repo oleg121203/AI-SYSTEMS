@@ -255,6 +255,43 @@ async def broadcast_specific_update(update_data: dict):
         active_connections.difference_update(disconnected_clients)
 
 
+# Додаємо нову функцію для надсилання оновлень графіків
+async def broadcast_chart_updates():
+    """Формує та відправляє дані для всіх графіків."""
+    if not active_connections:
+        return  # Не робимо нічого, якщо немає активних з'єднань
+    
+    # Отримуємо дані для графіків
+    progress_data = get_progress_chart_data()
+    
+    # Отримуємо дані про статуси задач
+    status_counts = {"pending": 0, "processing": 0, "completed": 0, "failed": 0, "other": 0}
+    for status in subtask_status.values():
+        if status == "pending":
+            status_counts["pending"] += 1
+        elif status == "processing":
+            status_counts["processing"] += 1
+        elif status in ["accepted", "completed", "code_received"]:
+            status_counts["completed"] += 1
+        elif status == "failed" or (isinstance(status, str) and status.startswith("Ошибка")):
+            status_counts["failed"] += 1
+        else:
+            status_counts["other"] += 1
+    
+    # Формуємо повне оновлення для всіх графіків
+    update_data = {
+        "progress_data": progress_data,
+        "git_activity": {
+            "labels": [f"Commit {i+1}" for i in range(len(processed_history))],
+            "values": list(processed_history)
+        },
+        "task_status_distribution": status_counts
+    }
+    
+    # Надсилаємо оновлення
+    await broadcast_specific_update(update_data)
+
+
 async def write_and_commit_code(
     file_rel_path: str, content: str, subtask_id: Optional[str]
 ):
@@ -1202,31 +1239,129 @@ async def broadcast_full_status():
         active_connections.difference_update(disconnected_clients)
 
 
+# Додаємо нову функцію для відправлення повного статусу конкретному клієнту
+async def send_full_status_update(websocket: WebSocket):
+    """Відправляє повний статус конкретному клієнту WebSocket."""
+    try:
+        # --- Aggregation for Pie Chart ---
+        status_counts = {"pending": 0, "processing": 0, "completed": 0, "failed": 0, "other": 0}
+        for status in subtask_status.values():
+            # Use a more comprehensive set of completed/final statuses
+            if status in ["accepted", "completed", "code_received", "tested", "skipped", "failed_by_ai2", "error_processing", "review_needed", "failed_tests", "failed_to_send"]:
+                status_counts["completed"] += 1 # Group all final states for simplicity here, adjust if needed
+            elif status == "pending":
+                status_counts["pending"] += 1
+            elif status in ["sending", "sent", "processing"]: # Explicitly list processing states
+                status_counts["processing"] += 1
+            else:
+                status_counts["other"] += 1 # Catch-all for unknown/transient states
+        # --- End Aggregation ---
+
+        # Get progress chart data
+        progress_chart_data = get_progress_chart_data()
+
+        # Prepare git activity data
+        history_list = list(processed_history)
+        git_activity_data = {
+            "labels": [f"Commit {i+1}" for i in range(len(history_list))],
+            "values": history_list
+        }
+
+        state_data = {
+            "type": "full_status_update",
+            "ai_status": ai_status,
+            "queues": {
+                "executor": [
+                    {
+                        "id": t["id"],
+                        "filename": t.get("filename", "N/A"),
+                        "text": t["text"],
+                        "status": subtask_status.get(t["id"], "unknown"),
+                    }
+                    for t in list(executor_queue._queue)
+                ],
+                "tester": [
+                    {
+                        "id": t["id"],
+                        "filename": t.get("filename", "N/A"),
+                        "text": t["text"],
+                        "status": subtask_status.get(t["id"], "unknown"),
+                    }
+                    for t in list(tester_queue._queue)
+                ],
+                "documenter": [
+                    {
+                        "id": t["id"],
+                        "filename": t.get("filename", "N/A"),
+                        "text": t["text"],
+                        "status": subtask_status.get(t["id"], "unknown"),
+                    }
+                    for t in list(documenter_queue._queue)
+                ],
+            },
+            "subtasks": subtask_status,
+            "structure": current_structure,
+            "ai3_report": ai3_report,
+            "git_activity": git_activity_data, # Add formatted data for the chart
+            "progress_data": progress_chart_data, # Add progress chart data
+            "collaboration_requests": collaboration_requests,
+            "task_status_distribution": status_counts, # Include aggregated counts
+            "config": { # Send relevant config parts
+                 "ai1_max_concurrent_tasks": config.get("ai1_max_concurrent_tasks"),
+                 "ai1_desired_active_buffer": config.get("ai1_desired_active_buffer"),
+                 # Add other config values if needed by the UI
+            }
+        }
+        
+        # Відправляємо дані клієнту
+        await websocket.send_json(state_data)
+        logger.info(f"Sent full status update to client {websocket.client}")
+        
+    except WebSocketDisconnect:
+        logger.warning(f"Client {websocket.client} disconnected during full status update.")
+        if websocket in active_connections:
+            active_connections.remove(websocket)
+    except Exception as e:
+        logger.error(f"Error sending full status to client {websocket.client}: {e}")
+        # Не видаляємо з'єднання при помилці відправки - це може спричинити втрату клієнтів через тимчасові помилки
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
+    client_id = f"Address(host='{websocket.client.host}', port={websocket.client.port})"
     active_connections.add(websocket)
-    logger.info(f"WebSocket connection established from {websocket.client}. Total: {len(active_connections)}")
+    logger.info(f"WebSocket connection established from {client_id}. Total: {len(active_connections)}")
+    
     try:
-        # Send initial full status upon connection
-        await broadcast_full_status() # Send current state immediately
-
         while True:
-            # Wait for a message or disconnection
-            # Using receive_text helps detect disconnections promptly
             data = await websocket.receive_text()
-            logger.debug(f"Received message from {websocket.client}: {data}")
-            # Handle client messages if needed, e.g., manual ping/pong or commands
-
+            try:
+                message = json.loads(data)
+                logger.debug(f"Received message from client {client_id}: {message}")
+                
+                # Обробляємо запити від клієнта
+                if message.get("action") == "get_full_status":
+                    # Надсилаємо повний статус як відповідь на запит
+                    await send_full_status_update(websocket)
+                elif message.get("action") == "get_chart_updates":
+                    # Новий обробник для запиту оновлення графіків
+                    await broadcast_chart_updates()
+                    logger.info(f"Sent chart updates to client {client_id}")
+            except json.JSONDecodeError:
+                logger.error(f"Invalid JSON received from client {client_id}: {data}")
+            except Exception as e:
+                logger.error(f"Error processing client {client_id} message: {e}")
+        
     except WebSocketDisconnect:
-        logger.info(f"WebSocket connection closed for {websocket.client}")
+        logger.info(f"WebSocket connection closed for {client_id}")
+        active_connections.remove(websocket)
+        logger.info(f"WebSocket connection removed for {client_id}. Remaining: {len(active_connections)}")
     except Exception as e:
-        # Log other exceptions that might occur in the loop
-        logger.error(f"WebSocket error for {websocket.client}: {e}")
-    finally:
-        # Ensure the connection is removed from the set
-        active_connections.discard(websocket) # Use discard to avoid KeyError if already removed
-        logger.info(f"WebSocket connection removed for {websocket.client}. Remaining: {len(active_connections)}")
+        logger.error(f"Unexpected error in websocket_endpoint for client {client_id}: {e}")
+        if websocket in active_connections:
+            active_connections.remove(websocket)
+            logger.info(f"WebSocket connection removed for {client_id} after error. Remaining: {len(active_connections)}")
 
 
 @app.get("/health")
