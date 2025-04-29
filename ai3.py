@@ -1108,4 +1108,3 @@ async def main():
         # Закриваємо сесію
         await ai3_instance.close_session()
         log_message("[AI3] Exiting.")
-````
