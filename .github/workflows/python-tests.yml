@@ -34,10 +34,31 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements_async.txt
 
+      - name: Install Generated Project Python dependencies
+        working-directory: repo # Працюємо в директорії згенерованого проекту
+        run: |
+          if [ -f requirements.txt ]; then
+            python -m pip install --upgrade pip
+            pip install -r requirements.txt
+          else
+            echo "repo/requirements.txt not found, skipping dependency installation."
+          fi
+
       - name: Run Python tests
         working-directory: main # Вказуємо робочу директорію
         run: |
           pytest tests/ # Запускаємо тести для системи AI-SYSTEMS
+
+      - name: Run Generated Project Python tests
+        working-directory: repo # Працюємо в директорії згенерованого проекту
+        run: |
+          # Запускаємо pytest, якщо є папка tests або файли тестів
+          # Продовжуємо, навіть якщо тести не пройшли (щоб лінтери все одно запустились)
+          if [ -d "tests" ] || ls test_*.py > /dev/null 2>&1 || ls *_test.py > /dev/null 2>&1; then
+            pytest tests/ || true
+          else
+            echo "No tests found in repo/, skipping project test execution."
+          fi
 
       - name: Set up Node.js
         uses: actions/setup-node@v4

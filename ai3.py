@@ -1105,82 +1105,71 @@ class AI3:
 
 
     async def monitor_system_errors(self):
-        """Моніторить лог-файли системи на наявність помилок, але з обмеженням
-        щоб уникнути переповнення черги executor. Повідомляє AI1 про знайдені помилки."""
+        """Моніторить лог-файли системи на наявність помилок, що стосуються файлів у repo/,
+        та повідомляє AI1 про знайдені помилки.""" # Оновлено опис
         log_files = self.config.get("error_log_files", ["logs/mcp_api.log", "logs/ai1.log", "logs/ai2.log", "logs/ai3.log"])
         check_interval = self.config.get("error_check_interval", 60)
-        # Специфічний патерн для критичних помилок, а не всіх логів з ERROR/CRITICAL
-        error_pattern = re.compile(r"(CRITICAL|ERROR).*(failed|exception|crash|timeout)", re.IGNORECASE)
+        # --- CHANGE: Modify error pattern to require REPO_PREFIX ---
+        # Патерн шукає CRITICAL/ERROR + ключове слово помилки + шлях до файлу в repo/
+        error_pattern = re.compile(r"(CRITICAL|ERROR).*(failed|exception|crash|timeout).*" + re.escape(REPO_PREFIX), re.IGNORECASE)
+        # ----------------------------------------------------------
         processed_errors = set() # Зберігаємо хеші оброблених помилок
         max_errors_per_cycle = self.config.get("max_errors_per_cycle", 2) # Обмеження кількості помилок за цикл
-        
-        # Перевіряємо поточну зайнятість черги executor
+
         async def check_executor_queue_size():
+            # ... (implementation remains the same) ...
             try:
                 await self.create_session()
                 async with self.session.get(f"{self.config.get('mcp_api_url', DEFAULT_MCP_API_URL)}/worker_status") as response:
                     if response.status == 200:
                         worker_status = await response.json()
-                        # Збираємо розміри черг для всіх воркерів
                         queue_sizes = {}
                         for worker_name, status in worker_status.items():
                             queue_sizes[worker_name] = status.get("queue_size", 0)
-                        
-                        # Повертаємо як загальний розмір executor черги, так і інформацію про всі черги
                         return queue_sizes.get("executor", 0), queue_sizes
                     else:
                         logger.warning(f"[AI3] Failed to get worker status: {response.status}")
-                        return 1000, {}  # Припускаємо велику чергу у разі помилки
+                        return 1000, {}
             except Exception as e:
                 logger.error(f"[AI3] Error checking worker status: {e}")
-                return 1000, {}  # Припускаємо велику чергу у разі помилки
+                return 1000, {}
 
-        logger.info("[AI3] Starting system error monitoring (reporting to AI1).")
+        logger.info("[AI3] Starting system error monitoring (repo/ files only, reporting to AI1).") # Оновлено лог
         while True:
             try:
-                # Перевіряємо розмір черги перед обробкою помилок
                 executor_queue_size, all_queue_sizes = await check_executor_queue_size()
                 queue_threshold = self.config.get("executor_queue_threshold", 10)
-                
+
                 if executor_queue_size >= queue_threshold:
                     logger.info(f"[AI3] Executor queue size ({executor_queue_size}) exceeds threshold ({queue_threshold}). Notifying AI1 for queue rebalancing.")
-                    
-                    # Відправляємо інформацію про розміри черг до AI1 для прийняття рішення про перерозподіл
                     await self.send_queue_info_to_ai1(all_queue_sizes)
-                    
-                    # Чекаємо довше перед наступною перевіркою, якщо черга завантажена
                     await asyncio.sleep(check_interval * 2)
                     continue
-                
-                # Обробляємо тільки обмежену кількість помилок
+
                 errors_processed_this_cycle = 0
                 for log_file in log_files:
                     if not os.path.exists(log_file):
                         continue
-                    
-                    # Перевіряємо чи не перевищили ліміт
+
                     if errors_processed_this_cycle >= max_errors_per_cycle:
                         break
-                        
+
                     try:
                         async with aiofiles.open(log_file, mode='r', encoding='utf-8', errors='ignore') as f:
-                             # Читаємо останні рядки
                              lines = await f.readlines()
-                             for i, line in enumerate(lines[-100:]): # Обробляємо останні 100 рядків
-                                 # Перевіряємо чи не перевищили ліміт
+                             for i, line in enumerate(lines[-100:]):
                                  if errors_processed_this_cycle >= max_errors_per_cycle:
                                      break
-                                     
+
+                                 # --- CHANGE: Use the updated error_pattern ---
                                  if error_pattern.search(line):
-                                     error_hash = hash(line) # Простий спосіб ідентифікації унікальних помилок
+                                 # -------------------------------------------
+                                     error_hash = hash(line)
                                      if error_hash not in processed_errors:
-                                         logger.info(f"[AI3] Detected critical error in {log_file}: {line.strip()}")
-                                         # --- CHANGE: Report error to AI1 instead of requesting fix directly ---
-                                         # Extract context (e.g., surrounding lines)
+                                         logger.info(f"[AI3] Detected repo-related critical error in {log_file}: {line.strip()}") # Оновлено лог
                                          context_lines = lines[max(0, len(lines) - 100 + i - 2) : min(len(lines), len(lines) - 100 + i + 3)]
                                          error_context = "".join(context_lines)
                                          await self._report_system_error_to_ai1(log_file, line.strip(), error_context)
-                                         # --------------------------------------------------------------------
                                          processed_errors.add(error_hash)
                                          errors_processed_this_cycle += 1
                                          self.monitoring_stats["error_fixes_requested"] += 1 # Keep stat, but rename if needed
@@ -1188,9 +1177,8 @@ class AI3:
                          logger.error(f"[AI3] Error reading log file {log_file}: {file_read_err}")
 
 
-                # Якщо обробляли помилки, фіксуємо кількість
                 if errors_processed_this_cycle > 0:
-                    logger.info(f"[AI3] Reported {errors_processed_this_cycle} critical system errors to AI1 this cycle")
+                    logger.info(f"[AI3] Reported {errors_processed_this_cycle} repo-related critical system errors to AI1 this cycle") # Оновлено лог
 
             except Exception as e:
                 logger.error(f"[AI3] Error monitoring system errors: {e}")
