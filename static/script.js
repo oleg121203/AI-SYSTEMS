@@ -264,7 +264,7 @@ function updateStats(current_subtask_statuses, current_queues_data) {
     (status) =>
       status === "accepted" ||
       status === "completed" ||
-      status === "code_received"
+      status === "code_received" // Consider 'code_received' as completed for this count
   ).length;
 
   // Calculate tasks currently in queues
@@ -282,23 +282,20 @@ function updateStats(current_subtask_statuses, current_queues_data) {
       parseInt(queueCounts.documenter?.textContent || "0", 10);
   }
 
-  // New calculation for Total Tasks
-  const total = completed + tasksInQueues;
+  // Total Tasks should reflect all known subtasks
+  const knownTasksCount = Object.keys(current_subtask_statuses).length;
+  const total = knownTasksCount; // Use the count of all known statuses as the total
 
   // Calculate efficiency based on the number of tasks we have status for
-  const knownTasksCount = Object.keys(current_subtask_statuses).length;
   const efficiency =
     knownTasksCount > 0 ? ((completed / knownTasksCount) * 100).toFixed(1) : 0;
-  // Note: Efficiency is now calculated based on known completed tasks vs total known tasks (not the new 'total')
-  // This might be more meaningful than comparing completed to (completed + in_queues).
 
   console.log(
-    `[Stats Update] Calculated - Completed: ${completed}, In Queues: ${tasksInQueues}, New Total: ${total}, Efficiency (based on ${knownTasksCount} known): ${efficiency}%`
+    `[Stats Update] Calculated - Completed: ${completed}, In Queues: ${tasksInQueues}, Total Known: ${total}, Efficiency: ${efficiency}%`
   );
 
-  if (statElements.total) statElements.total.textContent = total;
+  if (statElements.total) statElements.total.textContent = total; // Update total tasks display
   if (statElements.completed) statElements.completed.textContent = completed;
-  // Keep efficiency calculation based on known task statuses for now
   if (statElements.efficiency)
     statElements.efficiency.textContent = `${efficiency}%`;
 }
