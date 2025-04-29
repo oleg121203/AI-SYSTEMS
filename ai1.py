@@ -677,7 +677,7 @@ class AI1:
                  await asyncio.sleep(config.get("ai1_idle_sleep_interval", 15)) # Більша затримка
 
     async def create_subtask(
-        self, task_text: str, role: str, filename: str, code: Optional[str] = None
+        self, task_text: str, role: str, filename: str, code: Optional[str] = None, is_rework: bool = False
     ) -> Union[
         str, bool, Exception
     ]:  # Return subtask_id on success, False or Exception on failure
@@ -690,13 +690,14 @@ class AI1:
                 "text": task_text,
                 "role": role,
                 "filename": filename,
+                "is_rework": is_rework,  # Додаємо новий параметр
             }
         }
         if code is not None:
             payload["subtask"]["code"] = code
 
         log_message(
-            f"[AI1] Sending subtask: ID={subtask_id}, Role={role}, Filename={filename}{', Code included' if code is not None else ''}"
+            f"[AI1] Sending subtask: ID={subtask_id}, Role={role}, Filename={filename}, Is_rework={is_rework}{', Code included' if code is not None else ''}"
         )
         await apply_request_delay("ai1")  # Add delay before request
         try:
@@ -738,6 +739,166 @@ class AI1:
                 f"[AI1] Unexpected error creating subtask {subtask_id} for {filename} ({role}): {str(e)}"
             )
             return e  # Return exception
+
+    async def handle_test_result(self, test_recommendation: dict):
+        """Обробляє рекомендації щодо результатів тестування від AI3."""
+        recommendation = test_recommendation.get("recommendation")
+        context = test_recommendation.get("context", {})
+        
+        if not recommendation:
+            log_message("[AI1] Отримано порожню рекомендацію від AI3. Ігнорую.")
+            return False
+        
+        log_message(f"[AI1] Отримано рекомендацію від AI3: {recommendation}")
+        
+        decision = await self.decide_on_test_results(recommendation, context)
+        log_message(f"[AI1] Прийнято рішення щодо результатів тестів: {decision}")
+        
+        if decision == "accept":
+            # Позначаємо відповідні файли як прийняті
+            if "failed_files" in context:
+                for file in context["failed_files"]:
+                    # Знаходимо оригінальний файл на основі тестового
+                    original_file = self._get_original_file_from_test(file)
+                    if original_file and original_file in self.task_status:
+                        self.task_status[original_file]["tester"] = "accepted"
+                        log_message(f"[AI1] Файл {original_file} позначено як прийнятий (тестування пройдено)")
+            else:
+                # Якщо немає failed_files, то всі тести пройдені успішно
+                # Можемо оновити статус для всіх файлів, які були в статусі "tested"
+                for file_path, statuses in self.task_status.items():
+                    if statuses.get("tester") == "tested":
+                        statuses["tester"] = "accepted"
+                        log_message(f"[AI1] Файл {file_path} позначено як прийнятий (тестування пройдено)")
+            
+            return True
+            
+        elif decision == "rework":
+            # Створюємо нові завдання для файлів, які не пройшли тести
+            failed_files = context.get("failed_files", [])
+            run_url = context.get("run_url", "")
+            
+            if not failed_files:
+                log_message("[AI1] Рекомендація на доопрацювання, але не вказано файли для виправлення.")
+                return False
+            
+            for test_file in failed_files:
+                original_file = self._get_original_file_from_test(test_file)
+                if not original_file:
+                    log_message(f"[AI1] Не вдалося визначити оригінальний файл для тесту {test_file}")
+                    continue
+                    
+                if original_file in self.task_status:
+                    # Позначаємо файл як такий, що потребує доопрацювання
+                    self.task_status[original_file]["tester"] = "failed_tests"
+                    
+                    # Отримуємо вміст тестового файлу, щоб дізнатися про помилки
+                    test_content = await self.get_file_content(test_file)
+                    original_content = await self.get_file_content(original_file)
+                    
+                    if not test_content or not original_content:
+                        log_message(f"[AI1] Не вдалося отримати вміст файлів для створення завдання на доопрацювання: {original_file}")
+                        continue
+                    
+                    # Створюємо завдання на доопрацювання для executor
+                    task_text = (
+                        f"Код у файлі {original_file} не пройшов тести. "
+                        f"Необхідно виправити код згідно з вимогами у тестах.\n\n"
+                        f"Помилки з тесту {test_file}:\n{test_content}\n\n"
+                        f"Посилання на GitHub Actions: {run_url}\n"
+                        f"Будь ласка, виправте код для проходження тестів."
+                    )
+                    
+                    # Додаємо файл назад до pending_files_to_fill для повторної обробки
+                    if original_file not in self.pending_files_to_fill:
+                        self.pending_files_to_fill.append(original_file)
+                    
+                    # Змінюємо статус executor на "needs_rework" та створюємо нову підзадачу
+                    self.task_status[original_file]["executor"] = "needs_rework"
+                    
+                    # Створюємо нову підзадачу для виправлення помилок
+                    subtask_result = await self.create_subtask(
+                        task_text=task_text,
+                        role="executor",
+                        filename=original_file,
+                        code=original_content,
+                        is_rework=True
+                    )
+                    
+                    if subtask_result:
+                        log_message(f"[AI1] Створено завдання на доопрацювання для {original_file}: {subtask_result}")
+                    else:
+                        log_message(f"[AI1] Не вдалося створити завдання на доопрацювання для {original_file}")
+            
+            return True
+        
+        else:
+            log_message(f"[AI1] Невідоме рішення для рекомендації щодо тестів: {decision}")
+            return False
+
+    async def decide_on_test_results(self, recommendation: str, context: dict) -> str:
+        """Приймає остаточне рішення щодо результатів тестування."""
+        # За замовчуванням довіряємо рекомендації AI3
+        decision = recommendation
+        
+        # Якщо потрібна більш складна логіка прийняття рішення, вона може бути тут
+        # Наприклад, можемо аналізувати типи помилок у тестах, історію попередніх рішень тощо
+        
+        log_message(f"[AI1] Аналіз рекомендації '{recommendation}' та контексту: {context}")
+        
+        # Приклад додаткової логіки:
+        if recommendation == "rework" and context.get("failed_files"):
+            # Перевіряємо, чи не є це повторним доопрацюванням тих самих файлів
+            failed_files = [self._get_original_file_from_test(f) for f in context.get("failed_files", [])]
+            
+            # Фільтруємо None значення
+            failed_files = [f for f in failed_files if f]
+            
+            # Перевіряємо, чи не перевищено ліміт спроб доопрацювання
+            exceed_max_rework = False
+            for file in failed_files:
+                if file in self.task_status:
+                    # Відстежуємо кількість раз, коли файл був на доопрацюванні
+                    if "rework_attempts" not in self.task_status[file]:
+                        self.task_status[file]["rework_attempts"] = 1
+                    else:
+                        self.task_status[file]["rework_attempts"] += 1
+                    
+                    max_rework_attempts = config.get("ai1_max_rework_attempts", 3)
+                    if self.task_status[file].get("rework_attempts", 0) > max_rework_attempts:
+                        log_message(f"[AI1] Файл {file} перевищив максимальну кількість спроб доопрацювання ({max_rework_attempts})")
+                        exceed_max_rework = True
+                        # Можна позначити як "потрібна ручна перевірка"
+                        self.task_status[file]["tester"] = "review_needed"
+            
+            if exceed_max_rework:
+                # Якщо перевищено ліміт спроб, можемо змінити рішення або позначити для ручної перевірки
+                decision = "accept" # або "manual_review" чи інший статус
+        
+        return decision
+
+    def _get_original_file_from_test(self, test_file: str) -> str:
+        """Визначає оригінальний файл на основі тестового файлу."""
+        # Простий алгоритм: видаляємо 'test_' з назви файлу або замінюємо '_test' на ''
+        base_name = os.path.basename(test_file)
+        
+        if base_name.startswith("test_"):
+            original_name = base_name[5:]  # Видаляємо "test_"
+        elif "_test." in base_name:
+            original_name = base_name.replace("_test.", ".")
+        elif base_name.endswith("_test.py") or base_name.endswith("_test.js"):
+            original_name = base_name[:-8] + base_name[-3:]  # Видаляємо "_test" перед розширенням
+        else:
+            log_message(f"[AI1] Не вдалося визначити оригінальний файл для тесту {test_file}")
+            return None
+        
+        # Підбираємо шлях до оригінального файлу
+        for file_path in self.files_to_fill:
+            if file_path.endswith(original_name) or os.path.basename(file_path) == original_name:
+                return file_path
+        
+        # Якщо оригінальний файл не знайдено, повертаємо None
+        return None
 
     def check_completion(self) -> bool:
         """Проверяет, все ли задачи выполнены (статус 'accepted' или 'skipped')."""

@@ -848,6 +848,164 @@ class AI3:
                 f"Не вдалося вилучити шлях до файлу або вміст зі звіту AI2: {data}"
             )
 
+    async def monitor_github_actions(self):
+        """Моніторить результати GitHub Actions та надсилає рекомендації на основі аналізу.
+        Ця функція безперервно перевіряє статус GitHub Actions через GitHub API
+        та обробляє результати тестування.
+        """
+        log_message("[AI3] Starting GitHub Actions monitoring...")
+        
+        # Конфігурація GitHub API
+        github_token = config.get("github_token")
+        github_repo = config.get("github_repo")
+        
+        if not github_token or not github_repo:
+            log_message("[AI3] Warning: GitHub token or repo not configured. Cannot monitor GitHub Actions.")
+            return
+        
+        headers = {
+            "Authorization": f"token {github_token}",
+            "Accept": "application/vnd.github.v3+json"
+        }
+        
+        # Основний цикл моніторингу
+        while True:
+            try:
+                await self.create_session()
+                # Отримуємо останні workflow runs
+                async with self.session.get(
+                    f"https://api.github.com/repos/{github_repo}/actions/runs",
+                    headers=headers
+                ) as response:
+                    if response.status == 200:
+                        runs_data = await response.json()
+                        workflow_runs = runs_data.get("workflow_runs", [])
+                        
+                        # Обробляємо тільки останній завершений workflow run
+                        for run in workflow_runs:
+                            run_id = run.get("id")
+                            run_status = run.get("status")
+                            run_conclusion = run.get("conclusion")
+                            
+                            if run_status == "completed":
+                                # Зберігаємо інформацію про завершений run, якщо ми його ще не обробляли
+                                if self._is_new_completed_run(run_id):
+                                    log_message(f"[AI3] Found completed GitHub Actions run: {run_id}, conclusion: {run_conclusion}")
+                                    await self._analyze_workflow_run(run_id, run_conclusion, headers)
+                                break  # Обробляємо тільки останній завершений run
+                    else:
+                        log_message(f"[AI3] Failed to fetch GitHub Actions runs: Status {response.status}")
+                    
+            except Exception as e:
+                log_message(f"[AI3] Error in GitHub Actions monitoring: {e}")
+            
+            # Чекаємо перед наступною перевіркою
+            await asyncio.sleep(config.get("github_actions_check_interval", 60))
+
+    def _is_new_completed_run(self, run_id):
+        """Перевіряє, чи є завершений run новим (ще не обробленим)."""
+        if not hasattr(self, "processed_run_ids"):
+            self.processed_run_ids = set()
+        
+        if run_id in self.processed_run_ids:
+            return False
+        
+        self.processed_run_ids.add(run_id)
+        # Обмежуємо розмір множини, зберігаючи тільки останні N run_id
+        max_stored_runs = 50
+        if len(self.processed_run_ids) > max_stored_runs:
+            self.processed_run_ids = set(list(self.processed_run_ids)[-max_stored_runs:])
+        
+        return True
+
+    async def _analyze_workflow_run(self, run_id, run_conclusion, headers):
+        """Аналізує результати виконання workflow та відправляє рекомендації."""
+        try:
+            await self.create_session()
+            # Отримуємо деталі запуску, включаючи тести
+            async with self.session.get(
+                f"https://api.github.com/repos/{config.get('github_repo')}/actions/runs/{run_id}/jobs",
+                headers=headers
+            ) as response:
+                if response.status != 200:
+                    log_message(f"[AI3] Failed to fetch jobs for run {run_id}: Status {response.status}")
+                    return
+                
+                jobs_data = await response.json()
+                jobs = jobs_data.get("jobs", [])
+                
+                # Аналізуємо тестові завдання
+                all_tests_passed = True
+                failed_files = []
+                
+                for job in jobs:
+                    job_name = job.get("name", "")
+                    job_conclusion = job.get("conclusion", "")
+                    
+                    if "test" in job_name.lower():
+                        log_message(f"[AI3] Found test job: {job_name}, conclusion: {job_conclusion}")
+                        
+                        if job_conclusion != "success":
+                            all_tests_passed = False
+                            
+                            # Отримуємо кроки завдання, щоб знайти, які тести не пройшли
+                            steps = job.get("steps", [])
+                            for step in steps:
+                                step_name = step.get("name", "")
+                                step_conclusion = step.get("conclusion", "")
+                                
+                                if step_conclusion == "failure" and "test" in step_name.lower():
+                                    # Спроба визначити, який файл викликав помилку на основі назви кроку
+                                    # Це може потребувати додаткової логіки залежно від формату кроків
+                                    file_patterns = ["test_", ".test.", "_test"]
+                                    for pattern in file_patterns:
+                                        if pattern in step_name:
+                                            file_parts = step_name.split(pattern)
+                                            if len(file_parts) > 1:
+                                                file_guess = pattern + file_parts[1].split()[0]
+                                                failed_files.append(file_guess)
+                                    
+                                    log_message(f"[AI3] Failed test step: {step_name}")
+                
+                # Формуємо рекомендацію
+                recommendation = "accept" if all_tests_passed else "rework"
+                
+                # Збираємо контекст для рекомендації
+                context = {}
+                if not all_tests_passed:
+                    context["failed_files"] = failed_files
+                    context["run_url"] = f"https://github.com/{config.get('github_repo')}/actions/runs/{run_id}"
+                
+                # Відправляємо рекомендацію в MCP API
+                await self._send_test_recommendation(recommendation, context)
+                
+        except Exception as e:
+            log_message(f"[AI3] Error analyzing workflow run {run_id}: {e}")
+
+    async def _send_test_recommendation(self, recommendation, context=None):
+        """Відправляє рекомендацію на основі результатів тестів в MCP API."""
+        api_url = f"{MCP_API_URL}/test_recommendation"
+        payload = {
+            "recommendation": recommendation,
+            "context": context or {}
+        }
+        
+        log_message(f"[AI3] Sending test recommendation to MCP API: {recommendation}")
+        
+        try:
+            await self.create_session()
+            async with self.session.post(api_url, json=payload) as response:
+                if response.status == 200:
+                    log_message(f"[AI3] Test recommendation sent successfully: {recommendation}")
+                    return True
+                else:
+                    response_text = await response.text()
+                    log_message(f"[AI3] Failed to send test recommendation. Status: {response.status}, Response: {response_text}")
+                    return False
+        except Exception as e:
+            log_message(f"[AI3] Error sending test recommendation: {e}")
+            return False
+
 
 # Глобальний екземпляр AI3 для використання в API та main
 ai3_instance = AI3()
@@ -911,25 +1069,20 @@ async def main():
             log_message("[AI3] Failed to generate structure. Cannot create files.")
             await send_ai3_report("structure_generation_failed")
 
-    log_message("[AI3] Starting simplified log monitoring.")
+    log_message("[AI3] Starting monitoring tasks.")
+    monitoring_task = None  # Моніторинг воркерів та логів
+    github_actions_task = None  # Моніторинг GitHub Actions
+    
     try:
-        await simple_log_monitor()
-    except asyncio.CancelledError:
-        log_message("[AI3] Main task cancelled.")
-    except Exception as e:
-        log_message(f"[AI3] Monitoring stopped unexpectedly: {e}")
-
-    log_message("[AI3] Starting monitoring task.")
-    monitoring_task = None # Initialize monitoring_task
-    try:
-        # Start the monitoring task
+        # Запускаємо одночасно всі моніторингові завдання
         monitoring_task = asyncio.create_task(ai3_instance.start_monitoring())
-
-        # Keep the main task running (or perform other main activities)
-        # If the main purpose is just to keep monitoring alive, this loop is fine.
-        # If other tasks should run, they should be awaited here.
+        github_actions_task = asyncio.create_task(ai3_instance.monitor_github_actions())
+        
+        log_message("[AI3] All monitoring tasks started.")
+        
+        # Головний цикл, що просто підтримує програму активною
         while True:
-            await asyncio.sleep(3600) # Sleep for a longer duration, or handle other events
+            await asyncio.sleep(3600)  # Перевірка раз на годину
 
     except asyncio.CancelledError:
         log_message("[AI3] Main task cancelled")
@@ -937,21 +1090,22 @@ async def main():
         log_message(f"[AI3] Unexpected error in main task: {e}")
     finally:
         log_message("[AI3] Main task finishing. Cleaning up...")
-        if monitoring_task and not monitoring_task.done():
-            monitoring_task.cancel()
-            try:
-                await monitoring_task
-                log_message("[AI3] Monitoring task cancelled successfully.")
-            except asyncio.CancelledError:
-                log_message("[AI3] Monitoring task cancellation confirmed.")
-            except Exception as me:
-                 log_message(f"[AI3] Error during monitoring task cancellation: {me}")
+        # Скасовуємо всі моніторингові завдання
+        for task, name in [
+            (monitoring_task, "Monitoring"),
+            (github_actions_task, "GitHub Actions monitoring")
+        ]:
+            if task and not task.done():
+                task.cancel()
+                try:
+                    await task
+                    log_message(f"[AI3] {name} task cancelled successfully.")
+                except asyncio.CancelledError:
+                    log_message(f"[AI3] {name} task cancellation confirmed.")
+                except Exception as e:
+                    log_message(f"[AI3] Error during {name} task cancellation: {e}")
+        
+        # Закриваємо сесію
         await ai3_instance.close_session()
         log_message("[AI3] Exiting.")
-
-
-if __name__ == "__main__":
-    log_dir = os.path.dirname(LOG_FILE_PATH)
-    if log_dir:
-        os.makedirs(log_dir, exist_ok=True)
-    asyncio.run(main())
+````
