@@ -399,127 +399,185 @@ class AI1:
         )
 
     async def manage_tasks(self):
-        """Основна логіка управління задачами: обмежене створення та відстеживання завдань."""
+        """Основна логіка управління задачами: підтримує буфер активних завдань."""
         log_message("[AI1] Starting task management cycle...")
 
-        # Update local statuses from API first
+        # Оновлюємо локальні статуси з API
         await self.update_local_task_statuses()
 
-        # Рахуємо активні завдання (задачі зі статусами pending, sending, sent, processing)
-        active_task_count = len(self.active_tasks)
-        log_message(f"[AI1] Current active tasks: {active_task_count}, Maximum allowed: {self.max_concurrent_tasks}")
+        # 1. Розраховуємо кількість завершених завдань
+        tasks_done_count = 0
+        # Статуси, що вважаються завершеними (успішно чи ні)
+        final_statuses = [
+            "accepted",
+            "skipped",
+            "failed_by_ai2",
+            "error_processing",
+            "review_needed", # Можливо, вважати завершеним для цього розрахунку
+            "failed_tests", # Якщо не передбачено rework
+            "failed_to_send", # Якщо не вдалося надіслати
+            # Додайте інші статуси, якщо потрібно
+        ]
+        for file_path, statuses in self.task_status.items():
+            for role, status in statuses.items():
+                if status in final_statuses:
+                    tasks_done_count += 1
+        log_message(f"[AI1] Calculated completed/final tasks: {tasks_done_count}")
+
+        # 2. Розраховуємо кількість поточних активних завдань (надіслані, обробляються)
+        active_task_count = 0
+        # Статуси, які вважаються активними (займають слот обробки)
+        active_statuses = ["sending", "sent", "processing", "code_received", "tested"] # Додайте/видаліть за потребою
+        current_active_tasks_details = []
+        for file_path, roles_statuses in self.task_status.items():
+            for role, status in roles_statuses.items():
+                if status in active_statuses:
+                    active_task_count += 1
+                    current_active_tasks_details.append(f"{file_path} ({role}): {status}")
+
+        log_message(f"[AI1] Calculated active (in-progress) tasks: {active_task_count}")
+        if current_active_tasks_details:
+             log_message(f"[AI1] Active tasks list: {'; '.join(current_active_tasks_details)}")
+
+        # 3. Визначаємо динамічний ліміт для нових завдань
+        # Читаємо бажаний буфер з конфігурації, з значенням за замовчуванням 10
+        desired_active_buffer = config.get("ai1_desired_active_buffer", 10)
+        # Переконуємося, що значення є цілим числом
+        try:
+            desired_active_buffer = int(desired_active_buffer)
+            if desired_active_buffer < 0:
+                log_message(f"[AI1] Warning: Invalid negative ai1_desired_active_buffer ({desired_active_buffer}) found in config. Using default 10.")
+                desired_active_buffer = 10
+        except (ValueError, TypeError):
+            log_message(f"[AI1] Warning: Invalid non-integer ai1_desired_active_buffer ('{desired_active_buffer}') found in config. Using default 10.")
+            desired_active_buffer = 10
+
+        dynamic_max_concurrent = min(tasks_done_count + desired_active_buffer, self.max_concurrent_tasks)
+        log_message(f"[AI1] Target concurrent tasks: {dynamic_max_concurrent} (Completed: {tasks_done_count} + Buffer: {desired_active_buffer}, Capped by Max: {self.max_concurrent_tasks})")
 
         tasks_to_send = []
+        slots_filled_this_cycle = 0
 
-        # 1. Спочатку надаємо пріоритет задачам для виконавця (executor), якщо є вільні слоти
-        while active_task_count < self.max_concurrent_tasks and self.pending_files_to_fill:
-            # Беремо наступний файл з черги очікування
-            file_path = self.pending_files_to_fill.pop(0)
-            
-            # Перевіряємо, чи файл не має вже активного завдання для executor
-            if "executor" in self.task_status.get(file_path, {}) and self.task_status[file_path]["executor"] == "pending":
-                tasks_to_send.append({
-                    "task_text": f"Implement the required functionality in file: {file_path} based on the overall project goal: {self.target}",
-                    "role": "executor",
-                    "filename": file_path,
-                    "code": None,
-                })
-                self.task_status[file_path]["executor"] = "sending"
-                active_task_count += 1
-                log_message(f"[AI1] Added executor task for {file_path} to queue")
-        
-        # Визначимо стан готовності виконання executor завдання
+        # --- Логіка додавання завдань (executor, tester, documenter) ---
+        # Тепер використовуємо dynamic_max_concurrent замість self.max_concurrent_tasks
+
+        # Приклад для executor:
+        processed_executor_files = []
+        # Використовуємо копію списку для безпечного видалення під час ітерації
+        for file_path in list(self.pending_files_to_fill):
+            # Перевіряємо динамічний ліміт ПЕРЕД додаванням
+            if active_task_count + slots_filled_this_cycle < dynamic_max_concurrent:
+                if "executor" in self.task_status.get(file_path, {}) and self.task_status[file_path]["executor"] == "pending":
+                    tasks_to_send.append({
+                        "task_text": f"Implement the required functionality in file: {file_path} based on the overall project goal: {self.target}",
+                        "role": "executor",
+                        "filename": file_path,
+                        "code": None,
+                    })
+                    # Статус зміниться на 'sending' перед надсиланням
+                    slots_filled_this_cycle += 1
+                    processed_executor_files.append(file_path) # Позначити для видалення з pending
+                    log_message(f"[AI1] Queued executor task for {file_path}. Current cycle queue size: {len(tasks_to_send)}. Aiming for total active: {active_task_count + slots_filled_this_cycle}")
+            else:
+                log_message(f"[AI1] Executor task for {file_path} skipped: dynamic concurrent task limit ({dynamic_max_concurrent}) reached or would be exceeded.")
+                break # Зупиняємо додавання executor завдань, якщо ліміт досягнуто
+
+        # Видаляємо оброблені файли з черги executor
+        for file_path in processed_executor_files:
+             if file_path in self.pending_files_to_fill:
+                 self.pending_files_to_fill.remove(file_path)
+
+
+        # Приклад для tester:
         executor_done_statuses = [
-            "code_received",
-            "tested",
-            "accepted",
-            "completed_by_ai2",
-            "review_needed",
+            "code_received", "tested", "accepted", "completed_by_ai2", "review_needed", "failed_tests" # Статуси, після яких можна тестувати
         ]
-        
-        # 2. Додаємо тестувальні задачі, якщо є вільні слоти
         processed_test_files = []
-        for file_path in self.pending_files_to_test[:]:
-            if active_task_count >= self.max_concurrent_tasks:
-                break
-                
-            # Перевіряємо, чи є завершене завдання executor для цього файлу
-            if (file_path in self.task_status and 
-                "executor" in self.task_status[file_path] and 
-                self.task_status[file_path]["executor"] in executor_done_statuses):
-                
-                if "tester" in self.task_status[file_path] and self.task_status[file_path]["tester"] == "pending":
-                    # Завантажимо вміст файлу для тестування
-                    code_content = await self.get_file_content(file_path)
-                    if code_content is not None:
-                        tasks_to_send.append({
-                            "task_text": f"Generate unit tests for the code in file: {file_path}",
-                            "role": "tester",
-                            "filename": file_path,
-                            "code": code_content,
-                        })
-                        self.task_status[file_path]["tester"] = "sending"
-                        active_task_count += 1
-                        processed_test_files.append(file_path)
-                        log_message(f"[AI1] Added tester task for {file_path} to queue")
-                    else:
-                        log_message(f"[AI1] Failed to fetch content for {file_path} to create tester task. Will retry.")
-                        self.task_status[file_path]["tester"] = "fetch_failed"
-        
+        for file_path in list(self.pending_files_to_test):
+             # Перевіряємо динамічний ліміт
+            if active_task_count + slots_filled_this_cycle < dynamic_max_concurrent:
+                if (file_path in self.task_status and
+                    "executor" in self.task_status[file_path] and
+                    self.task_status[file_path]["executor"] in executor_done_statuses):
+
+                    if "tester" in self.task_status[file_path] and self.task_status[file_path]["tester"] == "pending":
+                        code_content = await self.get_file_content(file_path)
+                        if code_content is not None:
+                            tasks_to_send.append({
+                                "task_text": f"Generate unit tests for the code in file: {file_path}",
+                                "role": "tester",
+                                "filename": file_path,
+                                "code": code_content,
+                            })
+                            slots_filled_this_cycle += 1
+                            processed_test_files.append(file_path)
+                            log_message(f"[AI1] Queued tester task for {file_path}. Current cycle queue size: {len(tasks_to_send)}. Aiming for total active: {active_task_count + slots_filled_this_cycle}")
+                        else:
+                            log_message(f"[AI1] Failed to fetch content for {file_path} to create tester task. Setting status to fetch_failed.")
+                            self.task_status[file_path]["tester"] = "fetch_failed"
+                            processed_test_files.append(file_path) # Видалити з pending, бо є проблема
+                # else: Немає завершеного executor або статус tester не pending
+            else:
+                log_message(f"[AI1] Tester task for {file_path} skipped: dynamic concurrent task limit ({dynamic_max_concurrent}) reached or would be exceeded.")
+                break # Зупиняємо додавання tester завдань
+
         # Видаляємо оброблені файли з черги тестування
         for file_path in processed_test_files:
-            self.pending_files_to_test.remove(file_path)
-            
-        # 3. Додаємо задачі документування, якщо є вільні слоти
+            if file_path in self.pending_files_to_test:
+                self.pending_files_to_test.remove(file_path)
+
+
+        # Приклад для documenter:
         processed_doc_files = []
-        for file_path in self.pending_files_to_document[:]:
-            if active_task_count >= self.max_concurrent_tasks:
-                break
-                
-            # Перевіряємо, чи є завершене завдання executor для цього файлу
-            if (file_path in self.task_status and 
-                "executor" in self.task_status[file_path] and 
-                self.task_status[file_path]["executor"] in executor_done_statuses):
-                
-                if "documenter" in self.task_status[file_path] and self.task_status[file_path]["documenter"] == "pending":
-                    # Завантажимо вміст файлу для документування
-                    code_content = await self.get_file_content(file_path)
-                    if code_content is not None:
-                        tasks_to_send.append({
-                            "task_text": f"Generate documentation (e.g., docstrings, comments, README section) for the code in file: {file_path}",
-                            "role": "documenter",
-                            "filename": file_path,
-                            "code": code_content,
-                        })
-                        self.task_status[file_path]["documenter"] = "sending"
-                        active_task_count += 1
-                        processed_doc_files.append(file_path)
-                        log_message(f"[AI1] Added documenter task for {file_path} to queue")
-                    else:
-                        log_message(f"[AI1] Failed to fetch content for {file_path} to create documenter task. Will retry.")
-                        self.task_status[file_path]["documenter"] = "fetch_failed"
-        
+        for file_path in list(self.pending_files_to_document):
+             # Перевіряємо динамічний ліміт
+            if active_task_count + slots_filled_this_cycle < dynamic_max_concurrent:
+                if (file_path in self.task_status and
+                    "executor" in self.task_status[file_path] and
+                    self.task_status[file_path]["executor"] in executor_done_statuses): # Можливо, інша умова для documenter?
+
+                    if "documenter" in self.task_status[file_path] and self.task_status[file_path]["documenter"] == "pending":
+                        code_content = await self.get_file_content(file_path)
+                        if code_content is not None:
+                            tasks_to_send.append({
+                                "task_text": f"Generate documentation (e.g., docstrings, comments, README section) for the code in file: {file_path}",
+                                "role": "documenter",
+                                "filename": file_path,
+                                "code": code_content,
+                            })
+                            slots_filled_this_cycle += 1
+                            processed_doc_files.append(file_path)
+                            log_message(f"[AI1] Queued documenter task for {file_path}. Current cycle queue size: {len(tasks_to_send)}. Aiming for total active: {active_task_count + slots_filled_this_cycle}")
+                        else:
+                            log_message(f"[AI1] Failed to fetch content for {file_path} to create documenter task. Setting status to fetch_failed.")
+                            self.task_status[file_path]["documenter"] = "fetch_failed"
+                            processed_doc_files.append(file_path) # Видалити з pending
+                # else: Немає завершеного executor або статус documenter не pending
+            else:
+                log_message(f"[AI1] Documenter task for {file_path} skipped: dynamic concurrent task limit ({dynamic_max_concurrent}) reached or would be exceeded.")
+                break # Зупиняємо додавання documenter завдань
+
         # Видаляємо оброблені файли з черги документування
         for file_path in processed_doc_files:
-            self.pending_files_to_document.remove(file_path)
-            
-        # Обробляємо "fetch_failed" статуси
-        for file_path, statuses in self.task_status.items():
-            if "tester" in statuses and statuses["tester"] == "fetch_failed":
-                log_message(f"[AI1] Retrying fetch for tester task: {file_path}")
-                statuses["tester"] = "pending"
-                if file_path not in self.pending_files_to_test and file_path in self.files_to_test:
-                    self.pending_files_to_test.append(file_path)
-                    
-            if "documenter" in statuses and statuses["documenter"] == "fetch_failed":
-                log_message(f"[AI1] Retrying fetch for documenter task: {file_path}")
-                statuses["documenter"] = "pending"
-                if file_path not in self.pending_files_to_document:
-                    self.pending_files_to_document.append(file_path)
+            if file_path in self.pending_files_to_document:
+                self.pending_files_to_document.remove(file_path)
 
-        # Відправляємо зібрані завдання
+        # --- Надсилання завдань та обробка результатів ---
         if tasks_to_send:
             log_message(f"[AI1] Attempting to send {len(tasks_to_send)} new subtasks...")
+            # Тимчасово оновлюємо статус на 'sending' для тих, що надсилаємо
+            tasks_being_sent_keys = []
+            for task_data in tasks_to_send:
+                file_path = task_data["filename"]
+                role = task_data["role"]
+                # Переконуємося, що статус все ще 'pending' перед зміною на 'sending'
+                if self.task_status.get(file_path, {}).get(role) == "pending":
+                    self.task_status[file_path][role] = "sending"
+                    tasks_being_sent_keys.append((file_path, role))
+                else:
+                    log_message(f"[AI1] Warning: Task {file_path} ({role}) status changed from 'pending' before sending. Skipping status update to 'sending'.")
+
+
             results = await asyncio.gather(
                 *[self.create_subtask(**task_data) for task_data in tasks_to_send],
                 return_exceptions=True,
@@ -530,53 +588,93 @@ class AI1:
                 task_data = tasks_to_send[i]
                 file_path = task_data["filename"]
                 role = task_data["role"]
-                subtask_id = result if isinstance(result, str) else None  # create_subtask now returns ID on success
+                # Знаходимо відповідний ключ, якщо він був доданий
+                original_key = next(((fp, r) for fp, r in tasks_being_sent_keys if fp == file_path and r == role), None)
+
+                subtask_id = result if isinstance(result, str) else None
 
                 if isinstance(result, Exception) or result is False:
                     error_msg = result if isinstance(result, Exception) else "API returned failure"
                     log_message(f"[AI1] Failed to send subtask for {file_path} ({role}): {error_msg}")
-                    if self.task_status[file_path][role] == "sending":
-                        self.task_status[file_path][role] = "pending"  # Reset to retry
-                        
-                        # Повертаємо файл назад до відповідної черги
+                    # Перевіряємо, чи ми змінювали статус на 'sending'
+                    if original_key and self.task_status.get(file_path, {}).get(role) == "sending":
+                        self.task_status[file_path][role] = "failed_to_send" # Або повернути в 'pending'?
+                        # Повертаємо файл у відповідну чергу pending, якщо потрібно
                         if role == "executor" and file_path not in self.pending_files_to_fill:
-                            self.pending_files_to_fill.append(file_path)
+                             self.pending_files_to_fill.append(file_path)
                         elif role == "tester" and file_path not in self.pending_files_to_test:
-                            self.pending_files_to_test.append(file_path)
+                             self.pending_files_to_test.append(file_path)
                         elif role == "documenter" and file_path not in self.pending_files_to_document:
-                            self.pending_files_to_document.append(file_path)
-                        
-                elif subtask_id:  # Successfully sent and got ID
-                    # Status is now 'sent', add to active tasks
-                    task_key = f"{file_path}::{role}::{subtask_id}"
-                    self.active_tasks.add(task_key)
-                    log_message(f"[AI1] Subtask {subtask_id} sent for {file_path} ({role}). Added to active tasks.")
-                    # Update local status immediately to 'sent'
-                    if self.task_status[file_path][role] == "sending":
+                             self.pending_files_to_document.append(file_path)
+                    # Видаляємо з active_tasks, якщо він там був (хоча не мав би бути для failed_to_send)
+                    if original_key:
+                        task_key_to_remove = f"{file_path}::{role}::{subtask_id if subtask_id else 'unknown'}" # subtask_id може бути None тут
+                        self.active_tasks.discard(task_key_to_remove)
+
+                elif subtask_id:
+                    log_message(f"[AI1] Subtask {subtask_id} sent successfully for {file_path} ({role}).")
+                    # Перевіряємо, чи ми змінювали статус на 'sending'
+                    if original_key and self.task_status.get(file_path, {}).get(role) == "sending":
                         self.task_status[file_path][role] = "sent"
+                        # Додаємо до активних завдань
+                        task_key = f"{file_path}::{role}::{subtask_id}"
+                        self.active_tasks.add(task_key)
+                    else:
+                         log_message(f"[AI1] Warning: Subtask {subtask_id} sent, but local status for {file_path} ({role}) was not 'sending'. Current status: {self.task_status.get(file_path, {}).get(role)}")
+
+                else:
+                     # Незрозумілий результат (не Exception, не False, не subtask_id)
+                     log_message(f"[AI1] Unexpected result after sending subtask for {file_path} ({role}): {result}")
+                     if original_key and self.task_status.get(file_path, {}).get(role) == "sending":
+                         self.task_status[file_path][role] = "error_processing" # Або інший статус помилки
+                     # Видаляємо з active_tasks, якщо він там був
+                     if original_key:
+                         task_key_to_remove = f"{file_path}::{role}::{subtask_id if subtask_id else 'unknown'}"
+                         self.active_tasks.discard(task_key_to_remove)
+
         else:
-            log_message("[AI1] No new tasks to send in this cycle.")
-            
-        # Перевіряємо прогрес
-        total_tasks = len(self.files_to_fill) * 3 - (len(self.files_to_fill) - len(self.files_to_test))  # executor + tester + documenter
-        tasks_done = 0
-        
+            log_message("[AI1] No new tasks to queue or send in this cycle.")
+
+        # Обробляємо "fetch_failed" статуси (переносимо їх назад в pending для повторної спроби)
         for file_path, statuses in self.task_status.items():
-            for role, status in statuses.items():
-                if status in ["accepted", "skipped", "failed_by_ai2", "error_processing", "review_needed"]:
-                    tasks_done += 1
-                    
-        if tasks_done > 0:
-            progress_percent = (tasks_done / total_tasks) * 100
-            log_message(f"[AI1] Progress: {progress_percent:.2f}% ({tasks_done}/{total_tasks} tasks done)")
-            
-        # Оптимізуємо величину затримки між циклами в залежності від наявності активних завдань
-        if len(self.active_tasks) > 0:
-            # Якщо є активні завдання, оновлюємо статуси частіше
-            await asyncio.sleep(config.get("ai1_active_sleep_interval", 10))
+             if "tester" in statuses and statuses["tester"] == "fetch_failed":
+                 log_message(f"[AI1] Retrying fetch for tester task: {file_path}")
+                 statuses["tester"] = "pending"
+                 if file_path not in self.pending_files_to_test and file_path in self.files_to_test:
+                     self.pending_files_to_test.append(file_path)
+
+             if "documenter" in statuses and statuses["documenter"] == "fetch_failed":
+                 log_message(f"[AI1] Retrying fetch for documenter task: {file_path}")
+                 statuses["documenter"] = "pending"
+                 if file_path not in self.pending_files_to_document:
+                     self.pending_files_to_document.append(file_path)
+
+
+        # Перевіряємо прогрес (використовуємо tasks_done_count, розрахований раніше)
+        total_expected_tasks = sum(len(statuses) for statuses in self.task_status.values()) # Загальна кількість статусів
+        if total_expected_tasks > 0:
+             progress_percent = (tasks_done_count / total_expected_tasks) * 100
+             log_message(f"[AI1] Progress: {progress_percent:.2f}% ({tasks_done_count}/{total_expected_tasks} tasks in final state)")
         else:
-            # Якщо немає активних завдань, можемо почекати довше
-            await asyncio.sleep(config.get("ai1_sleep_interval", 15))
+             log_message("[AI1] Progress: No tasks initialized yet.")
+
+
+        # Оптимізуємо величину затримки між циклами
+        # Використовуємо active_task_count, розрахований на початку функції
+        if active_task_count > 0:
+            await asyncio.sleep(config.get("ai1_active_sleep_interval", 5)) # Менша затримка, якщо є активні завдання
+        else:
+            # Якщо немає активних завдань, перевіряємо, чи є завдання в очікуванні
+            has_pending = any(
+                status == "pending"
+                for roles_statuses in self.task_status.values()
+                for status in roles_statuses.values()
+            )
+            if has_pending:
+                 await asyncio.sleep(config.get("ai1_pending_sleep_interval", 10)) # Середня затримка, якщо є що надсилати
+            else:
+                 # Якщо немає ні активних, ні очікуючих (можливо, все завершено або чекаємо на зовнішні події)
+                 await asyncio.sleep(config.get("ai1_idle_sleep_interval", 15)) # Більша затримка
 
     async def create_subtask(
         self, task_text: str, role: str, filename: str, code: Optional[str] = None

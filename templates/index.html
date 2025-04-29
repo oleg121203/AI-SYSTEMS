@@ -94,6 +94,22 @@
           <p>Completed: <span id="completed-tasks">0</span></p>
           <p>Efficiency: <span id="efficiency">0%</span></p>
         </div>
+        <!-- Додано поле для налаштування буфера -->
+        <div class="config-item">
+          <label for="ai1-buffer">Desired Active Buffer:</label>
+          <input
+            type="number"
+            id="ai1-buffer"
+            name="ai1_desired_active_buffer"
+            min="0"
+            value="{{ config.get('ai1_desired_active_buffer', 10) }}"
+          />
+          <button
+            onclick="saveConfigItem('ai1_desired_active_buffer', 'ai1-buffer')"
+          >
+            Save Buffer
+          </button>
+        </div>
         <div class="charts">
           <div class="chart-item"><canvas id="taskChart"></canvas></div>
           <div class="chart-item"><canvas id="progressChart"></canvas></div>

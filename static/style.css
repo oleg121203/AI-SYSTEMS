@@ -12,76 +12,152 @@
   --error-color: #dc3545;
   --font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
   --editor-bg: #ffffff; /* Default editor background */
+  --panel-shadow: 0 4px 8px rgba(0, 0, 0, 0.1); /* Subtle shadow for panels */
+  --button-shadow: 0 2px 4px rgba(0, 0, 0, 0.15); /* Subtle shadow for buttons */
+  --input-bg: #ffffff;
+  --input-border: #ced4da;
+  --input-text: #495057;
 }
 
 /* Dark Theme Base (applied by default or via JS) */
 body[data-theme="dark"] {
-  --bg-color: #1a1a1a;
-  --container-bg: #2c2c2c;
+  --bg-color: #121212; /* Darker background */
+  --container-bg: #1e1e1e; /* Slightly lighter container */
   --text-color: #e0e0e0;
-  --heading-color: #58a6ff; /* Lighter blue for dark mode */
-  --border-color: #444;
-  --primary-color: #58a6ff;
-  --secondary-color: #8b949e;
-  --tertiary-color: #3fb950; /* Greenish for contrast */
-  --success-color: #3fb950;
-  --warning-color: #d29922;
-  --error-color: #f85149;
-  --editor-bg: #1e1e1e; /* Dark editor background */
+  --heading-color: #bb86fc; /* Purple accent */
+  --border-color: #333333; /* More subtle border */
+  --primary-color: #bb86fc;
+  --secondary-color: #a0a0a0; /* Lighter secondary text */
+  --tertiary-color: #03dac6; /* Teal accent */
+  --success-color: #4caf50;
+  --warning-color: #ffeb3b;
+  --error-color: #cf6679; /* Softer red */
+  --editor-bg: #1e1e1e;
+  --panel-shadow: 0 4px 12px rgba(0, 0, 0, 0.3); /* Stronger shadow for dark */
+  --button-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+  --input-bg: #2c2c2c;
+  --input-border: #444444;
+  --input-text: #e0e0e0;
 }
 
 /* Specific Dark Themes - Adjust colors as desired */
 [data-theme="winter"] {
   /* Dark Blue/Winter */
-  --bg-color: #0d1117;
-  --container-bg: #161b22;
-  --text-color: #c9d1d9;
-  --heading-color: #58a6ff;
-  --border-color: #30363d;
-  --primary-color: #58a6ff;
-  --secondary-color: #8b949e;
-  --tertiary-color: #3fb950;
-  --editor-bg: #0d1117;
+  --bg-color: #0a192f; /* Deep blue */
+  --container-bg: #172a45; /* Slightly lighter blue */
+  --text-color: #ccd6f6; /* Light blueish text */
+  --heading-color: #64ffda; /* Aqua accent */
+  --border-color: #233554;
+  --primary-color: #64ffda;
+  --secondary-color: #8892b0;
+  --tertiary-color: #ffab70; /* Orange accent */
+  --success-color: #64ffda;
+  --warning-color: #ffd700;
+  --error-color: #ff79c6; /* Pink accent */
+  --editor-bg: #0a192f;
+  --panel-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  --button-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+  --input-bg: #172a45;
+  --input-border: #233554;
+  --input-text: #ccd6f6;
 }
 
 [data-theme="autumn"] {
   /* Dark Orange/Autumn */
-  --bg-color: #211d1a;
-  --container-bg: #302a27;
-  --text-color: #e6dbcb;
-  --heading-color: #f07f2e;
-  --border-color: #4a403a;
-  --primary-color: #f07f2e;
-  --secondary-color: #c48d6f;
-  --tertiary-color: #d29922;
-  --editor-bg: #211d1a;
+  --bg-color: #2a1d1f; /* Dark reddish brown */
+  --container-bg: #3e2d2f; /* Lighter brown */
+  --text-color: #e6d8d4; /* Off-white text */
+  --heading-color: #ff8c42; /* Bright orange accent */
+  --border-color: #503a3c;
+  --primary-color: #ff8c42;
+  --secondary-color: #c4a89a;
+  --tertiary-color: #a5d6a7; /* Muted green accent */
+  --success-color: #a5d6a7;
+  --warning-color: #fff176; /* Pale yellow */
+  --error-color: #ef9a9a; /* Soft red */
+  --editor-bg: #2a1d1f;
+  --panel-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  --button-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+  --input-bg: #3e2d2f;
+  --input-border: #503a3c;
+  --input-text: #e6d8d4;
+}
+
+/* New Dark Themes */
+
+/* Midnight Theme (Dark Purple) */
+[data-theme="midnight"] {
+  --bg-color: #191724;
+  --container-bg: #26233a;
+  --text-color: #e0def4;
+  --heading-color: #eb6f92; /* Pink accent */
+  --border-color: #403d52;
+  --primary-color: #eb6f92;
+  --secondary-color: #908caa;
+  --tertiary-color: #f6c177; /* Gold accent */
+  --success-color: #31748f; /* Blueish green */
+  --warning-color: #f6c177;
+  --error-color: #eb6f92;
+  --editor-bg: #1f1d2e; /* Slightly different editor bg */
+  --panel-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  --button-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+  --input-bg: #26233a;
+  --input-border: #403d52;
+  --input-text: #e0def4;
+}
+
+/* Forest Theme (Dark Green) */
+[data-theme="forest"] {
+  --bg-color: #1a2a25; /* Dark green */
+  --container-bg: #243b33; /* Lighter green */
+  --text-color: #d8e8e3;
+  --heading-color: #81c784; /* Light green accent */
+  --border-color: #37524a;
+  --primary-color: #81c784;
+  --secondary-color: #a0b8af;
+  --tertiary-color: #ffcc80; /* Light orange accent */
+  --success-color: #a5d6a7;
+  --warning-color: #fff59d;
+  --error-color: #ef9a9a;
+  --editor-bg: #1a2a25;
+  --panel-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  --button-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+  --input-bg: #243b33;
+  --input-border: #37524a;
+  --input-text: #d8e8e3;
 }
 
 /* Keep light themes for variety, but adjust if needed */
 [data-theme="spring"] {
   /* Light Green/Spring */
-  --bg-color: #e0f7fa;
+  --bg-color: #f0fdf4; /* Lighter green background */
   --container-bg: #ffffff;
-  --text-color: #004d40;
-  --heading-color: #00796b;
-  --border-color: #b2dfdb;
-  --primary-color: #26a69a;
-  --secondary-color: #4db6ac;
-  --tertiary-color: #80cbc4;
+  --text-color: #14532d; /* Darker green text */
+  --heading-color: #15803d; /* Stronger green heading */
+  --border-color: #bbf7d0; /* Softer border */
+  --primary-color: #22c55e; /* Vibrant green */
+  --secondary-color: #4ade80;
+  --tertiary-color: #86efac;
   --editor-bg: #ffffff;
+  --input-bg: #f0fdf4;
+  --input-border: #bbf7d0;
+  --input-text: #14532d;
 }
 
 [data-theme="summer"] {
   /* Light Yellow/Summer */
-  --bg-color: #fffde7;
+  --bg-color: #fefce8; /* Lighter yellow */
   --container-bg: #ffffff;
-  --text-color: #7d4200; /* Темніший коричневий замість світлого помаранчевого для кращої контрастності */
-  --heading-color: #e65100; /* Темніший помаранчевий для заголовків */
-  --border-color: #fff59d;
-  --primary-color: #ff8f00; /* Темніший помаранчевий для основного кольору */
-  --secondary-color: #e65100;
-  --tertiary-color: #f57c00;
+  --text-color: #713f12; /* Darker brown text */
+  --heading-color: #d97706; /* Stronger orange heading */
+  --border-color: #fef08a; /* Softer border */
+  --primary-color: #f59e0b; /* Amber */
+  --secondary-color: #fbbf24;
+  --tertiary-color: #fcd34d;
   --editor-bg: #ffffff;
+  --input-bg: #fefce8;
+  --input-border: #fef08a;
+  --input-text: #713f12;
 }
 
 body {
@@ -101,7 +177,7 @@ body {
   background-color: var(--container-bg);
   padding: 10px 20px;
   border-bottom: 1px solid var(--border-color);
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  box-shadow: var(--panel-shadow); /* Apply theme shadow */
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -128,10 +204,12 @@ body {
   border-radius: 4px;
   transition: background-color 0.3s ease;
   font-size: 0.9em;
+  box-shadow: var(--button-shadow); /* Apply theme shadow */
 }
 
 .theme-switcher button:hover {
   opacity: 0.9;
+  transform: translateY(-1px); /* Slight lift on hover */
 }
 
 .container {
@@ -153,10 +231,11 @@ body {
   padding: 15px;
   border-radius: 8px;
   border: 1px solid var(--border-color);
-  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.05);
+  box-shadow: var(--panel-shadow); /* Apply theme shadow */
   display: flex;
   flex-direction: column; /* Stack elements vertically */
   overflow: hidden; /* Prevent content overflow */
+  transition: box-shadow 0.3s ease; /* Smooth shadow transition */
 }
 
 .panel h2 {
@@ -202,10 +281,12 @@ body {
   cursor: pointer;
   transition: background-color 0.3s ease;
   font-size: 0.9em;
+  box-shadow: var(--button-shadow); /* Apply theme shadow */
 }
 
 .control-buttons button:hover {
   opacity: 0.9;
+  transform: translateY(-1px); /* Slight lift on hover */
 }
 
 .control-buttons button.on {
@@ -215,33 +296,63 @@ body {
   background-color: var(--error-color);
 }
 
-.prompt-editor textarea {
-  width: calc(100% - 20px); /* Adjust for padding */
-  height: 60px; /* Smaller default height */
+.prompt-editor textarea,
+.config-item input[type="number"] /* Target the buffer input */ {
+  width: calc(100% - 22px); /* Adjust for padding and border */
   margin-bottom: 10px;
   padding: 10px;
-  background: var(--bg-color);
-  border: 1px solid var(--border-color);
+  background: var(--input-bg); /* Use theme variable */
+  border: 1px solid var(--input-border); /* Use theme variable */
   border-radius: 4px;
   resize: vertical;
-  color: var(--text-color);
+  color: var(--input-text); /* Use theme variable */
   font-size: 0.9em;
   font-family: monospace;
+  transition: background-color 0.3s ease, border-color 0.3s ease,
+    color 0.3s ease;
 }
 
-.prompt-editor button {
+.prompt-editor textarea {
+  height: 60px; /* Specific height for prompt textareas */
+}
+
+.config-item input[type="number"] {
+  /* Specific styles for number inputs if needed, e.g., width */
+  width: 60px; /* Smaller width for number input */
+  margin-right: 5px;
+}
+
+.prompt-editor button,
+.config-item button /* Target the buffer save button */ {
   padding: 8px 15px;
   background: var(--success-color);
   color: white;
   border: none;
   border-radius: 4px;
   cursor: pointer;
-  transition: background-color 0.3s ease;
+  transition: background-color 0.3s ease, transform 0.2s ease;
   font-size: 0.9em;
   align-self: flex-start; /* Align button left */
+  box-shadow: var(--button-shadow); /* Apply theme shadow */
 }
-.prompt-editor button:hover {
+.prompt-editor button:hover,
+.config-item button:hover {
   opacity: 0.9;
+  transform: translateY(-1px); /* Slight lift on hover */
+}
+
+/* Style for the config item container */
+.config-item {
+  display: flex;
+  align-items: center;
+  margin-bottom: 15px; /* Add some spacing */
+  flex-wrap: wrap; /* Allow wrapping if needed */
+}
+
+.config-item label {
+  margin-right: 10px;
+  font-weight: bold;
+  color: var(--secondary-color);
 }
 
 /* Monitoring Panel */

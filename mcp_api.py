@@ -829,6 +829,50 @@ async def update_config(data: dict):
         return {"status": "no changes detected"}
 
 
+# Новий ендпоінт для оновлення окремого елемента конфігурації
+@app.post("/update_config_item")
+async def update_config_item(data: dict):
+    """Updates a single configuration item and saves the config file."""
+    if not data or len(data) != 1:
+        raise HTTPException(status_code=400, detail="Request must contain exactly one key-value pair.")
+
+    key = list(data.keys())[0]
+    value = data[key]
+
+    # Перевірка, чи ключ існує (можна додати більш глибоку перевірку)
+    # Наприклад, перевірити, чи ключ є в певній секції конфігурації
+    # if key not in config: # Проста перевірка наявності ключа верхнього рівня
+    #     raise HTTPException(status_code=400, detail=f"Invalid configuration key: {key}")
+
+    # Оновлюємо значення, якщо воно змінилося
+    # Використовуємо get для безпечного доступу, якщо ключ може бути вкладеним (потрібна складніша логіка для вкладеності)
+    current_value = config.get(key)
+    if current_value != value:
+        config[key] = value
+        logger.info(f"Configuration item '{key}' updated to: {value}")
+        try:
+            with open("config.json", "w", encoding="utf-8") as f:
+                json.dump(config, f, indent=4, ensure_ascii=False)
+            logger.info(f"Configuration file updated successfully after changing '{key}'.")
+            # Повідомлення клієнтам про зміну конфігурації (якщо потрібно)
+            # await broadcast_specific_update({"config_update": {key: value}})
+            return {"status": f"'{key}' updated successfully"}
+        except Exception as e:
+            logger.error(f"Failed to write updated config.json after changing '{key}': {e}")
+            # Відновлюємо попереднє значення в пам'яті, якщо запис не вдався
+            if current_value is not None:
+                config[key] = current_value
+            else:
+                # Якщо ключа раніше не було, видаляємо його
+                config.pop(key, None)
+            raise HTTPException(
+                status_code=500, detail=f"Failed to save updated configuration file for '{key}'."
+            )
+    else:
+        logger.info(f"Configuration item '{key}' already has the value '{value}'. No change.")
+        return {"status": "no change detected"}
+
+
 @app.post("/start_ai1")
 async def start_ai1():
     ai_status["ai1"] = True

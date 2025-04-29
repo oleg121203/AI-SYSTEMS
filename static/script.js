@@ -1279,6 +1279,41 @@ async function saveConfig() {
   }
 }
 
+// Функція для збереження окремого елемента конфігурації
+async function saveConfigItem(key, elementId) {
+  const element = document.getElementById(elementId);
+  if (!element) {
+    showNotification(
+      `Error: Element with ID '${elementId}' not found.`,
+      "error"
+    );
+    return;
+  }
+
+  let value;
+  if (element.type === "number") {
+    value = parseFloat(element.value);
+    if (isNaN(value)) {
+      showNotification(`Error: Invalid number format for ${key}.`, "error");
+      return;
+    }
+  } else {
+    value = element.value;
+  }
+
+  const data = { [key]: value };
+
+  console.log(`Saving config item: ${key} = ${value}`);
+
+  try {
+    // Використовуємо новий ендпоінт
+    await sendRequest("/update_config_item", "POST", data);
+    showNotification(`${key} saved successfully`, "success");
+  } catch (error) {
+    showNotification(`Failed to save ${key}`, "error");
+  }
+}
+
 async function clearRepo() {
   if (
     confirm(
