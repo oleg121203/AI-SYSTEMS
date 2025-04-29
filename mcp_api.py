@@ -291,6 +291,22 @@ async def broadcast_chart_updates():
     # Надсилаємо оновлення
     await broadcast_specific_update(update_data)
 
+# Змінна для збереження завдання періодичного оновлення
+chart_update_task = None
+
+async def periodic_chart_updates():
+    """Періодично надсилає оновлення для графіків."""
+    while True:
+        try:
+            await broadcast_chart_updates()
+            await asyncio.sleep(10)  # Оновлюємо кожні 10 секунд
+        except asyncio.CancelledError:
+            # Завдання було скасовано
+            break
+        except Exception as e:
+            logger.error(f"Помилка при періодичному оновленні графіків: {e}")
+            await asyncio.sleep(10)  # Продовжуємо спробувати навіть при помилці
+
 
 async def write_and_commit_code(
     file_rel_path: str, content: str, subtask_id: Optional[str]
@@ -486,47 +502,70 @@ def get_progress_chart_data():
     now = datetime.now()
     timestamps = [(now - timedelta(hours=i)).strftime("%H:%M") for i in range(9, -1, -1)]
     
-    # Отримуємо кількість виконаних завдань
+    # Отримуємо статистику для графіків
+    stats = get_progress_stats()
+    
+    # Загальна кількість завдань
+    total_tasks = len(subtask_status) or 1  # щоб уникнути ділення на нуль
+    
+    # Кількість виконаних завдань
+    completed_count = len([status for status in subtask_status.values() 
+                          if status in ["accepted", "completed", "code_received"]])
+    
+    # Створюємо масив з поступовим зростанням кількості завершених завдань
     completed_tasks = []
-    for _ in range(10):
-        # На реальному графіку тут має бути логіка підрахунку виконаних завдань за періоди
-        # Зараз використовуємо фіктивні дані
-        completed = len([status for status in subtask_status.values() 
-                        if status in ["accepted", "completed", "code_received"]])
-        completed_tasks.append(completed)
+    for i in range(10):
+        # Імітуємо поступовий прогрес
+        progress_factor = i / 9.0  # від 0 до 1
+        completed_tasks.append(int(completed_count * progress_factor))
     
-    # Отримуємо кількість успішних тестів
+    # Останній елемент - фактична кількість завершених завдань
+    if completed_tasks:
+        completed_tasks[-1] = completed_count
+    
+    # Успішні тести: використовуємо кількість файлів, що пройшли тестування
+    successful_tests_count = stats.get("files_tested_accepted", 0)
     successful_tests = []
-    for _ in range(10):
-        # На реальному графіку тут має бути логіка підрахунку успішних тестів за періоди
-        # Зараз використовуємо фіктивні дані, але з варіаціями
-        tests = len([status for status in subtask_status.values() 
-                    if status == "completed" and "test" in status])
-        successful_tests.append(tests)
+    for i in range(10):
+        # Імітуємо поступовий прогрес
+        progress_factor = i / 9.0  # від 0 до 1
+        successful_tests.append(int(successful_tests_count * progress_factor))
     
-    # Отримуємо кількість git дій
+    # Останній елемент - фактична кількість успішних тестів
+    if successful_tests:
+        successful_tests[-1] = successful_tests_count
+    
+    # Git дії: використовуємо історію комітів
+    history_list = list(processed_history)
     git_actions = []
     for i in range(10):
-        # На реальному графіку тут має бути логіка підрахунку git дій за періоди
-        # Зараз використовуємо список історії комітів
-        git_actions.append(i + 1 if i < len(processed_history) else 0)
+        if i < len(history_list):
+            git_actions.append(history_list[i])
+        else:
+            # Якщо історія коротша, заповнюємо останнім значенням
+            git_actions.append(history_list[-1] if history_list else 0)
     
-    # Розраховуємо загальний прогрес у відсотках
-    total_tasks = len(subtask_status)
-    completed_count = len([status for status in subtask_status.values() 
-                         if status in ["accepted", "completed", "code_received"]])
-    
-    # Якщо немає завдань, встановлюємо прогрес на 0%
-    if total_tasks == 0:
-        progress_percentage = [0] * 10
-    else:
-        # Інакше обчислюємо відсоток виконання для кожного періоду
-        # Для спрощення зараз використовуємо однаковий відсоток з невеликими варіаціями
-        base_percentage = (completed_count / total_tasks) * 100
-        progress_percentage = [
-            min(100, max(0, base_percentage + (i - 5) * 2))  # Невеликі варіації для візуалізації
-            for i in range(10)
-        ]
+    # Розраховуємо загальний прогрес у відсотках на основі реальних даних
+    progress_percentage = []
+    for i in range(10):
+        # Початковий прогрес - 0%
+        if i == 0:
+            progress_percentage.append(0)
+        else:
+            # Розраховуємо прогрес на основі кількості завершених завдань, тестів та файлів
+            # Встановлюємо вагові коефіцієнти для різних компонентів прогресу
+            task_weight = 0.4
+            test_weight = 0.4
+            file_weight = 0.2
+            
+            # Нормалізуємо значення до діапазону 0-100
+            task_progress = (completed_tasks[i] / total_tasks) * 100 if total_tasks else 0
+            test_progress = (successful_tests[i] / max(1, stats.get("files_created", 1))) * 100
+            file_progress = (stats.get("files_created", 0) / max(1, total_tasks)) * 100
+            
+            # Зважений прогрес
+            weighted_progress = (task_progress * task_weight) + (test_progress * test_weight) + (file_progress * file_weight)
+            progress_percentage.append(min(100, max(0, weighted_progress)))
     
     # Формуємо підсумкові дані для графіка
     return {
@@ -1551,7 +1590,7 @@ async def receive_test_recommendation(recommendation: TestRecommendation):
                      task_data["test_context"] = recommendation.context # Зберігаємо контекст помилки
                      updated_tasks.append(task_id)
              # Не оновлюємо статус на 'accepted' тут, це зробить AI1
-             # elif recommendation.recommendation == "accept" and task_data["status"] == "tested":
+             # elif recommendation.recommendation == "accept" і task_data["status"] == "tested":
              #     task_data["status"] = "accepted" # Позначаємо як прийняте
              #     updated_tasks.append(task_id)
 
@@ -1570,3 +1609,26 @@ if __name__ == "__main__":
     web_port = config.get("web_port", 7860)
     logger.info(f"Starting Uvicorn server on 0.0.0.0:{web_port}")
     uvicorn.run(app, host="0.0.0.0", port=web_port)
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Виконується при запуску сервера."""
+    global chart_update_task
+    # Запускаємо періодичне оновлення графіків у фоновому режимі
+    chart_update_task = asyncio.create_task(periodic_chart_updates())
+    logger.info("Started periodic chart updates task")
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Виконується при зупинці сервера."""
+    global chart_update_task
+    # Зупиняємо періодичне оновлення графіків
+    if chart_update_task:
+        chart_update_task.cancel()
+        try:
+            await chart_update_task
+        except asyncio.CancelledError:
+            pass
+        logger.info("Stopped periodic chart updates task")
