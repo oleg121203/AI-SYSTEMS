@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import git
 import json
 import logging
 import os
@@ -298,9 +299,18 @@ class AI2:
         system_prompt = self.prompts[1].format(filename=filename)
         user_prompt = f"Code for file '{filename}':\n```\n{code}\n```\n\nPlease generate unit tests for this code."
         await apply_request_delay("ai2", self.role)
-        return await self._generate_with_fallback(
+        test_content = await self._generate_with_fallback(
             system_prompt=system_prompt, user_prompt=user_prompt
         )
+        
+        # Якщо тести згенеровані успішно, комітимо їх в Git
+        if test_content and not test_content.startswith("Ошибка генерации"):
+            if await self.commit_tests_to_git(filename, test_content):
+                return test_content
+            else:
+                return f"Ошибка генерации: Не удалось сохранить тесты в Git для {filename}"
+        
+        return test_content
 
     async def generate_docs(self, code: str, filename: str) -> str:
         """Генерация документации для кода."""
@@ -311,6 +321,41 @@ class AI2:
         return await self._generate_with_fallback(
             system_prompt=system_prompt, user_prompt=user_prompt
         )
+
+    async def commit_tests_to_git(self, filename: str, test_content: str) -> bool:
+        """Комітить згенеровані тести в Git репозиторій."""
+        try:
+            # Конвертуємо шлях файлу в шлях тесту
+            test_filename = filename.replace(".py", "_test.py")
+            if not test_filename.startswith("tests/"):
+                test_filename = f"tests/{test_filename}"
+            
+            repo_path = os.path.join(os.getcwd(), "repo")
+            test_filepath = os.path.join(repo_path, test_filename)
+            
+            # Створюємо директорію для тестів, якщо її немає
+            os.makedirs(os.path.dirname(test_filepath), exist_ok=True)
+            
+            # Записуємо тести у файл
+            with open(test_filepath, "w") as f:
+                f.write(test_content)
+            
+            # Ініціалізуємо Git репозиторій
+            repo = git.Repo(repo_path)
+            
+            # Додаємо файл в Git
+            repo.index.add([test_filename])
+            
+            # Створюємо коміт
+            commit_message = f"test: Add tests for {filename}"
+            repo.index.commit(commit_message)
+            
+            logger.info(f"Тести для {filename} успішно додані в Git: {test_filename}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Помилка при коміті тестів для {filename} в Git: {e}")
+            return False
 
     async def process_task(self, task_info: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -355,24 +400,26 @@ class AI2:
                 report["type"] = "code"
                 if not task_description:
                     error_message = "Отсутствует описание задачи для роли executor"
-                    logger.error(
-                        f"Отсутствует описание задачи для executor: {task_info}"
-                    )
+                    logger.error(f"Отсутствует описание задачи для executor: {task_info}")
                 else:
-                    generated_content = await self.generate_code(
-                        task_description, filename
-                    )
+                    generated_content = await self.generate_code(task_description, filename)
+                    
             elif role == "tester":
                 report["type"] = "test_result"
                 if code_content is None:
                     error_message = "Отсутствует код для роли tester"
                     logger.error(f"Отсутствует код для tester: {task_info}")
                 else:
-                    generated_content = await self.generate_tests(
-                        code_content, filename
-                    )
-                    report["metrics"] = {"tests_passed": 0.0, "coverage": 0.0}
-                    report["message"] = "Тесты сгенерированы (запуск не реализован)"
+                    # Generate and commit tests
+                    generated_content = await self.generate_tests(code_content, filename)
+                    if generated_content and not generated_content.startswith("Ошибка генерации"):
+                        # Успішно згенерували і закомітили тести
+                        report["content"] = generated_content
+                        report["message"] = f"Тести для {filename} успішно згенеровані і закомічені в Git"
+                        report["status"] = "tests_committed"
+                    else:
+                        error_message = f"Помилка генерації тестів для {filename}: {generated_content}"
+                        
             elif role == "documenter":
                 report["type"] = "code"
                 if code_content is None:
@@ -380,6 +427,7 @@ class AI2:
                     logger.error(f"Отсутствует код для documenter: {task_info}")
                 else:
                     generated_content = await self.generate_docs(code_content, filename)
+                    
             else:
                 error_message = f"Неизвестная роль: {role}"
                 logger.error(f"Неизвестная роль: {role}")
@@ -392,9 +440,6 @@ class AI2:
 
             if generated_content is not None:
                 report["content"] = generated_content
-                if role != "tester":
-                    report.pop("metrics", None)
-                    report.pop("message", None)
 
         except Exception as e:
             logger.exception(
@@ -431,7 +476,6 @@ class AI2:
             }
 
         log_message(json.dumps(log_message_data))
-
         return report
 
     async def fetch_task(self) -> Optional[Dict[str, Any]]:
