@@ -225,26 +225,21 @@ async def broadcast_status():
 async def broadcast_specific_update(update_data: dict):
     """Broadcasts a specific update to all clients."""
     if active_connections:
-        message = {"type": "specific_update", **update_data}
+        message = json.dumps(update_data)
+        # Iterate over a copy of the set to allow modification during iteration
         disconnected_clients = set()
         for connection in list(active_connections):
             try:
-                await connection.send_json(message)
-            except WebSocketDisconnect:
+                await connection.send_text(message)
+            except (WebSocketDisconnect, RuntimeError) as e: # Catch specific errors related to closed connections
+                logger.warning(f"Failed to send specific update to client {connection.client}: {e}. Removing connection.")
                 disconnected_clients.add(connection)
-            except RuntimeError as e:
-                # Обробка помилки "Cannot call "send" once a close message has been sent"
-                if "once a close message has been sent" in str(e):
-                    logger.warning(f"Connection already closing: {e}. Removing from active connections.")
-                    disconnected_clients.add(connection)
-                else:
-                    logger.error(f"RuntimeError sending update to {connection.client}: {e}")
-                    disconnected_clients.add(connection)
-            except Exception as e:
-                logger.error(f"Error sending specific update to {connection.client}: {e}")
+            except Exception as e: # Catch other potential send errors
+                logger.error(f"Unexpected error sending specific update to client {connection.client}: {e}. Removing connection.")
                 disconnected_clients.add(connection)
-        for client in disconnected_clients:
-            active_connections.discard(client)
+
+        # Remove disconnected clients from the main set
+        active_connections.difference_update(disconnected_clients)
 
 
 async def write_and_commit_code(
@@ -992,16 +987,17 @@ async def broadcast_full_status():
         # --- Aggregation for Pie Chart ---
         status_counts = {"pending": 0, "processing": 0, "completed": 0, "failed": 0, "other": 0}
         for status in subtask_status.values():
-            if status in ["accepted", "completed", "code_received", "tested"]:  # Consider these completed
-                status_counts["completed"] += 1
+            # Use a more comprehensive set of completed/final statuses
+            if status in ["accepted", "completed", "code_received", "tested", "skipped", "failed_by_ai2", "error_processing", "review_needed", "failed_tests", "failed_to_send"]:
+                status_counts["completed"] += 1 # Group all final states for simplicity here, adjust if needed
             elif status == "pending":
                 status_counts["pending"] += 1
-            elif status == "processing":
+            elif status in ["sending", "sent", "processing"]: # Explicitly list processing states
                 status_counts["processing"] += 1
-            elif "Ошибка" in status or "failed" in status:  # Check for error strings
-                status_counts["failed"] += 1
+            # elif "Ошибка" in status or "failed" in status: # This might double-count some final states
+            #     status_counts["failed"] += 1 # Consider removing if covered by 'completed' grouping
             else:
-                status_counts["other"] += 1
+                status_counts["other"] += 1 # Catch-all for unknown/transient states
         # --- End Aggregation ---
 
         state_data = {
@@ -1011,11 +1007,11 @@ async def broadcast_full_status():
                 "executor": [
                     {
                         "id": t["id"],
-                        "filename": t.get("filename", "N/A"),  # Add filename for summary
+                        "filename": t.get("filename", "N/A"),
                         "text": t["text"],
                         "status": subtask_status.get(t["id"], "unknown"),
                     }
-                    for t in list(executor_queue._queue)  # Convert deque to list for iteration
+                    for t in list(executor_queue._queue)
                 ],
                 "tester": [
                     {
@@ -1038,70 +1034,57 @@ async def broadcast_full_status():
             },
             "subtasks": subtask_status,
             "structure": current_structure,
-            "processed_over_time": list(processed_history),
-            "task_status_distribution": status_counts  # Add aggregated data
+            "ai3_report": ai3_report,
+            "processed_history": list(processed_history),
+            "collaboration_requests": collaboration_requests,
+            "status_counts": status_counts, # Include aggregated counts
+            "config": { # Send relevant config parts
+                 "ai1_max_concurrent_tasks": config.get("ai1_max_concurrent_tasks"),
+                 "ai1_desired_active_buffer": config.get("ai1_desired_active_buffer"),
+                 # Add other config values if needed by the UI
+            }
         }
-        
-        # Iterate over a copy of the set to avoid RuntimeError
+        message = json.dumps(state_data)
         disconnected_clients = set()
         for connection in list(active_connections):
             try:
-                await connection.send_json(state_data)
-            except WebSocketDisconnect:
-                logger.info(
-                    f"Client {connection.client} disconnected during broadcast."
-                )
+                await connection.send_text(message)
+            except (WebSocketDisconnect, RuntimeError) as e: # Catch specific errors related to closed connections
+                logger.warning(f"Failed to send full status to client {connection.client}: {e}. Removing connection.")
                 disconnected_clients.add(connection)
-            except RuntimeError as e:
-                # Обробка помилки "Cannot call "send" once a close message has been sent"
-                if "once a close message has been sent" in str(e):
-                    logger.warning(f"Connection already closing: {e}. Removing from active connections.")
-                    disconnected_clients.add(connection)
-                else:
-                    logger.error(f"RuntimeError sending status to {connection.client}: {e}")
-                    disconnected_clients.add(connection)
-            except Exception as e:
-                logger.error(f"Error sending status to {connection.client}: {e}")
+            except Exception as e: # Catch other potential send errors
+                logger.error(f"Unexpected error sending full status to client {connection.client}: {e}. Removing connection.")
                 disconnected_clients.add(connection)
-                
-        # Видаляємо від'єднані клієнти після закінчення циклу
-        for client in disconnected_clients:
-            active_connections.discard(client)
+
+        # Remove disconnected clients from the main set
+        active_connections.difference_update(disconnected_clients)
 
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     active_connections.add(websocket)
-    logger.info(
-        f"WebSocket connection opened from {websocket.client}. Total: {len(active_connections)}"
-    )
+    logger.info(f"WebSocket connection established from {websocket.client}. Total: {len(active_connections)}")
     try:
-        await broadcast_full_status()  # Send initial full status
+        # Send initial full status upon connection
+        await broadcast_full_status() # Send current state immediately
 
         while True:
-            await asyncio.sleep(30)
-            try:
-                await websocket.send_json({"type": "ping"})
-            except WebSocketDisconnect:
-                logger.info(
-                    f"WebSocket ping failed, client {websocket.client} likely disconnected."
-                )
-                break
-            except Exception as e:
-                logger.error(
-                    f"Error sending ping to {websocket.client}: {e}"
-                )  # Log ping errors
+            # Wait for a message or disconnection
+            # Using receive_text helps detect disconnections promptly
+            data = await websocket.receive_text()
+            logger.debug(f"Received message from {websocket.client}: {data}")
+            # Handle client messages if needed, e.g., manual ping/pong or commands
 
     except WebSocketDisconnect:
-        logger.info(f"WebSocket disconnected by client {websocket.client}")
+        logger.info(f"WebSocket connection closed for {websocket.client}")
     except Exception as e:
-        logger.error(f"WebSocket error for {websocket.client}: {e}", exc_info=True)
+        # Log other exceptions that might occur in the loop
+        logger.error(f"WebSocket error for {websocket.client}: {e}")
     finally:
-        active_connections.discard(websocket)
-        logger.info(
-            f"WebSocket connection closed for {websocket.client}. Total: {len(active_connections)}"
-        )
+        # Ensure the connection is removed from the set
+        active_connections.discard(websocket) # Use discard to avoid KeyError if already removed
+        logger.info(f"WebSocket connection removed for {websocket.client}. Remaining: {len(active_connections)}")
 
 
 @app.get("/health")
