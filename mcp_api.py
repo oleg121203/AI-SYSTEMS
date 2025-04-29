@@ -3,7 +3,7 @@ import json
 import logging
 import os
 import subprocess
-from collections import deque
+from collections import deque, Counter
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Union
@@ -150,6 +150,9 @@ active_connections: Set[WebSocket] = set()
 # Добавим блокировку для предотвращения гонок при записи файлов/коммитах
 file_write_lock = asyncio.Lock()
 
+# Глобальний словник для зберігання завдань та їх статусів
+tasks = {}
+
 
 # --- Helper Functions ---
 def is_safe_path(basedir, path_str):
@@ -279,8 +282,13 @@ async def write_and_commit_code(
                         # Обновляем историю после успешного коммита
                         processed_tasks_count += 1
                         processed_history.append(processed_tasks_count)
-                        # Отправляем обновление истории коммитов
-                        await broadcast_specific_update({"processed_over_time": list(processed_history)})
+                        # Отправляем обновление истории коммитов в формате для графика
+                        history_list = list(processed_history)
+                        git_activity_data = {
+                            "labels": [f"Commit {i+1}" for i in range(len(history_list))],
+                            "values": history_list
+                        }
+                        await broadcast_specific_update({"git_activity": git_activity_data}) # Use git_activity key
                     else:
                         logger.info(
                             f"[API-Git] No changes staged for commit for: {file_rel_path}"
@@ -369,6 +377,53 @@ if os.path.exists(repo_path):
 else:
     logger.warning(f"Repository path {repo_path} does not exist, structure will be empty")
     current_structure = {}
+
+
+# --- Нова функція для розрахунку статистики ---
+def get_progress_stats():
+    """Розраховує статистику прогресу проекту."""
+    stats = {
+        "tasks_completed": 0,
+        "files_created": 0, # Файли, для яких executor завершив роботу
+        "files_tested_accepted": 0, # Файли, що пройшли тестування (accepted)
+        "files_rejected": 0 # Файли, відправлені на доопрацювання (needs_rework)
+    }
+    created_files = set()
+    accepted_files = set()
+    rejected_files = set()
+
+    for task_id, task_data in tasks.items():
+        # Рахуємо завершені завдання (незалежно від типу)
+        if task_data.get("status") in ["accepted", "code_generated", "tested", "documented", "skipped", "error"]: # Вважаємо всі кінцеві статуси завершеними
+             stats["tasks_completed"] += 1
+
+        # Рахуємо створені файли (після роботи executor)
+        if task_data.get("role") == "executor" and task_data.get("status") in ["code_generated", "tested", "documented", "accepted", "needs_rework", "error"]:
+             if task_data.get("file"):
+                 created_files.add(task_data["file"])
+
+        # Рахуємо прийняті файли (після тестування)
+        if task_data.get("status") == "accepted":
+            if task_data.get("file"):
+                accepted_files.add(task_data["file"])
+                # Якщо файл прийнято, видаляємо його з відхилених (якщо він там був)
+                if task_data["file"] in rejected_files:
+                    rejected_files.remove(task_data["file"])
+
+
+        # Рахуємо відхилені файли
+        if task_data.get("status") == "needs_rework":
+            if task_data.get("file"):
+                 # Додаємо до відхилених, тільки якщо він ще не був прийнятий пізніше
+                 if task_data["file"] not in accepted_files:
+                     rejected_files.add(task_data["file"])
+
+
+    stats["files_created"] = len(created_files)
+    stats["files_tested_accepted"] = len(accepted_files)
+    stats["files_rejected"] = len(rejected_files) # Тільки ті, що зараз потребують доопрацювання
+
+    return stats
 
 
 # --- API Endpoints ---
@@ -1000,6 +1055,13 @@ async def broadcast_full_status():
                 status_counts["other"] += 1 # Catch-all for unknown/transient states
         # --- End Aggregation ---
 
+        # Prepare git activity data
+        history_list = list(processed_history)
+        git_activity_data = {
+            "labels": [f"Commit {i+1}" for i in range(len(history_list))],
+            "values": history_list
+        }
+
         state_data = {
             "type": "full_status_update",
             "ai_status": ai_status,
@@ -1035,7 +1097,8 @@ async def broadcast_full_status():
             "subtasks": subtask_status,
             "structure": current_structure,
             "ai3_report": ai3_report,
-            "processed_history": list(processed_history),
+            # "processed_history": history_list, # Keep original if needed elsewhere, but add formatted one
+            "git_activity": git_activity_data, # Add formatted data for the chart
             "collaboration_requests": collaboration_requests,
             "status_counts": status_counts, # Include aggregated counts
             "config": { # Send relevant config parts
@@ -1188,6 +1251,103 @@ async def request_error_fix(data: dict):
     except Exception as e:
         logger.error(f"Failed to create error fix task: {e}")
         return {"success": False, "error": str(e)}
+
+
+# --- Оновлення ендпоінту звіту для фіксації статусів ---
+@app.post("/report")
+async def receive_report(report: Report):
+    """Отримує звіт від AI2 воркерів."""
+    task_id = report.task_id
+    log_message(f"Received report for task {task_id}: Status {report.status}, Type: {report.report_type}")
+
+    if task_id in tasks:
+        tasks[task_id]["status"] = report.status
+        tasks[task_id]["report_content"] = report.content # Зберігаємо вміст звіту
+        tasks[task_id]["report_timestamp"] = datetime.now().isoformat()
+
+        # ... (існуюча логіка запису файлу та коміту) ...
+        if report.report_type == "code" and report.content:
+             # ... (код запису файлу) ...
+             file_path_in_repo = os.path.join("repo", tasks[task_id]["file"])
+             os.makedirs(os.path.dirname(file_path_in_repo), exist_ok=True)
+             try:
+                 async with aiofiles.open(file_path_in_repo, "w", encoding="utf-8") as f:
+                     await f.write(report.content)
+                 log_message(f"Successfully wrote code to {file_path_in_repo}")
+
+                 # --- Git Commit ---
+                 try:
+                     repo_instance = git.Repo(repo_path)
+                     repo_instance.git.add(file_path_in_repo)
+                     # Перевірка наявності змін перед комітом
+                     if repo_instance.is_dirty(path=file_path_in_repo):
+                         commit_message = f"AI2-{tasks[task_id]['role']}: Update {tasks[task_id]['file']}"
+                         repo_instance.index.commit(commit_message)
+                         log_message(f"Committed changes for {file_path_in_repo}")
+                     else:
+                          log_message(f"No changes detected in {file_path_in_repo, skipping commit.")
+
+                 except Exception as e:
+                     log_message(f"Git operation failed for {file_path_in_repo}: {e}", level="error")
+                 # --- End Git Commit ---
+
+                 # Оновлюємо статус на "code_generated" після успішного запису
+                 tasks[task_id]["status"] = "code_generated"
+
+                 # Автоматично створюємо завдання для тестувальника та документатора
+                 await create_follow_up_tasks(task_id)
+
+             except Exception as e:
+                 log_message(f"Error writing file {file_path_in_repo}: {e}", level="error")
+                 tasks[task_id]["status"] = "error" # Позначаємо помилку запису
+        elif report.report_type == "test_results":
+             # Якщо це результати тестування від AI2-tester
+             tasks[task_id]["status"] = "tested" # Позначаємо, що тестування завершено (результат буде оброблено AI1)
+        elif report.report_type == "documentation":
+             tasks[task_id]["status"] = "documented"
+        elif report.status == "error":
+             tasks[task_id]["status"] = "error" # Якщо воркер сам повідомив про помилку
+
+        await broadcast_update(f"Task {task_id} ({tasks[task_id]['file']}) updated: {tasks[task_id]['status']}", update_type="task_update")
+        return {"message": "Report received"}
+    else:
+        log_message(f"Received report for unknown task ID: {task_id}", level="warning")
+        raise HTTPException(status_code=404, detail="Task not found")
+
+
+# --- Оновлення ендпоінту рекомендацій тестування ---
+@app.post("/test_recommendation")
+async def receive_test_recommendation(recommendation: TestRecommendation):
+    """Отримує рекомендацію від AI3 щодо результатів тестування."""
+    log_message(f"Received test recommendation: {recommendation.recommendation}, Context: {recommendation.context}")
+
+    failed_files = recommendation.context.get("failed_files", [])
+    updated_tasks = []
+
+    # Знаходимо завдання, пов'язані з файлами, що не пройшли тест/лінтинг
+    for task_id, task_data in tasks.items():
+        # Перевіряємо, чи файл завдання є серед тих, що не пройшли перевірку
+        # Або якщо рекомендація 'rework' і немає конкретних файлів (загальна помилка workflow)
+        if task_data.get("file") in failed_files or (recommendation.recommendation == "rework" and not failed_files):
+             if recommendation.recommendation == "rework":
+                 # Перевіряємо, чи статус вже не 'needs_rework', щоб уникнути зациклення
+                 if task_data["status"] != "needs_rework":
+                     task_data["status"] = "needs_rework"
+                     task_data["test_context"] = recommendation.context # Зберігаємо контекст помилки
+                     updated_tasks.append(task_id)
+             # Не оновлюємо статус на 'accepted' тут, це зробить AI1
+             # elif recommendation.recommendation == "accept" and task_data["status"] == "tested":
+             #     task_data["status"] = "accepted" # Позначаємо як прийняте
+             #     updated_tasks.append(task_id)
+
+
+    if updated_tasks:
+        await broadcast_update(f"Test recommendation '{recommendation.recommendation}' applied to tasks: {updated_tasks}", update_type="task_update")
+
+    # Пересилаємо рекомендацію AI1 (якщо потрібно) - припускаємо, що AI1 слухає WebSocket або має інший механізм
+    # Можна додати логіку відправки HTTP-запиту до AI1, якщо потрібно
+
+    return {"message": "Recommendation received and processed"}
 
 
 # --- Main Execution ---

@@ -65,7 +65,7 @@ AI-SYSTEMS — це комплексна система, розроблена д
    * Оновлення статусу транслюється через WebSocket на веб-панель.
 
 5. **Тестування (GitHub Actions -> AI3 -> MCP API -> AI1):**
-   * Коміти, зроблені MCP API (після отримання коду від AI2-executor або тестів від AI2-tester), тригерять GitHub Actions workflow (`.github/workflows/ci.yml`).
+   * Коміти, зроблені MCP API (після отримання коду від AI2-executor або тестів від AI2-tester), тригерять GitHub Actions workflow (`.github/workflows/python-tests.yml`). # Оновлено назву файлу
    * GitHub Actions запускає `pytest` для змінених тестових файлів (або всіх тестів).
    * AI3 моніторить завершені запуски GitHub Actions (`monitor_github_actions`).
    * AI3 аналізує результат (успіх/невдача), визначає пов'язані файли та формує рекомендацію (`accept`/`rework`).

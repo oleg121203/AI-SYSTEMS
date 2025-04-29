@@ -1,0 +1,66 @@
+name: CI Checks # Перейменовано для загальності
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  build-and-test: # Перейменовано для загальності
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          path: main # Checkout основного репозиторію AI-SYSTEMS
+
+      - name: Checkout generated project code
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/AI-SYSTEMS-REPO # Репозиторій згенерованого коду
+          path: repo # Checkout в папку repo
+          token: ${{ secrets.GITHUB_TOKEN }} # Потрібен токен для checkout іншого репо
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install Python dependencies
+        working-directory: main # Вказуємо робочу директорію
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements_async.txt
+
+      - name: Run Python tests
+        working-directory: main # Вказуємо робочу директорію
+        run: |
+          pytest tests/ # Запускаємо тести для системи AI-SYSTEMS
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18" # Використовуємо версію Node.js, доступну в dev container
+
+      - name: Install Linters
+        # Встановлюємо лінтери глобально або в тимчасову папку
+        # Оскільки package.json може не існувати в згенерованому репо
+        run: |
+          npm install -g htmlhint stylelint stylelint-config-standard eslint
+
+      - name: Lint HTML files
+        # Запускаємо лінтер з папки repo
+        working-directory: repo
+        run: htmlhint project/**/*.html || true # Продовжуємо, навіть якщо є помилки лінтингу
+
+      - name: Lint CSS files
+        # Потрібен файл конфігурації для stylelint
+        working-directory: repo
+        run: stylelint "project/**/*.css" --config main/.stylelintrc.json --allow-empty-input || true # Продовжуємо, навіть якщо є помилки
+
+      - name: Lint JavaScript files
+        # Потрібен файл конфігурації для eslint
+        working-directory: repo
+        run: eslint "project/**/*.js" --config main/.eslintrc.json || true # Продовжуємо, навіть якщо є помилки

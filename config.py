@@ -2,6 +2,10 @@ import json
 import logging
 import os
 from typing import Any, Dict, Optional
+from dotenv import load_dotenv # Add this import
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Настройка логирования
 logging.basicConfig(

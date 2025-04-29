@@ -24,7 +24,7 @@
   "ai3_prompt": "Your goal is {target}. During the preparation stage, you propose a file structure... After the structure is agreed upon, you create the necessary directories and files. **ABSOLUTELY CRITICAL: When creating files initially, they MUST be COMPLETELY EMPTY (zero bytes, no content, no comments, no placeholders, no boilerplate). This is non-negotiable.** Then, monitor the log files continuously for AI2 reports (marked as '[AI2] Code for file:'). Extract the content provided by AI2. **BEFORE writing, REMOVE any surrounding markdown code fences (like ```python at the start or ``` at the end) from the extracted content.** Write ONLY the cleaned, raw content provided by AI2 to the corresponding file, overwriting existing content. Do not add or modify anything else. Changes to the structure are possible only in critical moments at AI1's decision.",
   "ai_config": {
     "ai1": {
-      "providers": ["gemini-pro2.5", "groq", "openai"],
+      "providers": ["gemini-pro2.5", "groq", "ollama"],
       "model": "gemini-2.5-pro-preview-03-25",
       "max_tokens": 4096,
       "temperature": 0.7
@@ -32,15 +32,15 @@
     "ai2": {
       "providers": {
         "executor": ["gemini-pro2.5", "openrouter-qwen", "groq", "ollama"],
-        "tester": ["groq", "openai", "gemini"],
-        "documenter": ["groq", "gemini", "openai"]
+        "tester": ["ollama", "groq", "gemini"],
+        "documenter": ["groq", "gemini", "ollama"]
       },
       "max_tokens": 4096,
       "temperature": 0.4
     },
     "ai3": {
-      "providers": ["ollama", "openai", "groq"],
-      "model": "qwen2.5-coder:14b",
+      "providers": ["ollama", "gemini", "groq"],
+      "model": "qwen3",
       "max_tokens": 2048,
       "temperature": 0.7
     }
@@ -49,7 +49,7 @@
     "ollama": {
       "type": "ollama",
       "endpoint": "http://host.docker.internal:11434",
-      "model": "qwen2.5-coder:14b"
+      "model": "qwen3"
     },
     "ollama1": {
       "type": "ollama",
@@ -139,5 +139,7 @@
     }
   },
   "desired_active_buffer": 500,
-  "ai1_desired_active_buffer": 500
+  "ai1_desired_active_buffer": 500,
+  "github_repo": "YOUR_GITHUB_USERNAME/YOUR_REPO_NAME",
+  "github_actions_check_interval": 60
 }

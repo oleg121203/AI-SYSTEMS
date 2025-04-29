@@ -8,7 +8,7 @@ import subprocess
 import time
 from datetime import datetime
 from pathlib import Path
-import shutil  # Added import
+import shutil
 
 import aiohttp
 from git import GitCommandError, Repo
@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)  # Use logger correctly
 config = load_config()
 MCP_API_URL = config.get("mcp_api", "http://localhost:7860")
 REPO_DIR = config.get("repo_dir", "repo")
-LOG_FILE_PATH = "logs/mcp_api.log"  # Змінюємо шлях до лог-файлу MCP API
+LOG_FILE_PATH = "logs/mcp_api.log"
 
 
 def _init_or_open_repo(repo_path: str) -> Repo:
@@ -812,11 +812,11 @@ class AI3:
         log_message("[AI3] Starting GitHub Actions monitoring...")
         
         # Конфігурація GitHub API
-        github_token = config.get("github_token")
-        github_repo = config.get("github_repo")
+        github_token = os.getenv("GITHUB_TOKEN") # Read from env
+        github_repo = os.getenv("GITHUB_REPO_TO_MONITOR") # Read from env
         
         if not github_token or not github_repo:
-            log_message("[AI3] Warning: GitHub token or repo not configured. Cannot monitor GitHub Actions.")
+            log_message("[AI3] Warning: GITHUB_TOKEN or GITHUB_REPO_TO_MONITOR not configured in .env. Cannot monitor GitHub Actions.")
             return
         
         headers = {
@@ -830,7 +830,7 @@ class AI3:
                 await self.create_session()
                 # Отримуємо останні workflow runs
                 async with self.session.get(
-                    f"https://api.github.com/repos/{github_repo}/actions/runs",
+                    f"https://api.github.com/repos/{github_repo}/actions/runs", # Use github_repo variable
                     headers=headers
                 ) as response:
                     if response.status == 200:
@@ -875,68 +875,151 @@ class AI3:
         return True
 
     async def _analyze_workflow_run(self, run_id, run_conclusion, headers):
-        """Аналізує результати виконання workflow та відправляє рекомендації."""
+        """Аналізує результати виконання workflow (pytest + linters) та відправляє рекомендації."""
+        github_repo = os.getenv("GITHUB_REPO_TO_MONITOR")
+        if not github_repo:
+            log_message("[AI3] Warning: GITHUB_REPO_TO_MONITOR not configured in .env. Cannot analyze workflow run.")
+            return
+
+        failed_files = set() # Використовуємо set для уникнення дублікатів
+        linting_errors_found = False
+        pytest_errors_found = False
+        job_logs = ""
+
         try:
             await self.create_session()
-            # Отримуємо деталі запуску, включаючи тести
+            # 1. Отримуємо ID завдання (job) 'build-and-test'
+            job_id = None
             async with self.session.get(
-                f"https://api.github.com/repos/{config.get('github_repo')}/actions/runs/{run_id}/jobs",
+                f"https://api.github.com/repos/{github_repo}/actions/runs/{run_id}/jobs",
                 headers=headers
             ) as response:
-                if response.status != 200:
-                    log_message(f"[AI3] Failed to fetch jobs for run {run_id}: Status {response.status}")
-                    return
-                
-                jobs_data = await response.json()
-                jobs = jobs_data.get("jobs", [])
-                
-                # Аналізуємо тестові завдання
-                all_tests_passed = True
-                failed_files = []
-                
-                for job in jobs:
-                    job_name = job.get("name", "")
-                    job_conclusion = job.get("conclusion", "")
-                    
-                    if "test" in job_name.lower():
-                        log_message(f"[AI3] Found test job: {job_name}, conclusion: {job_conclusion}")
-                        
-                        if job_conclusion != "success":
-                            all_tests_passed = False
-                            
-                            # Отримуємо кроки завдання, щоб знайти, які тести не пройшли
-                            steps = job.get("steps", [])
-                            for step in steps:
-                                step_name = step.get("name", "")
-                                step_conclusion = step.get("conclusion", "")
-                                
-                                if step_conclusion == "failure" and "test" in step_name.lower():
-                                    # Спроба визначити, який файл викликав помилку на основі назви кроку
-                                    # Це може потребувати додаткової логіки залежно від формату кроків
-                                    file_patterns = ["test_", ".test.", "_test"]
-                                    for pattern in file_patterns:
-                                        if pattern in step_name:
-                                            file_parts = step_name.split(pattern)
-                                            if len(file_parts) > 1:
-                                                file_guess = pattern + file_parts[1].split()[0]
-                                                failed_files.append(file_guess)
-                                    
-                                    log_message(f"[AI3] Failed test step: {step_name}")
-                
-                # Формуємо рекомендацію
-                recommendation = "accept" if all_tests_passed else "rework"
-                
-                # Збираємо контекст для рекомендації
-                context = {}
-                if not all_tests_passed:
-                    context["failed_files"] = failed_files
-                    context["run_url"] = f"https://github.com/{config.get('github_repo')}/actions/runs/{run_id}"
-                
-                # Відправляємо рекомендацію в MCP API
-                await self._send_test_recommendation(recommendation, context)
-                
+                if response.status == 200:
+                    jobs_data = await response.json()
+                    for job in jobs_data.get("jobs", []):
+                        if job.get("name") == "build-and-test": # Назва нашого завдання
+                            job_id = job.get("id")
+                            # Перевіряємо загальний висновок завдання, якщо він 'failure'
+                            if job.get("conclusion") == "failure":
+                                # Не обов'язково pytest, може бути помилка встановлення залежностей тощо.
+                                # Позначимо це як можливу помилку pytest для простоти, але логіка парсингу логів важливіша
+                                pytest_errors_found = True
+                                log_message(f"[AI3] Job 'build-and-test' (ID: {job_id}) failed overall.")
+                            break
+                else:
+                    log_message(f"[AI3] Error fetching jobs for run {run_id}: {response.status}")
+                    return # Не можемо продовжити без ID завдання
+
+            if not job_id:
+                log_message(f"[AI3] Could not find job 'build-and-test' for run {run_id}.")
+                # Можливо, workflow ще не запустився або назва завдання інша
+                # Повертаємось, щоб спробувати пізніше
+                return
+
+            # 2. Отримуємо повні логи для завдання
+            async with self.session.get(
+                f"https://api.github.com/repos/{github_repo}/actions/jobs/{job_id}/logs",
+                headers=headers
+            ) as log_response:
+                if log_response.status == 200:
+                    job_logs = await log_response.text()
+                    log_message(f"[AI3] Successfully fetched logs for job {job_id} (run {run_id}). Length: {len(job_logs)} chars.")
+                else:
+                    log_message(f"[AI3] Error fetching logs for job {job_id}: {log_response.status}. Status: {run_conclusion}")
+                    # Якщо логи недоступні, але загальний висновок 'failure', вважаємо, що є помилки
+                    if run_conclusion == "failure":
+                         pytest_errors_found = True # Припускаємо помилку pytest/linting
+
         except Exception as e:
-            log_message(f"[AI3] Error analyzing workflow run {run_id}: {e}")
+            log_message(f"[AI3] Error fetching job details or logs for run {run_id}: {e}")
+            # Якщо сталася помилка при отриманні деталей, але загальний висновок 'failure', вважаємо, що є помилки
+            if run_conclusion == "failure":
+                 pytest_errors_found = True # Припускаємо помилку pytest/linting
+
+        # 3. Парсинг логів (якщо вони є)
+        if job_logs:
+            log_lines = job_logs.splitlines()
+
+            # Патерни для пошуку помилок (можна вдосконалювати)
+            # Pytest: Шукаємо секцію FAILURES або errors
+            pytest_failure_pattern = re.compile(r"=+ FAILURES =+")
+            pytest_error_pattern = re.compile(r"=+ ERRORS =+")
+            pytest_file_pattern = re.compile(r"____ (test_.*\.py) ____") # Знаходить файл тесту з помилкою
+
+            # HTMLHint: Шукає рядки, що починаються з шляху до файлу і містять 'error'
+            htmlhint_error_pattern = re.compile(r"^(repo/project/.*\.html): line \d+, col \d+, (.*) \((.*)\)$", re.IGNORECASE)
+
+            # Stylelint: Шукає рядки з шляхом до файлу, номерами рядка/колонки та назвою правила
+            stylelint_error_pattern = re.compile(r"^(repo/project/.*\.css)\s+(\d+:\d+)\s+([✖️])\s+(.*)$") # ✖️ - символ помилки
+
+            # ESLint: Шукає рядки з шляхом до файлу, номерами рядка/колонки та 'Error'/'Warning'
+            eslint_error_pattern = re.compile(r"^(repo/project/.*\.js)\s+line (\d+), col (\d+),\s+(Error|Warning)\s+-(.*)$")
+
+            in_pytest_failures_section = False
+            in_pytest_errors_section = False
+
+            for line in log_lines:
+                # Pytest parsing
+                if pytest_failure_pattern.search(line):
+                    pytest_errors_found = True
+                    in_pytest_failures_section = True
+                    log_message(f"[AI3] Pytest FAILURES section detected in logs for run {run_id}.")
+                elif pytest_error_pattern.search(line):
+                     pytest_errors_found = True
+                     in_pytest_errors_section = True
+                     log_message(f"[AI3] Pytest ERRORS section detected in logs for run {run_id}.")
+                elif line.strip().startswith("===") and (in_pytest_failures_section or in_pytest_errors_section):
+                    # Кінець секції помилок pytest
+                    in_pytest_failures_section = False
+                    in_pytest_errors_section = False
+                elif in_pytest_failures_section or in_pytest_errors_section:
+                    match = pytest_file_pattern.search(line)
+                    if match:
+                        # Додаємо сам файл тесту, де сталася помилка
+                        failed_files.add(f"tests/{match.group(1)}") # Припускаємо, що тести лежать в tests/
+
+                # HTMLHint parsing
+                html_match = htmlhint_error_pattern.search(line)
+                if html_match:
+                    linting_errors_found = True
+                    file_path = html_match.group(1).replace("repo/", "") # Видаляємо префікс repo/
+                    failed_files.add(file_path)
+                    log_message(f"[AI3] HTMLHint error found in {file_path}: {html_match.group(2)}")
+
+                # Stylelint parsing
+                style_match = stylelint_error_pattern.search(line)
+                if style_match:
+                    linting_errors_found = True
+                    file_path = style_match.group(1).replace("repo/", "") # Видаляємо префікс repo/
+                    failed_files.add(file_path)
+                    log_message(f"[AI3] Stylelint error found in {file_path}: {style_match.group(4)}")
+
+                # ESLint parsing
+                eslint_match = eslint_error_pattern.search(line)
+                if eslint_match:
+                    linting_errors_found = True
+                    file_path = eslint_match.group(1).replace("repo/", "") # Видаляємо префікс repo/
+                    failed_files.add(file_path)
+                    log_message(f"[AI3] ESLint {eslint_match.group(4)} found in {file_path}: {eslint_match.group(5)}")
+
+        # 4. Визначаємо рекомендацію та контекст
+        # Рекомендація 'rework', якщо є помилки pytest АБО помилки лінтингу АБО загальний висновок 'failure'
+        if pytest_errors_found or linting_errors_found or run_conclusion == "failure":
+            recommendation = "rework"
+            log_message(f"[AI3] Recommendation for run {run_id}: rework (Pytest errors: {pytest_errors_found}, Linting errors: {linting_errors_found}, Run conclusion: {run_conclusion})")
+        else:
+            recommendation = "accept"
+            log_message(f"[AI3] Recommendation for run {run_id}: accept")
+
+        context = {}
+        if recommendation == "rework":
+            # Додаємо унікальні імена файлів до контексту
+            context["failed_files"] = list(failed_files)
+            context["run_url"] = f"https://github.com/{github_repo}/actions/runs/{run_id}"
+            context["job_logs_excerpt"] = job_logs[:2000] + "..." if job_logs else "Logs not available." # Додаємо уривок логів
+
+        # 5. Відправляємо рекомендацію в MCP API
+        await self._send_test_recommendation(recommendation, context)
 
     async def _send_test_recommendation(self, recommendation, context=None):
         """Відправляє рекомендацію на основі результатів тестів в MCP API."""

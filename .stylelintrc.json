@@ -1,0 +1,8 @@
+{
+  "extends": "stylelint-config-standard",
+  "rules": {
+    "at-rule-no-unknown": null, // Дозволити @tailwind та інші специфічні правила
+    "selector-class-pattern": null, // Дозволити будь-які імена класів
+    "no-descending-specificity": null // Вимкнути правило специфічності
+  }
+}

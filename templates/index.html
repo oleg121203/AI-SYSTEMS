@@ -1,11 +1,11 @@
 <!DOCTYPE html>
-<html lang="uk" data-theme="dark">
-  <!-- Default to dark theme -->
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>AI Control Dashboard</title>
+    <title>AI-SYSTEMS Dashboard</title>
     <link rel="stylesheet" href="/static/style.css" />
+    <!-- Include Chart.js -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://unpkg.com/monaco-editor@0.34.0/min/vs/loader.js"></script>
     <!-- Font Awesome for icons -->
@@ -15,18 +15,18 @@
     />
   </head>
   <body>
-    <header class="header">
-      <h1>AI Control Dashboard</h1>
-      <div class="theme-switcher">
-        <button onclick="setTheme('spring')" data-theme="spring">Весна</button>
-        <button onclick="setTheme('summer')" data-theme="summer">Літо</button>
-        <button onclick="setTheme('autumn')" data-theme="autumn">Осінь</button>
-        <button onclick="setTheme('winter')" data-theme="winter">Зима</button>
-        <button onclick="setTheme('dark')" data-theme="dark">Темна</button>
-        <!-- Added generic dark -->
-      </div>
-    </header>
+    <h1>AI-SYSTEMS Dashboard</h1>
 
+    <div class="container">
+      <div class="main-content">
+        <!-- Замінюємо старий графік на новий -->
+        <div class="chart-container">
+          <h2>Project Statistics</h2>
+          <canvas id="progressStatsChart"></canvas>
+          <!-- Новий ID для графіка -->
+        </div>
+
+        <div class="task-list">
     <div class="container">
       <!-- Control Panel -->
       <section class="panel control-panel">
@@ -111,11 +111,19 @@
           </button>
         </div>
         <div class="charts">
-          <div class="chart-item"><canvas id="taskChart"></canvas></div>
-          <div class="chart-item"><canvas id="progressChart"></canvas></div>
-          <div class="chart-item"><canvas id="gitChart"></canvas></div>
-          <div class="chart-item"><canvas id="statusPieChart"></canvas></div>
-          <!-- Added Pie Chart Canvas -->
+          <!-- Removed nested chart-container divs -->
+          <div class="chart-item">
+            <canvas id="taskChart"></canvas>
+          </div>
+          <div class="chart-item">
+            <canvas id="progressChart"></canvas>
+          </div>
+          <div class="chart-item">
+            <canvas id="gitChart"></canvas>
+          </div>
+          <div class="chart-item doughnut-container">
+            <canvas id="statusPieChart"></canvas>
+          </div>
         </div>
       </section>
 
