@@ -112,8 +112,8 @@ def _commit_changes(repo: Repo, file_paths: list, message: str):
         logger.error(f"[AI3-Git] Unexpected error during commit: {e}")
 
 
-async def generate_structure() -> Optional[Dict]: # Remove target param, update return type
-    prompt = """ # Remove f-string
+async def generate_structure(target: str) -> Optional[Dict]: # Add target param, update return type
+    prompt = f""" # Use f-string to include target
 Generate a JSON structure for a project with the target: "{target}".
 Respond ONLY with the JSON structure itself, enclosed in triple backticks (```json ... ```).
 The structure should be a valid JSON object representing directories and files. Use null for files.
@@ -518,7 +518,7 @@ class AI3:
 
     async def close_session(self):
         """Закриває aiohttp ClientSession, якщо вона існує."""
-        if self.session and not self.session.closed:
+        if self.session and not self.session.closed: # Fix: 'и' -> 'and'
             await self.session.close()
             self.session = None
             logger.info("[AI3] Closed aiohttp ClientSession.")
@@ -534,8 +534,8 @@ class AI3:
                 logger.error("[AI3] Failed to initialize repository. Aborting structure setup.")
                 return False
                 
-            # Generate structure (target is no longer passed)
-            structure = await generate_structure()
+            # Generate structure (pass target)
+            structure = await generate_structure(self.target) # Pass self.target
             if not structure:
                 logger.error("[AI3] Failed to generate structure. Aborting structure setup.")
                 return False
@@ -712,7 +712,7 @@ class AI3:
                             is_excluded = any(pattern.search(line) for pattern in compiled_exclude_patterns)
                             
                             # Якщо це справжня помилка (і не виключення), додаємо її до списку
-                            if is_error and not is_excluded:
+                            if is_error and not is_excluded: # Fix: '&&' -> 'and'
                                 error_summary.append(f"{log_file.name}: {line.strip()}")
                                 errors_found = True
                                 if len(error_summary) >= 5:  # Limit to 5 errors per check
@@ -815,7 +815,7 @@ class AI3:
         file_path = data.get("filename")  # Або інше поле, що містить шлях
         content = data.get("code")  # Або інше поле, що містить вміст
 
-        if file_path and content is not None:
+        if file_path and content is not None: # Fix: 'і' -> 'and'
             # Переконайтеся, що file_path є відносним шляхом всередині 'repo/'
             if file_path.startswith(os.path.abspath(DEFAULT_REPO_DIR)): # Use constant
                 file_path = os.path.relpath(file_path, DEFAULT_REPO_DIR) # Use constant
@@ -1113,6 +1113,19 @@ class AI3:
         # Патерн шукає CRITICAL/ERROR + ключове слово помилки + шлях до файлу в repo/
         error_pattern = re.compile(r"(CRITICAL|ERROR).*(failed|exception|crash|timeout).*" + re.escape(REPO_PREFIX), re.IGNORECASE)
         # ----------------------------------------------------------
+        # --- CHANGE: Refine exclusion patterns further ---
+        exclude_patterns = [
+            re.compile(r"AI3 -> AI1\\\] Reporting system error"), # Ignore AI3's own reports (less strict start)
+            re.compile(r"AI collaboration request received"), # Ignore MCP receiving reports
+            re.compile(r"fatal: pathspec .*repo/\.gitignore.* did not match any files"), # Ignore specific GitPython error during init (more flexible)
+            re.compile(r"AI3\\\] Detected repo-related critical error"), # Ignore AI3 detecting errors (less strict start)
+            # Existing exclude patterns (ensure they are correct)
+            re.compile(r"\[AI3\] Error requesting error fix task"), # Повідомлення про власні помилки AI3
+            re.compile(r"Active tasks list"), # Список активних завдань
+            re.compile(r"Successfully"), # Успішні операції
+            re.compile(r"Updating status"), # Оновлення статусу
+        ]
+        # --- END CHANGE ---
         processed_errors = set() # Зберігаємо хеші оброблених помилок
         max_errors_per_cycle = self.config.get("max_errors_per_cycle", 2) # Обмеження кількості помилок за цикл
 
@@ -1243,7 +1256,7 @@ class AI3:
                     logger.info(f"[AI3 -> AI1] Queue info sent successfully.") # Simplified log
                     return True
                 else:
-                    logger.error(f"[AI3 -> AI1] Error sending queue info: {response.status} - {await resp.text()}") # Simplified log
+                    logger.error(f"[AI3 -> AI1] Error sending queue info: {response.status} - {await response.text()}") # Fix: resp -> response
                     return False
         except Exception as e:
             logger.error(f"[AI3 -> AI1] Failed to send queue info: {e}") # Simplified log
@@ -1270,7 +1283,19 @@ class AI3:
 async def main():
     config = load_config()
     ai3 = AI3(config)
-    await ai3.run()
+
+    # --- CHANGE: Call setup_structure before run ---
+    logger.info("[AI3] Starting structure setup...")
+    setup_successful = await ai3.setup_structure()
+
+    if setup_successful:
+        logger.info("[AI3] Structure setup completed successfully. Starting background tasks.")
+        await ai3.run()
+    else:
+        logger.error("[AI3] Structure setup failed. AI3 will not start background monitoring tasks.")
+        # Optionally close the session if it was created during setup
+        await ai3.close_session()
+    # --- END CHANGE ---
 
 if __name__ == "__main__":
     # Logger is already configured at the top level using setup_service_logger

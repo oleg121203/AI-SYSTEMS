@@ -777,6 +777,7 @@ function updateCharts(data) {
   // --- Update Chart Data ---
 
   let chartsUpdated = false;
+  const MAX_PROGRESS_POINTS = 20; // Max data points for progress chart
 
   // Update Task Distribution (Bar Chart) - Based on QUEUE data
   if (taskChart && data.queues) {
@@ -800,60 +801,30 @@ function updateCharts(data) {
     }
   }
 
-  // Update Progress Chart (Line Chart) - Based on PROGRESS_DATA
+  // --- CHANGE: Update Progress Chart (Line Chart) - Append new data point ---
   if (progressChart && data.progress_data) {
-    console.log(
-      "[Chart Update] Updating Progress Chart with data:",
-      data.progress_data
-    );
-    if (data.progress_data.labels && data.progress_data.values) {
-      let changed = false;
-
-      // Check labels
-      if (
-        JSON.stringify(progressChart.data.labels) !==
-        JSON.stringify(data.progress_data.labels)
-      ) {
-        progressChart.data.labels = data.progress_data.labels;
-        changed = true;
+    const newDataPoint = data.progress_data;
+    if (newDataPoint && newDataPoint.timestamp) {
+      // Додаємо нові дані до кожного набору даних графіка
+      progressChart.data.labels.push(newDataPoint.timestamp);
+      progressChart.data.datasets[0].data.push(newDataPoint.completed_tasks);
+      progressChart.data.datasets[1].data.push(newDataPoint.successful_tests);
+      progressChart.data.datasets[2].data.push(newDataPoint.git_actions);
+      progressChart.data.datasets[3].data.push(newDataPoint.progress_percentage);
+      
+      // Обмежуємо кількість точок даних
+      if (progressChart.data.labels.length > MAX_PROGRESS_POINTS) {
+        progressChart.data.labels.shift();
+        progressChart.data.datasets.forEach((dataset) => {
+          dataset.data.shift();
+        });
       }
-
-      // Update datasets if they exist in the data
-      const datasetsToUpdate = [
-        { index: 0, key: "completed_tasks" },
-        { index: 1, key: "successful_tests" },
-        { index: 2, key: "git_actions" },
-        { index: 3, key: "values" }, // Overall progress percentage
-      ];
-
-      datasetsToUpdate.forEach((item) => {
-        if (
-          data.progress_data[item.key] &&
-          JSON.stringify(progressChart.data.datasets[item.index].data) !==
-            JSON.stringify(data.progress_data[item.key])
-        ) {
-          progressChart.data.datasets[item.index].data =
-            data.progress_data[item.key];
-          changed = true;
-        }
-      });
-
-      if (changed) {
-        console.log("[Chart Update] Progress Chart data changed.");
-        chartsUpdated = true;
-      }
-    } else {
-      console.warn(
-        "[Chart Update] Progress data received but missing labels or values:",
-        data.progress_data
-      );
+      chartsUpdated = true;
     }
-  } else if (progressChart && data.progress) {
-    // Legacy support
-    // ... existing legacy handling ...
   } else if (progressChart) {
     // console.log("[Chart Update] No progress_data received for Progress Chart.");
   }
+  // --- END CHANGE ---
 
   // Update Git Activity Chart (Line Chart) - Based on GIT_ACTIVITY
   if (gitChart && data.git_activity) {
