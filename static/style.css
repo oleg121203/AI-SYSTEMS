@@ -264,6 +264,9 @@ body {
 /* } */
 .queue-panel {
   grid-column: span 1; /* Adjust span as needed */
+  resize: vertical;
+  overflow: auto;
+  min-height: 200px;
 }
 
 /* ADD styles for the moved log panel */
@@ -565,12 +568,11 @@ body {
   list-style: none;
   padding: 0;
   margin: 0;
-  max-height: 200px; /* ADJUST height as needed for vertical layout */
-  overflow-y: auto;
   border: 1px solid var(--border-color);
   border-radius: 4px;
   padding: 10px;
   background-color: var(--bg-color);
+  flex-shrink: 0;
 }
 
 .queue-item h4 {
@@ -746,6 +748,7 @@ body {
   }
   .queue-item {
     max-height: 180px; /* Adjust height on smaller screens */
+    flex-shrink: 1;
   }
   .theme-switcher {
     width: 100%;
@@ -758,6 +761,10 @@ body {
   }
   #log-content {
     height: 120px; /* Further reduce height on small screens */
+  }
+  .queue-panel {
+    resize: none;
+    min-height: unset;
   }
   /* ... existing responsive styles ... */
 }
