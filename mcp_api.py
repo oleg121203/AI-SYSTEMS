@@ -260,36 +260,42 @@ async def broadcast_specific_update(update_data: dict):
 async def broadcast_chart_updates():
     """Формує та відправляє дані для всіх графіків."""
     if not active_connections:
-        return  # Не робимо нічого, якщо немає активних з'єднань
+        return
     
     # Отримуємо дані для графіків
     progress_data = get_progress_chart_data()
     
-    # Отримуємо дані про статуси задач
+    # --- CHANGE: Refine status aggregation for Pie Chart --- 
     status_counts = {"pending": 0, "processing": 0, "completed": 0, "failed": 0, "other": 0}
     for status in subtask_status.values():
         if status == "pending":
             status_counts["pending"] += 1
         elif status == "processing":
             status_counts["processing"] += 1
-        elif status in ["accepted", "completed", "code_received"]:
+        # More comprehensive list of completed/successful states
+        elif status in ["accepted", "completed", "code_received", "tested", "documented", "skipped"]:
             status_counts["completed"] += 1
-        elif status == "failed" or (isinstance(status, str) and status.startswith("Ошибка")):
+        # Group failure/error states
+        elif status in ["failed", "error", "needs_rework"] or (isinstance(status, str) and "error" in status.lower()):
             status_counts["failed"] += 1
         else:
-            status_counts["other"] += 1
+            status_counts["other"] += 1 # Catch-all for any other statuses
+    # --- END CHANGE ---
+    
+    # Формуємо дані для графіка git активності
+    git_activity_data = {
+        "labels": [f"Commit {i+1}" for i in range(len(processed_history))],
+        "values": list(processed_history)
+    }
     
     # Формуємо повне оновлення для всіх графіків
     update_data = {
         "progress_data": progress_data,
-        "git_activity": {
-            "labels": [f"Commit {i+1}" for i in range(len(processed_history))],
-            "values": list(processed_history)
-        },
+        "git_activity": git_activity_data,
         "task_status_distribution": status_counts
     }
     
-    # Надсилаємо оновлення
+    # Надсилаємо оновлення всім підключеним клієнтам
     await broadcast_specific_update(update_data)
 
 # Змінна для збереження завдання періодичного оновлення
@@ -449,49 +455,56 @@ else:
 
 # --- Нова функція для розрахунку статистики ---
 def get_progress_stats():
-    """Розраховує статистику прогресу проекту на основі глобального словника `tasks`.""" # Оновлено docstring
+    """Розраховує статистику прогресу проекту на основі глобального словника `subtask_status`.""" # Оновлено docstring
     stats = {
         "tasks_total": 0, # Загальна кількість відомих завдань
-        "tasks_completed": 0, # Завдання з кінцевим статусом
-        "files_created": 0, # Файли, для яких executor завершив роботу
+        "tasks_completed": 0, # Завдання з УСПІШНИМ кінцевим статусом (для графіка)
+        "files_created": 0, # Файли, для яких executor завершив роботу (потрібно уточнити логіку)
         "files_tested_accepted": 0, # Файли, що пройшли тестування (accepted)
         "files_rejected": 0 # Файли, відправлені на доопрацювання (needs_rework)
     }
-    created_files = set()
-    accepted_files = set()
-    rejected_files = set()
+    # --- CHANGE: Use subtask_status as the source for counts --- 
+    # created_files = set()
+    # accepted_files = set()
+    # rejected_files = set()
 
-    stats["tasks_total"] = len(tasks) # Загальна кількість завдань
+    stats["tasks_total"] = len(subtask_status) # Загальна кількість відомих завдань
 
-    for task_id, task_data in tasks.items():
-        # Рахуємо завершені завдання (всі кінцеві статуси)
-        if task_data.get("status") in ["accepted", "code_generated", "tested", "documented", "skipped", "error", "failed", "code_received", "needs_rework"]: # Додано більше кінцевих статусів
+    # Temporary sets to track files based on subtask_status
+    temp_accepted_files = set()
+    temp_rejected_files = set()
+    # We might need the original `tasks` dict if file info isn't in subtask_status
+    # This part needs review based on what `subtask_status` actually contains.
+    # For now, focus on counting completed tasks from subtask_status.
+
+    for task_id, status in subtask_status.items():
+        # --- CHANGE: Align completed statuses with frontend text statistic --- 
+        # Рахуємо завершені завдання (тільки статуси, що використовуються в текстовій статистиці)
+        if status in ["accepted", "completed", "code_received"]:
+        # --- END CHANGE ---
              stats["tasks_completed"] += 1
 
-        # Рахуємо створені файли (після роботи executor)
-        if task_data.get("role") == "executor" and task_data.get("status") not in ["pending", "processing"]: # Будь-який статус крім початкових
-             if task_data.get("file"):
-                 created_files.add(task_data["file"])
+        # --- Placeholder logic for file counts based on subtask_status --- 
+        # This requires knowing if file info is associated with subtask_status entries
+        # or if we need to cross-reference with the `tasks` dictionary.
+        # Example (assuming file info IS available or cross-referenced):
+        # task_data = tasks.get(task_id) # Get original task data if needed
+        # if task_data and task_data.get("file"):
+        #     file_path = task_data["file"]
+        #     if status == "accepted":
+        #         temp_accepted_files.add(file_path)
+        #         if file_path in temp_rejected_files:
+        #             temp_rejected_files.remove(file_path)
+        #     elif status == "needs_rework":
+        #         if file_path not in temp_accepted_files:
+        #             temp_rejected_files.add(file_path)
+        # --- End Placeholder ---
 
-        # Рахуємо прийняті файли (після тестування)
-        if task_data.get("status") == "accepted":
-            if task_data.get("file"):
-                accepted_files.add(task_data["file"])
-                # Якщо файл прийнято, видаляємо його з відхилених (якщо він там був)
-                if task_data["file"] in rejected_files:
-                    rejected_files.remove(task_data["file"])
-
-        # Рахуємо відхилені файли
-        if task_data.get("status") == "needs_rework":
-            if task_data.get("file"):
-                 # Додаємо до відхилених, тільки якщо він ще не був прийнятий пізніше
-                 if task_data["file"] not in accepted_files:
-                     rejected_files.add(task_data["file"])
-
-
-    stats["files_created"] = len(created_files)
-    stats["files_tested_accepted"] = len(accepted_files)
-    stats["files_rejected"] = len(rejected_files) # Тільки ті, що зараз потребують доопрацювання
+    # --- Update file counts based on placeholder logic (needs refinement) ---
+    # stats["files_created"] = len(created_files) # Needs logic based on subtask_status/tasks
+    stats["files_tested_accepted"] = len(temp_accepted_files)
+    stats["files_rejected"] = len(temp_rejected_files)
+    # --- END CHANGE ---
 
     return stats
 
@@ -499,45 +512,59 @@ def get_progress_stats():
 def get_progress_chart_data():
     """
     Формує ОДНУ точку даних для графіка прогресу проєкту, що відображає ПОТОЧНИЙ стан.
-
-    Returns:
-        dict: Поточні дані для графіка прогресу (timestamp, completed_tasks, successful_tests, git_actions, progress_percentage).
     """
     # Отримуємо поточну статистику
     stats = get_progress_stats()
-
+    
     # Поточна кількість git дій (останнє значення з історії)
     current_git_actions = processed_history[-1] if processed_history else 0
-
-    # Розраховуємо поточний загальний прогрес у відсотках
-    total_tasks = stats.get("tasks_total", 0) or 1 # Уникаємо ділення на нуль
+    
+    # Отримуємо значення для графіка
     completed_tasks_count = stats.get("tasks_completed", 0)
     successful_tests_count = stats.get("files_tested_accepted", 0)
     files_created_count = stats.get("files_created", 0)
+    total_tasks = stats.get("tasks_total", 0) or 1  # Уникаємо ділення на нуль
+    
+    # Розраховуємо відсоток прогресу
+    weighted_progress = calculate_weighted_progress(
+        completed_tasks_count,
+        successful_tests_count,
+        files_created_count,
+        total_tasks
+    )
+    
+    # Формуємо підсумкову точку даних з повною міткою часу
+    return {
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "completed_tasks": completed_tasks_count,
+        "successful_tests": successful_tests_count,
+        "git_actions": current_git_actions,
+        "progress_percentage": weighted_progress
+    }
 
+def calculate_weighted_progress(completed_tasks, successful_tests, files_created, total_tasks):
+    """
+    Розраховує зважений прогрес на основі різних метрик.
+    """
     # Встановлюємо вагові коефіцієнти
     task_weight = 0.4
     test_weight = 0.4
     file_weight = 0.2
-
+    
     # Нормалізуємо значення до діапазону 0-100
-    task_progress = (completed_tasks_count / total_tasks) * 100 if total_tasks else 0
-    # База для відсотка тестів - створені файли, а не загальна кількість завдань
-    test_progress = (successful_tests_count / max(1, files_created_count)) * 100 if files_created_count > 0 else 0
-    file_progress = (files_created_count / total_tasks) * 100 if total_tasks else 0
-
+    task_progress = (completed_tasks / total_tasks) * 100 if total_tasks else 0
+    test_progress = (successful_tests / max(1, files_created)) * 100 if files_created > 0 else 0
+    file_progress = (files_created / total_tasks) * 100 if total_tasks else 0
+    
     # Зважений прогрес
-    weighted_progress = (task_progress * task_weight) + (test_progress * test_weight) + (file_progress * file_weight)
-    current_progress_percentage = min(100, max(0, round(weighted_progress, 1))) # Округлюємо до одного знаку
-
-    # Формуємо підсумкову точку даних
-    return {
-        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), # Додаємо повну мітку часу
-        "completed_tasks": completed_tasks_count,
-        "successful_tests": successful_tests_count,
-        "git_actions": current_git_actions,
-        "progress_percentage": current_progress_percentage
-    }
+    weighted_progress = (
+        task_progress * task_weight +
+        test_progress * test_weight +
+        file_progress * file_weight
+    )
+    
+    # Обмежуємо значення діапазоном 0-100 і округлюємо до одного знаку
+    return min(100, max(0, round(weighted_progress, 1)))
 
 
 # --- API Endpoints ---

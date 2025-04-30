@@ -223,6 +223,7 @@ body {
   ); /* Responsive columns */
   gap: 20px; /* Gap between grid items */
   width: 100%;
+  /* Remove log-panel from grid definition if it was explicitly defined */
 }
 
 .panel {
@@ -257,11 +258,29 @@ body {
 .file-panel {
   grid-column: span 1; /* Adjust span as needed */
 }
-.log-panel {
-  grid-column: span 1; /* Adjust span as needed */
-}
+/* REMOVE .log-panel from here if it exists */
+/* .log-panel { */
+/*   grid-column: span 1; */ /* Adjust span as needed */
+/* } */
 .queue-panel {
   grid-column: span 1; /* Adjust span as needed */
+}
+
+/* ADD styles for the moved log panel */
+.log-panel {
+  /* Styles for the log panel moved outside the container */
+  margin: 0 20px 20px 20px; /* Add margin: top 0, sides 20px, bottom 20px */
+  width: calc(100% - 40px); /* Full width minus side margins */
+  box-sizing: border-box;
+  /* Inherit panel styles if needed, or redefine */
+  background: var(--container-bg);
+  padding: 15px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  box-shadow: var(--panel-shadow);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 /* Control Panel Specifics */
@@ -525,15 +544,18 @@ body {
 
 /* Queue Panel */
 .queue-list {
-  display: grid; /* Use grid for queues */
-  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  display: flex; /* Use flexbox */
+  flex-direction: column; /* Stack items vertically */
   gap: 15px;
   flex-grow: 1;
-  overflow-y: auto; /* Scroll individual queues if needed */
+}
+
+.queue-list > div {
+  /* Target the direct div children containing h4 and ul */
+  width: 100%; /* Ensure each queue section takes full width */
 }
 
 .queue-list h3 {
-  grid-column: 1 / -1; /* Make title span all columns */
   margin-bottom: 10px;
   color: var(--heading-color);
   font-size: 1.1em;
@@ -543,13 +565,14 @@ body {
   list-style: none;
   padding: 0;
   margin: 0;
-  max-height: 250px; /* Limit height and allow scroll */
+  max-height: 200px; /* ADJUST height as needed for vertical layout */
   overflow-y: auto;
   border: 1px solid var(--border-color);
   border-radius: 4px;
   padding: 10px;
   background-color: var(--bg-color);
 }
+
 .queue-item h4 {
   /* Role title */
   margin-top: 0;
@@ -639,7 +662,7 @@ body {
 
 /* Log Panel */
 #log-content {
-  height: 300px; /* Adjust height as needed */
+  height: 150px; /* REDUCE height for horizontal layout */
   overflow-y: auto;
   background: var(--bg-color);
   border: 1px solid var(--border-color);
@@ -694,17 +717,15 @@ body {
     grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
   }
   .file-panel,
-  .log-panel,
+  /* .log-panel, */ /* REMOVE log-panel from here */
   .queue-panel {
     grid-column: span 1; /* Ensure they stack */
   }
-  .charts {
-    /* Maybe stack charts earlier on medium screens */
-    /* grid-template-columns: 1fr; */
-  }
+  /* ... existing responsive styles ... */
 }
 
 @media (max-width: 768px) {
+  /* ... existing responsive styles ... */
   .header {
     flex-direction: column;
     align-items: flex-start;
@@ -721,10 +742,22 @@ body {
     grid-template-columns: 1fr; /* Ensure charts stack on small screens */
   }
   .queue-list {
-    grid-template-columns: 1fr; /* Stack queues */
+    gap: 10px; /* Adjust gap for smaller screens if needed */
+  }
+  .queue-item {
+    max-height: 180px; /* Adjust height on smaller screens */
   }
   .theme-switcher {
     width: 100%;
     justify-content: center; /* Center theme buttons */
   }
+  .log-panel {
+    /* Adjust styles for the moved panel on small screens */
+    margin: 0 15px 15px 15px; /* Adjust margin for smaller screens */
+    width: calc(100% - 30px);
+  }
+  #log-content {
+    height: 120px; /* Further reduce height on small screens */
+  }
+  /* ... existing responsive styles ... */
 }

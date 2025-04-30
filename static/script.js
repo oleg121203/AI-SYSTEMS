@@ -1,8 +1,9 @@
 let taskChart, progressChart, gitChart, editor, statusPieChart;
 let ws;
-const reconnectInterval = 5000; // Reconnect interval 5 seconds
+const reconnectInterval = 10000; // Reconnect interval 5 seconds
 const maxReconnectAttempts = 10;
 let reconnectAttempts = 0;
+const MAX_LOG_LINES = 10; // Maximum number of log lines to keep
 
 // --- Global DOM Elements (cache them, assign in DOMContentLoaded) ---
 let logContent;
@@ -79,6 +80,13 @@ function connectWebSocket() {
               logContent.innerHTML = "";
             }
             logContent.appendChild(logEntry);
+            // Check if we've exceeded the maximum number of lines
+            while (logContent.childElementCount > MAX_LOG_LINES) {
+              // Remove the oldest log entry (first child)
+              if (logContent.firstChild) {
+                logContent.removeChild(logContent.firstChild);
+              }
+            }
             logContent.scrollTop = logContent.scrollHeight;
           }
           return; // Message handled
@@ -136,6 +144,13 @@ function connectWebSocket() {
               logContent.innerHTML = "";
             }
             logContent.appendChild(logEntry);
+            // Check if we've exceeded the maximum number of lines
+            while (logContent.childElementCount > MAX_LOG_LINES) {
+              // Remove the oldest log entry (first child)
+              if (logContent.firstChild) {
+                logContent.removeChild(logContent.firstChild);
+              }
+            }
             logContent.scrollTop = logContent.scrollHeight; // Auto-scroll
           }
           break;
@@ -196,6 +211,13 @@ function connectWebSocket() {
               logContent.innerHTML = "";
             }
             logContent.appendChild(logEntry);
+            // Check if we've exceeded the maximum number of lines
+            while (logContent.childElementCount > MAX_LOG_LINES) {
+              // Remove the oldest log entry (first child)
+              if (logContent.firstChild) {
+                logContent.removeChild(logContent.firstChild);
+              }
+            }
             logContent.scrollTop = logContent.scrollHeight;
           }
           break;
@@ -600,80 +622,65 @@ function updateCharts(data) {
       progressChart = new Chart(ctx, {
         type: "line",
         data: {
-          labels: [], // Часові мітки або етапи проекту
+          labels: [], // Timestamps
           datasets: [
             {
-              label: "Виконані завдання",
+              label: "Completed Tasks",
               data: [],
-              backgroundColor: "rgba(75, 192, 192, 0.2)",
-              borderColor: "rgba(75, 192, 192, 1)",
-              borderWidth: 2,
-              tension: 0.4,
-              fill: false,
-              yAxisID: "y",
+              borderColor: "rgb(54, 162, 235)",
+              tension: 0.1,
+              yAxisID: "yCount", // Assign to the count axis
             },
             {
-              label: "Успішні тести",
+              label: "Successful Tests",
               data: [],
-              backgroundColor: "rgba(54, 162, 235, 0.2)",
-              borderColor: "rgba(54, 162, 235, 1)",
-              borderWidth: 2,
-              tension: 0.4,
-              fill: false,
-              yAxisID: "y",
+              borderColor: "rgb(255, 99, 132)",
+              tension: 0.1,
+              yAxisID: "yCount", // Assign to the count axis
             },
             {
-              label: "Git дії",
+              label: "Git Actions",
               data: [],
-              backgroundColor: "rgba(255, 159, 64, 0.2)",
-              borderColor: "rgba(255, 159, 64, 1)",
-              borderWidth: 2,
-              tension: 0.4,
-              fill: false,
-              yAxisID: "y",
-            },
-            {
-              label: "Загальний прогрес %",
-              data: [],
-              backgroundColor: "rgba(153, 102, 255, 0.2)",
-              borderColor: "rgba(153, 102, 255, 1)",
-              borderWidth: 3,
-              tension: 0.4,
-              fill: false,
-              yAxisID: "y1",
+              borderColor: "rgb(255, 205, 86)",
+              tension: 0.1,
+              yAxisID: "yCount", // Assign to the count axis
             },
           ],
         },
         options: {
-          ...chartOptions,
+          ...chartOptions, // Inherit base options
           scales: {
-            ...chartOptions.scales,
-            y: {
-              ...chartOptions.scales.y,
-              position: "left",
-              title: {
-                display: true,
-                text: "Кількість",
-                color: getChartFontColor(),
+            x: {
+              // ... existing x-axis config ...
+              ticks: {
+                color: chartColor,
+                // --- HIDE X-AXIS LABELS ---
+                display: false,
+                // --- END HIDE ---
+                maxRotation: 0,
+                minRotation: 0,
+                autoSkip: true,
+                maxTicksLimit: 10, // Limit ticks for performance/readability
               },
             },
-            y1: {
+            yCount: {
               type: "linear",
-              position: "right",
+              // --- CHANGE: Position yCount axis to the left ---
+              position: "left",
+              // --- END CHANGE ---
+              beginAtZero: true,
               title: {
                 display: true,
-                text: "Відсоток завершення",
-                color: getChartFontColor(),
-              },
-              max: 100,
-              grid: {
-                drawOnChartArea: false,
+                text: "Count",
+                color: chartColor,
               },
               ticks: {
-                color: getChartFontColor(),
-                callback: function (value) {
-                  return value + "%";
-                },
+                color: chartColor,
+                stepSize: 1, // Ensure integer steps for counts
+              },
+              grid: {
+                drawOnChartArea: false, // Only draw grid for the primary axis (optional)
+                color: `${chartColor}20`,
               },
             },
           },
@@ -681,7 +688,26 @@ function updateCharts(data) {
             ...chartOptions.plugins,
             title: {
               ...chartOptions.plugins.title,
-              text: "Деталі прогресу проєкту",
+              text: "Project Progress Over Time",
+            },
+            tooltip: {
+              callbacks: {
+                // Custom tooltip to show all values for a given time point
+                label: function (context) {
+                  let label = context.dataset.label || "";
+                  if (label) {
+                    label += ": ";
+                  }
+                  if (context.parsed.y !== null) {
+                    label += context.parsed.y;
+                  }
+                  return label;
+                },
+                title: function (tooltipItems) {
+                  // Display the full timestamp in the tooltip title
+                  return tooltipItems[0].label; // The label is the timestamp
+                },
+              },
             },
           },
         },
@@ -804,25 +830,82 @@ function updateCharts(data) {
   // --- CHANGE: Update Progress Chart (Line Chart) - Append new data point ---
   if (progressChart && data.progress_data) {
     const newDataPoint = data.progress_data;
+    console.log("Progress data received:", newDataPoint);
+
     if (newDataPoint && newDataPoint.timestamp) {
-      // Додаємо нові дані до кожного набору даних графіка
-      progressChart.data.labels.push(newDataPoint.timestamp);
-      progressChart.data.datasets[0].data.push(newDataPoint.completed_tasks);
-      progressChart.data.datasets[1].data.push(newDataPoint.successful_tests);
-      progressChart.data.datasets[2].data.push(newDataPoint.git_actions);
-      progressChart.data.datasets[3].data.push(newDataPoint.progress_percentage);
-      
-      // Обмежуємо кількість точок даних
-      if (progressChart.data.labels.length > MAX_PROGRESS_POINTS) {
-        progressChart.data.labels.shift();
-        progressChart.data.datasets.forEach((dataset) => {
-          dataset.data.shift();
-        });
+      const labels = progressChart.data.labels;
+      const datasets = progressChart.data.datasets;
+
+      const completedTasksDataset = datasets.find(
+        (ds) => ds.label === "Completed Tasks"
+      );
+      const successfulTestsDataset = datasets.find(
+        (ds) => ds.label === "Successful Tests"
+      );
+      const gitActionsDataset = datasets.find(
+        (ds) => ds.label === "Git Actions"
+      );
+
+      // --- CHANGE: Get latest Git Action count from git_activity if available ---
+      let latestGitActionCount = newDataPoint.git_actions; // Default to value in progress_data
+      if (
+        data.git_activity &&
+        data.git_activity.values &&
+        data.git_activity.values.length > 0
+      ) {
+        latestGitActionCount =
+          data.git_activity.values[data.git_activity.values.length - 1];
+        console.log(
+          `[Chart Update] Using latest git_actions value from git_activity: ${latestGitActionCount}`
+        );
+      } else {
+        console.log(
+          `[Chart Update] Using git_actions value from progress_data: ${latestGitActionCount}`
+        );
       }
+      // --- END CHANGE ---
+
+      // Format timestamp for label (e.g., HH:MM)
+      const displayTimestamp = new Date(
+        newDataPoint.timestamp
+      ).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+      // Add new data
+      labels.push(newDataPoint.timestamp); // Store full timestamp for tooltip
+      if (completedTasksDataset)
+        completedTasksDataset.data.push(newDataPoint.completed_tasks);
+      if (successfulTestsDataset)
+        successfulTestsDataset.data.push(newDataPoint.successful_tests);
+      // --- ADD LOGGING ---
+      console.log(
+        `[Chart Update] Pushing git_actions value: ${latestGitActionCount}`
+      ); // Use the determined value
+      // --- END LOGGING ---
+      if (gitActionsDataset) gitActionsDataset.data.push(latestGitActionCount); // Use the determined value
+
+      // Limit data points
+      if (labels.length > MAX_PROGRESS_POINTS) {
+        labels.shift(); // Remove oldest label
+        if (completedTasksDataset) completedTasksDataset.data.shift();
+        if (successfulTestsDataset) successfulTestsDataset.data.shift();
+        if (gitActionsDataset) gitActionsDataset.data.shift();
+      }
+
+      // Update x-axis labels (displaying only HH:MM)
+      progressChart.data.labels = labels.map((ts) =>
+        new Date(ts).toLocaleTimeString([], {
+          hour: "2-digit",
+          minute: "2-digit",
+        })
+      );
+
+      console.log(
+        "[Chart Update] Updating Progress Chart with new data point."
+      );
       chartsUpdated = true;
     }
   } else if (progressChart) {
-    // console.log("[Chart Update] No progress_data received for Progress Chart.");
+    // console.log("[Chart Update] No new progress data received.");
   }
   // --- END CHANGE ---
 
