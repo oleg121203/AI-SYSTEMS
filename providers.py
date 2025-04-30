@@ -3,10 +3,50 @@ import json
 import logging
 import os
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union, Type as TypingType
 
 import aiohttp
 from dotenv import load_dotenv
+
+# Import SDKs at the top level
+try:
+    from together import Together, TogetherError
+except ImportError:
+    Together = None
+    TogetherError = None
+
+try:
+    import google.generativeai as genai
+except ImportError:
+    genai = None
+
+try:
+    import cohere
+except ImportError:
+    cohere = None
+
+try:
+    from groq import AsyncGroq, GroqError
+    import groq # Ensure groq module itself is imported
+except ImportError:
+    AsyncGroq = None
+    GroqError = None
+    groq = None # Define groq as None if import fails
+
+try:
+    from mistralai.async_client import MistralAsyncClient
+    from mistralai.models.chat_completion import ChatMessage
+    import mistralai # Ensure the base module is imported for qualified names
+except ImportError:
+    MistralAsyncClient = None
+    ChatMessage = None
+    mistralai = None # Define mistralai as None if import fails
+
+try:
+    import anthropic
+except ImportError:
+    anthropic = None
+
 
 # Определяем логгер *перед* его использованием
 logging.basicConfig(
@@ -14,50 +54,32 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Попытка импорта специфичных для провайдеров библиотек
-try:
-    from together import Together, TogetherError
-except ImportError:
+# Log warnings for missing optional dependencies
+if Together is None:
     logger.warning(
         "Модуль 'together' не установлен. TogetherProvider не будет работать. Установите его: pip install together"
     )
-    Together = None
-    TogetherError = None
-
-try:
-    import google.generativeai as genai
-except ImportError:
-    logger.warning(
+if genai is None:
+     logger.warning(
         "Модуль 'google-generativeai' не установлен. GeminiProvider не будет работать. Установите его: pip install google-generativeai"
     )
-    genai = None
-
-try:
-    import cohere
-except ImportError:
+if cohere is None:
     logger.warning(
         "Модуль 'cohere' не установлен. CohereProvider не будет работать. Установите его: pip install cohere"
     )
-    cohere = None
-
-try:
-    from groq import AsyncGroq, GroqError
-except ImportError:
+if AsyncGroq is None or groq is None:
     logger.warning(
         "Модуль 'groq' не установлен. GroqProvider не будет работать. Установите его: pip install groq"
     )
-    AsyncGroq = None
-    GroqError = None
-
-try:
-    from mistralai.async_client import MistralAsyncClient
-    from mistralai.models.chat_completion import ChatMessage
-except ImportError:
-    logger.warning(
+if MistralAsyncClient is None or ChatMessage is None:
+     logger.warning(
         "Модуль 'mistralai' не установлен. CodestralProvider не будет работать. Установите его: pip install mistralai"
     )
-    MistralAsyncClient = None
-    ChatMessage = None
+if anthropic is None:
+    logger.warning(
+        "Модуль 'anthropic' не установлен. AnthropicProvider не будет работать. Установите его: pip install anthropic"
+    )
+
 
 load_dotenv()
 
@@ -342,24 +364,23 @@ class AnthropicProvider(BaseProvider):
         self._client = None
 
     def setup(self) -> None:
-        try:
-            import anthropic
-
-            self.anthropic = anthropic
-            self.api_key = self.config.get("api_key") or os.environ.get(
-                "ANTHROPIC_API_KEY"
-            )
-            if not self.api_key:
-                logger.warning(
-                    "API ключ Anthropic не найден ни в конфигурации, ни в ANTHROPIC_API_KEY."
-                )
-            else:
-                logger.info("Anthropic настроен успешно")
-        except ImportError:
-            logger.error(
+        if not anthropic:
+             logger.error(
                 "Модуль anthropic не установлен. Установите его с помощью 'pip install anthropic'"
             )
-            self.anthropic = None
+             self.anthropic = None
+             return
+
+        self.anthropic = anthropic # Assign the imported module
+        self.api_key = self.config.get("api_key") or os.environ.get(
+            "ANTHROPIC_API_KEY"
+        )
+        if not self.api_key:
+            logger.warning(
+                "API ключ Anthropic не найден ни в конфигурации, ни в ANTHROPIC_API_KEY."
+            )
+        else:
+            logger.info("Anthropic настроен успешно")
 
     def get_client(self) -> Any:
         if not self.anthropic:
@@ -453,33 +474,51 @@ class GroqProvider(BaseProvider):
         self._client = None
 
     def setup(self) -> None:
-        try:
-            import groq
-
-            self.groq = groq
-            self.api_key = self.config.get("api_key") or os.environ.get("GROQ_API_KEY")
-            if not self.api_key:
-                logger.warning(
-                    "API ключ Groq не найден ни в конфигурации, ни в GROQ_API_KEY."
-                )
-            else:
-                logger.info("Groq настроен успешно")
-        except ImportError:
-            logger.error(
+        if not groq or not AsyncGroq: # Check both groq and AsyncGroq
+             logger.error(
                 "Модуль groq не установлен. Установите его с помощью 'pip install groq'"
             )
-            self.groq = None
+             self.groq = None
+             return
+
+        self.groq = groq # Assign the imported module
+        self.api_key = self.config.get("api_key") or os.environ.get("GROQ_API_KEY")
+        if not self.api_key:
+            logger.warning(
+                "API ключ Groq не найден ни в конфигурации, ни в GROQ_API_KEY."
+            )
+        else:
+            logger.info("Groq настроен успешно")
 
     def get_client(self) -> Any:
-        if not AsyncGroq:
+        if not AsyncGroq or not self.groq: # Check both
             raise ValueError("Модуль groq не импортирован.")
         if not self.api_key:
             raise ValueError("API ключ Groq не установлен.")
         if self._client is None:
-            # --- FIX: Initialize AsyncGroq only with api_key --- 
-            import groq # Ensure groq module is imported here if not globally
-            self._client = groq.AsyncGroq(api_key=self.api_key)
-            # --------------------------------------------------
+            import httpx  # Import httpx
+
+            # Get proxy from config
+            proxy_url = self.config.get("proxy")
+            proxies = None
+            if proxy_url:
+                proxies = {"http://": proxy_url, "https://": proxy_url}
+                logger.info(f"Using proxy {proxy_url} for Groq client.")
+
+            # Pass proxies to AsyncHttpxClient if needed
+            http_client = httpx.AsyncClient(proxies=proxies) if proxies else None
+
+            try:
+                # Pass the custom http_client if proxies are set
+                self._client = self.groq.AsyncGroq( # Use self.groq
+                    api_key=self.api_key,
+                    http_client=http_client
+                )
+                logger.info("Groq AsyncClient initialized successfully.")
+            except Exception as e:
+                logger.error(f"Error initializing Groq AsyncClient: {e}")
+                # Fallback or re-raise depending on desired behavior
+                raise ValueError(f"Failed to initialize Groq client: {e}")
         return self._client
 
     async def generate(
@@ -490,7 +529,7 @@ class GroqProvider(BaseProvider):
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
     ) -> str:
-        if not self.groq or not self.api_key:
+        if not self.groq or not self.api_key: # Check self.groq
             return "Ошибка генерации: провайдер Groq не настроен."
 
         model_to_use = model or self.get_default_model() or "llama3-70b-8192"
@@ -521,7 +560,7 @@ class GroqProvider(BaseProvider):
                     f"Ответ от Groq не содержит ожидаемых данных: {response}"
                 )
                 return "Ошибка генерации: Не получен корректный ответ от API."
-        except self.groq.APIError as e:
+        except self.groq.APIError as e: # Use self.groq
             logger.error(
                 f"Groq API Error ({model_to_use}): Status={e.status_code}, Message={e.message}"
             )
@@ -1277,14 +1316,17 @@ class CodestralProvider(BaseProvider):
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         super().__init__(config)
         self.name = "codestral"
+        # Use typing.Type to hint at the class type if direct import fails analysis
+        self._client_type: Optional[TypingType[MistralAsyncClient]] = MistralAsyncClient if mistralai else None
+        self._message_type: Optional[TypingType[ChatMessage]] = ChatMessage if mistralai else None
         self._client: Optional[MistralAsyncClient] = None
 
     def setup(self) -> None:
-        if not MistralAsyncClient or not ChatMessage:
-            logger.error(
+        if not self._client_type or not self._message_type:
+             logger.error(
                 "Компоненты 'mistralai' (MistralAsyncClient, ChatMessage) не установлены или не импортированы. CodestralProvider не может быть настроен."
             )
-            return
+             return
 
         self.api_key = (
             self.config.get("api_key")
@@ -1298,12 +1340,14 @@ class CodestralProvider(BaseProvider):
         else:
             logger.info("API ключ для Codestral/Mistral найден.")
             try:
-                self._client = MistralAsyncClient(api_key=self.api_key)
+                # Initialize using the stored type
+                self._client = self._client_type(api_key=self.api_key)
                 logger.info("Mistral AI AsyncClient настроен успешно.")
             except Exception as e:
                 logger.error(f"Ошибка инициализации Mistral AI AsyncClient: {e}")
                 self._client = None
 
+    # Return the base client type, but internal logic relies on _client
     def get_client(self) -> MistralAsyncClient:
         if not self._client:
             raise ValueError(
@@ -1313,62 +1357,39 @@ class CodestralProvider(BaseProvider):
 
     async def generate(
         self,
-        prompt: str,
-        system_prompt: Optional[str] = None,
-        model: Optional[str] = None,
+        model: str,
+        messages: List[Dict[str, str]],
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
     ) -> str:
-        if not self._client or not ChatMessage:
-            return "Ошибка генерации: Клиент Mistral AI SDK не инициализирован или компоненты не импортированы."
+        # Check if the necessary types were imported correctly
+        if not self._client or not self._message_type:
+            return "Ошибка генерации: Клиент SDK не инициализирован." + " (Mistral)"
 
-        model_to_use = model or self.get_default_model() or "codestral-latest"
-        max_tokens_to_use = max_tokens or self.config.get("max_tokens") or 4096
-        temperature_to_use = (
-            temperature
-            if temperature is not None
-            else self.config.get("temperature", 0.7)
-        )
-
-        messages = []
-        if system_prompt:
-            messages.append(
-                ChatMessage(
-                    role="user",
-                    content=f"System Instructions: {system_prompt}\n\nUser Request: {prompt}",
-                )
-            )
-        else:
-            messages.append(ChatMessage(role="user", content=prompt))
+        model_to_use = self.config.get("model", model)
+        max_tokens_to_use = max_tokens or self.config.get("max_tokens", 4096)
+        temperature_to_use = temperature if temperature is not None else self.config.get("temperature", 0.7)
 
         try:
             client = self.get_client()
+            # Use the stored message type for instantiation
+            messages_typed = [self._message_type(role=msg["role"], content=msg["content"]) for msg in messages]
             response = await client.chat(
                 model=model_to_use,
-                messages=messages,
+                messages=messages_typed,
                 max_tokens=max_tokens_to_use,
                 temperature=temperature_to_use,
             )
 
-            if response and response.choices and response.choices[0].message:
+            if response.choices and response.choices[0].message:
                 return response.choices[0].message.content or ""
             else:
-                logger.warning(
-                    f"Ответ от Mistral AI SDK ({model_to_use}) не содержит ожидаемых данных: {response}"
-                )
-                return (
-                    "Ошибка генерации: Не получен корректный ответ от Mistral AI SDK."
-                )
-
+                logger.warning(f"Неожиданный ответ от Codestral API: {response}")
+                # Use the constant
+                return "Ошибка генерации: Не получен корректный ответ от API."
         except Exception as e:
-            logger.error(
-                f"Ошибка при генерации ответа с Mistral AI SDK ({model_to_use}): {e}",
-                exc_info=True,
-            )
-            error_message = str(e)
-            if hasattr(e, "message"):
-                error_message = e.message
-            return f"Ошибка генерации (Mistral API): {error_message}"
+            logger.error(f"Ошибка при генерации ответа Codestral ({model_to_use}): {e}")
+            return f"Ошибка генерации (Codestral): {e}"
 
 
 try:

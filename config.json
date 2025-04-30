@@ -57,7 +57,13 @@
     },
     "ai2": {
       "providers": {
-        "executor": ["gemini-pro2.5", "openrouter-qwen", "groq", "ollama"],
+        "executor": [
+          "codestral",
+          "gemini-pro2.5",
+          "openrouter-qwen",
+          "groq",
+          "ollama"
+        ],
         "tester": ["ollama", "groq", "gemini"],
         "documenter": ["groq", "cohere", "gemini", "ollama"]
       },
