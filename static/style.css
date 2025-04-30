@@ -330,8 +330,8 @@ body {
   box-shadow: var(--panel-shadow); /* Apply theme shadow */
   display: flex;
   flex-direction: column; /* Stack elements vertically */
-  overflow: hidden; /* Prevent content overflow */
   transition: box-shadow 0.3s ease; /* Smooth shadow transition */
+  min-height: 0;
 }
 
 .panel h2 {
@@ -359,12 +359,8 @@ body {
 /* } */
 .queue-panel {
   grid-column: span 1; /* Adjust span as needed */
-  resize: vertical;
-  overflow: auto;
-  min-height: 200px;
 }
 
-/* ADD styles for the moved log panel */
 .log-panel {
   /* Styles for the log panel moved outside the container */
   margin: 0 20px 20px 20px; /* Add margin: top 0, sides 20px, bottom 20px */
@@ -713,6 +709,10 @@ body {
 }
 
 /* Queue Panel */
+.queue-panel {
+  grid-column: span 1; /* Adjust span as needed */
+}
+
 .queue-list {
   display: flex; /* Use flexbox */
   flex-direction: column; /* Stack items vertically */
@@ -831,16 +831,17 @@ body {
 
 /* Log Panel */
 #log-content {
-  height: 420px; /* INCREASED HEIGHT for more log lines */
-  overflow-y: auto;
+  overflow-y: auto; /* Keep scroll for log content itself */
   background: var(--bg-color);
   border: 1px solid var(--border-color);
   border-radius: 4px;
   padding: 10px;
   font-family: monospace;
   font-size: 0.85em;
-  flex-grow: 1;
+  flex-grow: 1; /* Allow log content to fill available space in the panel */
   color: var(--text-color); /* Ensure text is visible */
+  margin-bottom: 10px; /* Space before button */
+  min-height: 50px;
 }
 #log-content p {
   margin: 2px 0;
@@ -913,10 +914,6 @@ body {
   .queue-list {
     gap: 10px; /* Adjust gap for smaller screens if needed */
   }
-  .queue-item {
-    max-height: 180px; /* Adjust height on smaller screens */
-    flex-shrink: 1;
-  }
   .theme-switcher {
     width: 100%;
     justify-content: center; /* Center theme buttons */
@@ -925,9 +922,6 @@ body {
     /* Adjust styles for the moved panel on small screens */
     margin: 0 15px 15px 15px; /* Adjust margin for smaller screens */
     width: calc(100% - 30px);
-  }
-  #log-content {
-    height: 120px; /* Further reduce height on small screens */
   }
   .queue-panel {
     resize: none;
@@ -1097,7 +1091,6 @@ body {
 }
 
 #log-content {
-  height: 420px; /* INCREASED HEIGHT for more log lines */
   overflow-y: auto;
   background: var(--bg-color);
   border: 1px solid var(--border-color);
@@ -1108,6 +1101,7 @@ body {
   flex-grow: 1;
   color: var(--text-color);
   margin-bottom: 10px; /* Space before button */
+  min-height: 50px;
 }
 
 #log-content p {

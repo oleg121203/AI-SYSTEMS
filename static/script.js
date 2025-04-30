@@ -406,133 +406,72 @@ function updateQueues(queuesData) {
     countSpan.textContent = tasks.length;
     console.log(`[Queue Update] Role '${role}': Count set to ${tasks.length}`);
 
-    // --- Efficiently update the list ---
-    // Create a map of existing task IDs in the DOM for quick lookup
-    const existingTaskElements = new Map();
-    Array.from(ul.children).forEach((li) => {
-      const id = li.dataset.taskId; // Assuming you add data-task-id attribute
-      if (id) {
-        existingTaskElements.set(id, li);
-      }
-    });
+    // --- SIMPLIFIED UPDATE: Clear and redraw ---
+    ul.innerHTML = ""; // Clear the entire list
+    queuesChanged = true; // Assume change if we redraw
 
-    const newTaskIds = new Set();
-    let listNeedsReordering = false;
-    let lastElement = null; // To check order
-
-    // Iterate through new tasks, update existing or add new
-    tasks.forEach((task, index) => {
+    tasks.forEach((task) => {
       if (!task?.id || !task?.text) {
         console.warn("[Queue Update] Skipping invalid task object:", task);
         return;
       }
-      newTaskIds.add(task.id);
       const status = task.status || subtask_status[task.id] || "pending";
-      const newStatus = status; // Use the calculated status
 
-      let li = existingTaskElements.get(task.id);
-      if (li) {
-        // Task exists, update its status if needed
-        const currentStatus = li.getAttribute("data-status");
-        if (newStatus !== currentStatus) {
-          li.setAttribute("data-status", newStatus);
-          const iconSpan = li.querySelector(".status-icon");
-          if (iconSpan) iconSpan.innerHTML = getStatusIcon(newStatus);
-          queuesChanged = true; // Mark as changed if status updated
-          console.log(
-            `[Queue Update] Task ${task.id} status updated to ${newStatus}`
-          );
-        }
-        // Check if order is correct
-        if (lastElement && ul.children[index] !== li) {
-          listNeedsReordering = true;
-        }
-        existingTaskElements.delete(task.id); // Remove from map as it's processed
-      } else {
-        // Task is new, create and insert/append
-        li = document.createElement("li");
-        li.setAttribute("data-task-id", task.id); // Add task ID attribute
-        li.setAttribute("data-status", status);
+      const li = document.createElement("li");
+      li.setAttribute("data-task-id", task.id);
+      li.setAttribute("data-status", status);
+      li.classList.add("queue-item"); // Add class for potential styling
 
-        // --- Summary Row ---
-        const summaryDiv = document.createElement("div");
-        summaryDiv.className = "task-summary";
-        // ... (rest of summaryDiv creation: icon, filename, id span) ...
-        const statusIcon = document.createElement("span");
-        statusIcon.className = "status-icon";
+      // --- Summary Row ---
+      const summaryDiv = document.createElement("div");
+      summaryDiv.className = "task-summary";
+
+      const statusIcon = document.createElement("span");
+      statusIcon.className = "status-icon";
+      // Ensure getStatusIcon exists and handles potential errors
+      try {
         statusIcon.innerHTML = getStatusIcon(status);
-
-        const taskFilename = document.createElement("span");
-        taskFilename.className = "task-filename";
-        taskFilename.textContent =
-          task.filename || `Task ${task.id.substring(0, 8)}`;
-
-        const taskIdSpan = document.createElement("span");
-        taskIdSpan.className = "task-id";
-        taskIdSpan.textContent = `(ID: ${task.id.substring(0, 8)})`;
-
-        summaryDiv.appendChild(statusIcon);
-        summaryDiv.appendChild(taskFilename);
-        summaryDiv.appendChild(taskIdSpan);
-        li.appendChild(summaryDiv);
-
-        // --- Details Div (Hidden) ---
-        const detailsDiv = document.createElement("div");
-        detailsDiv.className = "task-details";
-        detailsDiv.textContent = task.text;
-        li.appendChild(detailsDiv);
-
-        // --- Click Listener ---
-        li.addEventListener("click", () => li.classList.toggle("expanded"));
-
-        // Insert in correct position or append
-        if (ul.children[index]) {
-          ul.insertBefore(li, ul.children[index]);
-        } else {
-          ul.appendChild(li);
-        }
-        queuesChanged = true; // Mark as changed since we added an item
-        listNeedsReordering = true; // Force reordering check later if needed
-        console.log(`[Queue Update] Task ${task.id} added to ${role} queue.`);
+      } catch (e) {
+        console.error(`Error getting status icon for status '${status}':`, e);
+        statusIcon.innerHTML = '<i class="fas fa-question-circle"></i>'; // Fallback icon
       }
-      lastElement = li; // Update last element for order check
-    });
 
-    // Remove tasks that are no longer in the queue
-    existingTaskElements.forEach((liToRemove, idToRemove) => {
-      ul.removeChild(liToRemove);
-      queuesChanged = true;
-      console.log(
-        `[Queue Update] Task ${idToRemove} removed from ${role} queue.`
-      );
-    });
+      const taskFilename = document.createElement("span");
+      taskFilename.className = "task-filename";
+      taskFilename.textContent =
+        task.filename || `Task ${task.id.substring(0, 8)}`;
 
-    // Simple reordering if needed (less efficient but ensures correctness)
-    // A more complex diff/patch would be faster but harder to implement
-    if (listNeedsReordering && tasks.length > 1) {
-      // Only reorder if necessary
-      console.log(`[Queue Update] Reordering list for role '${role}'`);
-      tasks.forEach((task, index) => {
-        const li = ul.querySelector(`[data-task-id="${task.id}"]`);
-        if (li && ul.children[index] !== li) {
-          // Find the correct next sibling to insert before
-          const nextSibling = ul.children[index];
-          ul.insertBefore(li, nextSibling); // Move to correct position
-        }
-      });
-      queuesChanged = true;
-    }
+      const taskIdSpan = document.createElement("span");
+      taskIdSpan.className = "task-id";
+      taskIdSpan.textContent = `(ID: ${task.id.substring(0, 8)})`;
+
+      summaryDiv.appendChild(statusIcon);
+      summaryDiv.appendChild(taskFilename);
+      summaryDiv.appendChild(taskIdSpan);
+      li.appendChild(summaryDiv);
+
+      // --- Details Div (Hidden) ---
+      const detailsDiv = document.createElement("div");
+      detailsDiv.className = "task-details";
+      detailsDiv.textContent = task.text;
+      li.appendChild(detailsDiv);
+
+      // --- Click Listener ---
+      li.addEventListener("click", () => li.classList.toggle("expanded"));
+
+      ul.appendChild(li); // Append the new item
+      // console.log(`[Queue Update] Task ${task.id} added to ${role} queue (redraw).`); // Optional log
+    });
+    // --- END SIMPLIFIED UPDATE ---
   }); // End forEach role
 
   // Update stats using the new function, passing current queue data and global subtask status
-  // It will use the global actualTotalTasks internally
-  // Pass the received queuesData directly
   updateStats(subtask_status, queuesData);
 
   // Update the task distribution chart if it exists and queues changed
   if (taskChart && queuesChanged) {
     console.log(
-      "[Queue Update] Updating taskChart data due to queue changes:",
+      "[Queue Update] Updating taskChart data due to queue changes (redraw):",
       queuesData
     );
     taskChart.data.datasets[0].data = [
@@ -547,6 +486,26 @@ function updateQueues(queuesData) {
     taskChart.update(); // Explicitly update the chart visualization
   } else if (taskChart && !queuesChanged) {
     console.log("[Queue Update] No visual changes detected for taskChart.");
+  }
+}
+
+// --- Helper function for status icons (ensure this exists) ---
+function getStatusIcon(status) {
+  // Example implementation (replace with your actual logic)
+  switch (status) {
+    case "pending":
+      return '<i class="fas fa-clock text-warning"></i>';
+    case "processing":
+      return '<i class="fas fa-spinner fa-spin text-info"></i>';
+    case "completed":
+    case "accepted":
+    case "code_received":
+      return '<i class="fas fa-check-circle text-success"></i>';
+    case "failed":
+    case "needs_rework":
+      return '<i class="fas fa-times-circle text-danger"></i>';
+    default:
+      return '<i class="fas fa-question-circle text-muted"></i>';
   }
 }
 
