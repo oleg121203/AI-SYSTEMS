@@ -10,12 +10,17 @@ from typing import Dict, List, Optional, Set, Union
 from uuid import uuid4
 
 import aiofiles
+# --- CHANGE: Import Repo and GitCommandError ---
 import git
+from git import Repo, GitCommandError
+# --- END CHANGE ---
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import (BackgroundTasks, FastAPI, HTTPException, Request,
                      WebSocket, WebSocketDisconnect)
+# --- CHANGE: Define constants ---
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+# --- END CHANGE ---
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field, ValidationError
@@ -35,6 +40,11 @@ except ImportError:
 
 
 load_dotenv()
+
+# --- CHANGE: Define constants ---
+CONFIG_FILE = "config.json"
+TEXT_PLAIN = "text/plain"
+# --- END CHANGE ---
 
 
 # --- Pydantic Models ---
@@ -57,22 +67,31 @@ class Report(BaseModel):
 
 # --- Configuration Loading ---
 try:
-    with open("config.json", "r", encoding="utf-8") as f:
+    # --- CHANGE: Use constant ---
+    with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+    # --- END CHANGE ---
         config_str = f.read()
     # Replace environment variables
     for key, value in os.environ.items():
         config_str = config_str.replace(f"${{{key}}}", value)
     config = json.loads(config_str)
 except FileNotFoundError:
-    logging.error("CRITICAL: config.json not found. Exiting.")
+    # --- CHANGE: Use constant ---
+    logging.error(f"CRITICAL: {CONFIG_FILE} not found. Exiting.")
+    # --- END CHANGE ---
     exit(1)
 except json.JSONDecodeError as e:
-    logging.error(f"CRITICAL: Error decoding config.json: {e}. Exiting.")
+    # --- CHANGE: Use constant ---
+    logging.error(f"CRITICAL: Error decoding {CONFIG_FILE}: {e}. Exiting.")
+    # --- END CHANGE ---
     exit(1)
 except Exception as e:
     logging.error(f"CRITICAL: Error loading configuration: {e}. Exiting.")
     exit(1)
 
+# --- CHANGE: Define GITHUB_MAIN_REPO ---
+GITHUB_MAIN_REPO = config.get("github_repo", "YOUR_GITHUB_USERNAME/YOUR_REPO_NAME")
+# --- END CHANGE ---
 
 # --- Logging Setup ---
 log_file_path = config.get("log_file", "logs/mcp.log")
@@ -122,10 +141,14 @@ repo_path = Path(repo_dir).resolve()  # Use absolute path
 os.makedirs(repo_path, exist_ok=True)  # Ensure repo directory exists
 
 try:
-    repo = git.Repo(repo_path)
+    # --- CHANGE: Use Repo ---
+    repo = Repo(repo_path)
+    # --- END CHANGE ---
     logger.info(f"Initialized existing Git repository at {repo_path}")
+# --- CHANGE: Use git.exc ---
 except git.exc.InvalidGitRepositoryError:
-    repo = git.Repo.init(repo_path)
+    repo = Repo.init(repo_path)
+# --- END CHANGE ---
     logger.info(f"Initialized new Git repository at {repo_path}")
 except Exception as e:
     logger.error(f"Error initializing Git repository at {repo_path}: {e}")
@@ -148,7 +171,9 @@ collaboration_requests = []  # Store collaboration requests
 processed_tasks_count = 0  # Добавим счетчик обработанных задач
 
 # Global dictionary for AI status
-ai_status: Dict[str, bool] = {"ai1": False, "ai2": False, "ai3": False}
+# --- CHANGE: Initialize AI status to True by default ---
+ai_status: Dict[str, bool] = {"ai1": True, "ai2": True, "ai3": True}
+# --- END CHANGE ---
 ai_processes: Dict[str, Optional[subprocess.Popen]] = {
     "ai1": None,
     "ai2": None,
@@ -354,10 +379,12 @@ async def write_and_commit_code(
                         processed_history.append(processed_tasks_count)
                         # Отправляем обновление истории коммитов в формате для графика
                         history_list = list(processed_history)
-                        git_activity_data = {
-                            "labels": [f"Commit {i+1}" for i in range(len(history_list))],
-                            "values": history_list
-                        }
+                        # --- CHANGE: Remove unused variable ---
+                        # git_activity_data = {
+                        #     "labels": [f"Commit {i+1}" for i in range(len(history_list))],
+                        #     "values": history_list
+                        # }
+                        # --- END CHANGE ---
                         # --- CHANGE: Use broadcast_chart_updates instead of specific git update ---
                         # await broadcast_specific_update({"git_activity": git_activity_data}) # Use git_activity key
                         # Викликаємо повне оновлення графіків, яке включає і git_activity
@@ -368,7 +395,9 @@ async def write_and_commit_code(
                             f"[API-Git] No changes staged for commit for: {file_rel_path}"
                         )
 
-                except git.GitCommandError as e:
+                # --- CHANGE: Use GitCommandError ---
+                except GitCommandError as e:
+                # --- END CHANGE ---
                     logger.error(f"[API-Git] Error committing {file_rel_path}: {e}")
                     # Continue even if commit fails, file is written
                 except Exception as e:
@@ -629,21 +658,27 @@ async def get_file_content(path: str):
              logger.info(f"Binary file detected by extension: {file_path}")
              return PlainTextResponse(
                  content=f"[Binary file: {file_path.name}]\nThis file type cannot be displayed as text.",
-                 media_type="text/plain"
+                 # --- CHANGE: Use constant ---
+                 media_type=TEXT_PLAIN
+                 # --- END CHANGE ---
              )
 
         # Attempt to read as text (UTF-8 first)
         try:
             content = file_path.read_text(encoding="utf-8")
             logger.debug(f"Successfully read file as UTF-8: {file_path}")
-            return PlainTextResponse(content=content, media_type="text/plain")
+            # --- CHANGE: Use constant ---
+            return PlainTextResponse(content=content, media_type=TEXT_PLAIN)
+            # --- END CHANGE ---
         except UnicodeDecodeError:
             logger.warning(f"Failed to decode {file_path} as UTF-8. Trying fallback encodings.")
             try:
                 # Try latin-1 as a common fallback
                 content = file_path.read_text(encoding="latin-1")
                 logger.info(f"Successfully read file {file_path} with latin-1 fallback.")
-                return PlainTextResponse(content=content, media_type="text/plain")
+                # --- CHANGE: Use constant ---
+                return PlainTextResponse(content=content, media_type=TEXT_PLAIN)
+                # --- END CHANGE ---
             except Exception: # Catch potential errors reading with latin-1 too
                  logger.warning(f"Failed to decode {file_path} with latin-1. Reading bytes with replacement.")
                  try:
@@ -651,13 +686,17 @@ async def get_file_content(path: str):
                      content_bytes = file_path.read_bytes()
                      content = content_bytes.decode("utf-8", errors="replace")
                      logger.info(f"Read file {file_path} as bytes and decoded with replacement characters.")
-                     return PlainTextResponse(content=content, media_type="text/plain")
+                     # --- CHANGE: Use constant ---
+                     return PlainTextResponse(content=content, media_type=TEXT_PLAIN)
+                     # --- END CHANGE ---
                  except Exception as read_err:
                      logger.error(f"Failed even reading bytes for {file_path}: {read_err}")
                      # If even reading bytes fails, report as unreadable
                      return PlainTextResponse(
                          content=f"[Unreadable file: {file_path.name}]\nCould not read file content.",
-                         media_type="text/plain"
+                         # --- CHANGE: Use constant ---
+                         media_type=TEXT_PLAIN
+                         # --- END CHANGE ---
                      )
 
     except HTTPException as http_exc:
@@ -823,6 +862,10 @@ async def receive_report(
                     report_metrics[report.subtask_id] = process_test_results(
                         report, report.subtask_id
                     )
+                # --- ADDED: TODO for follow-up tasks ---
+                # TODO: Implement create_follow_up_tasks or similar logic here
+                # await create_follow_up_tasks(report.subtask_id)
+                # --- END TODO ---
             elif report.type == "status_update":
                 subtask_status[report.subtask_id] = report.message or "updated"
                 if hasattr(report, "status") and report.status:
@@ -935,7 +978,9 @@ async def update_ai_provider(data: dict):
 
     if config_changed:
         try:
-            with open("config.json", "w", encoding="utf-8") as f:
+            # --- CHANGE: Use constant ---
+            with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            # --- END CHANGE ---
                 json.dump(config, f, indent=4, ensure_ascii=False)
             logger.info(message)
             return {"status": "success", "message": message}
@@ -992,15 +1037,17 @@ async def update_config(data: dict):
         config["ai1_prompt"] = data["ai1_prompt"]
         logger.info("AI1 prompt updated.")
         config_changed = True
+    # --- CHANGE: Merge nested if ---
     if (
         "ai2_prompts" in data
         and isinstance(data["ai2_prompts"], list)
         and len(data["ai2_prompts"]) == 3
+        and config.get("ai2_prompts") != data["ai2_prompts"]
     ):
-        if config.get("ai2_prompts") != data["ai2_prompts"]:
-            config["ai2_prompts"] = data["ai2_prompts"]
-            logger.info("AI2 prompts updated.")
-            config_changed = True
+        config["ai2_prompts"] = data["ai2_prompts"]
+        logger.info("AI2 prompts updated.")
+        config_changed = True
+    # --- END CHANGE ---
 
     if "ai3_prompt" in data and config.get("ai3_prompt") != data["ai3_prompt"]:
         config["ai3_prompt"] = data["ai3_prompt"]
@@ -1009,7 +1056,9 @@ async def update_config(data: dict):
 
     if config_changed:
         try:
-            with open("config.json", "w", encoding="utf-8") as f:
+            # --- CHANGE: Use constant ---
+            with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            # --- END CHANGE ---
                 json.dump(config, f, indent=4, ensure_ascii=False)
             logger.info("Configuration file updated successfully.")
             return {"status": "config updated"}
@@ -1045,7 +1094,9 @@ async def update_config_item(data: dict):
         config[key] = value
         logger.info(f"Configuration item '{key}' updated to: {value}")
         try:
-            with open("config.json", "w", encoding="utf-8") as f:
+            # --- CHANGE: Use constant ---
+            with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            # --- END CHANGE ---
                 json.dump(config, f, indent=4, ensure_ascii=False)
             logger.info(f"Configuration file updated successfully after changing '{key}'.")
             # Повідомлення клієнтам про зміну конфігурації (якщо потрібно)
@@ -1171,13 +1222,18 @@ async def clear_state():
 async def clear_repo():
     """Очищає та ініціалізує Git репозиторій."""
     try:
-        await ai3_instance.clear_and_init_repo()
-        await broadcast_specific_update({"message": "Repository cleared and re-initialized.", "log_line": "[API] Repository clear requested and executed."})
-        return {"status": "Repository cleared and re-initialized."}
+        # --- CHANGE: Comment out undefined call and add TODO ---
+        # TODO: Implement proper interaction with AI3 process instead of direct call
+        # await ai3_instance.clear_and_init_repo()
+        logger.warning("[API] /clear_repo endpoint called, but AI3 interaction is not implemented yet.")
+        # Placeholder response until AI3 interaction is implemented
+        await broadcast_specific_update({"message": "Repository clear requested (implementation pending).", "log_line": "[API] Repository clear requested (implementation pending)."})
+        return {"status": "Repository clear requested (implementation pending)."}
+        # --- END CHANGE ---
     except Exception as e:
-        logger.error(f"Error during repository clear: {e}")
-        await broadcast_specific_update({"error": f"Failed to clear repository: {e}"})
-        raise HTTPException(status_code=500, detail=f"Failed to clear repository: {e}")
+        logger.error(f"Error during repository clear request: {e}")
+        await broadcast_specific_update({"error": f"Failed to request repository clear: {e}"})
+        raise HTTPException(status_code=500, detail=f"Failed to request repository clear: {e}")
 
 
 async def broadcast_full_status():
@@ -1479,87 +1535,11 @@ async def request_error_fix(data: dict):
     if not errors:
         raise HTTPException(status_code=400, detail="No errors provided")
     
-    logger.info(f"Received error fix request: {errors[:200]}...")  # Логуємо перші 200 символів
-    
-    # Додаємо помилки до черги задач executor'а для виправлення
-    try:
-        task_id = str(uuid4())
-        error_task = {
-            "id": task_id,
-            "role": "executor",
-            "filename": "error_fix.txt",  # Тимчасовий файл
-            "text": f"Fix the following errors:\n{errors}",
-            "type": "error_fix"
-        }
-        await executor_queue.put(error_task)
-        logger.info(f"Added error fix task to executor queue. Task ID: {task_id}")
-        return {"success": True, "task_id": task_id}
-    except Exception as e:
-        logger.error(f"Failed to create error fix task: {e}")
-        return {"success": False, "error": str(e)}
-
-
-# --- Оновлення ендпоінту звіту для фіксації статусів ---
-@app.post("/report")
-async def receive_report(report: Report):
-    """Отримує звіт від AI2 воркерів."""
-    task_id = report.task_id
-    log_message(f"Received report for task {task_id}: Status {report.status}, Type: {report.report_type}")
-
-    if task_id in tasks:
-        tasks[task_id]["status"] = report.status
-        tasks[task_id]["report_content"] = report.content # Зберігаємо вміст звіту
-        tasks[task_id]["report_timestamp"] = datetime.now().isoformat()
-
-        # ... (існуюча логіка запису файлу та коміту) ...
-        if report.report_type == "code" and report.content:
-             # ... (код запису файлу) ...
-             file_path_in_repo = os.path.join("repo", tasks[task_id]["file"])
-             os.makedirs(os.path.dirname(file_path_in_repo), exist_ok=True)
-             try:
-                 async with aiofiles.open(file_path_in_repo, "w", encoding="utf-8") as f:
-                     await f.write(report.content)
-                 log_message(f"Successfully wrote code to {file_path_in_repo}")
-
-                 # --- Git Commit ---
-                 try:
-                     repo_instance = git.Repo(repo_path)
-                     repo_instance.git.add(file_path_in_repo)
-                     # Перевірка наявності змін перед комітом
-                     if repo_instance.is_dirty(path=file_path_in_repo):
-                         commit_message = f"AI2-{tasks[task_id]['role']}: Update {tasks[task_id]['file']}"
-                         repo_instance.index.commit(commit_message)
-                         log_message(f"Committed changes for {file_path_in_repo}")
-                     else:
-                          # Виправлено помилку f-string
-                          log_message(f"No changes detected in {file_path_in_repo}, skipping commit.")
-
-                 except Exception as e:
-                     log_message(f"Git operation failed for {file_path_in_repo}: {e}", level="error")
-                 # --- End Git Commit ---
-
-                 # Оновлюємо статус на "code_generated" після успішного запису
-                 tasks[task_id]["status"] = "code_generated"
-
-                 # Автоматично створюємо завдання для тестувальника та документатора
-                 await create_follow_up_tasks(task_id)
-
-             except Exception as e:
-                 logger.error(f"Error writing file {file_path_in_repo}: {e}")
-                 tasks[task_id]["status"] = "error" # Позначаємо помилку запису
-        elif report.report_type == "test_results":
-             # Якщо це результати тестування від AI2-tester
-             tasks[task_id]["status"] = "tested" # Позначаємо, що тестування завершено (результат буде оброблено AI1)
-        elif report.report_type == "documentation":
-             tasks[task_id]["status"] = "documented"
-        elif report.status == "error":
-             tasks[task_id]["status"] = "error" # Якщо воркер сам повідомив про помилку
-
-        await broadcast_update(f"Task {task_id} ({tasks[task_id]['file']}) updated: {tasks[task_id]['status']}", update_type="task_update")
-        return {"message": "Report received"}
-    else:
-        logger.warning(f"Received report for unknown task ID: {task_id}")
-        raise HTTPException(status_code=404, detail="Task not found")
+    # --- CHANGE: Remove misplaced code block and add logging ---
+    logger.info(f"Received error fix request with errors: {errors}")
+    # TODO: Implement logic to handle error fixing requests, potentially creating new subtasks.
+    return {"status": "Error fix request received (implementation pending)"}
+    # --- END CHANGE ---
 
 
 # --- Оновлення ендпоінту рекомендацій тестування ---
@@ -1589,7 +1569,9 @@ async def receive_test_recommendation(recommendation: TestRecommendation):
 
 
     if updated_tasks:
-        await broadcast_update(f"Test recommendation '{recommendation.recommendation}' applied to tasks: {updated_tasks}", update_type="task_update")
+        # --- CHANGE: Use broadcast_specific_update ---
+        await broadcast_specific_update({"type": "task_update", "message": f"Test recommendation '{recommendation.recommendation}' applied to tasks: {updated_tasks}"})
+        # --- END CHANGE ---
 
     # Пересилаємо рекомендацію AI1 (якщо потрібно) - припускаємо, що AI1 слухає WebSocket або має інший механізм
     # Можна додати логіку відправки HTTP-запиту до AI1, якщо потрібно
@@ -1625,161 +1607,3 @@ async def shutdown_event():
         except asyncio.CancelledError:
             pass
         logger.info("Stopped periodic chart updates task")
-
-
-# --- ADDED: Function to send repository_dispatch --- 
-def send_repository_dispatch(commit_sha: Optional[str] = None):
-    """Sends a repository_dispatch event to the main AI-SYSTEMS repo."""
-    # --- CHANGE: Use GITHUB_TOKEN from .env --- 
-    github_token = os.getenv("GITHUB_TOKEN") 
-    if not github_token:
-        logger.warning(f"[MCP API] Environment variable GITHUB_TOKEN not set. Cannot send repository_dispatch.")
-        return
-    # ------------------------------------------
-
-    headers = {
-        "Authorization": f"token {github_token}",
-        "Accept": "application/vnd.github.v3+json",
-        "X-GitHub-Api-Version": "2022-11-28"
-    }
-    dispatch_url = f"https://api.github.com/repos/{GITHUB_MAIN_REPO}/dispatches"
-    event_type = "code-committed-in-repo"
-    payload = {
-        "event_type": event_type,
-        "client_payload": {
-            "repository": "AI-SYSTEMS-REPO", # Можна додати більше деталей
-            "commit_sha": commit_sha or "N/A"
-        }
-    }
-    try:
-        response = requests.post(dispatch_url, headers=headers, json=payload, timeout=15)
-        response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
-        logger.info(f"[MCP API] Sent repository_dispatch event '{event_type}' to {GITHUB_MAIN_REPO} successfully.")
-    except requests.exceptions.RequestException as e:
-        logger.error(f"[MCP API] Failed to send repository_dispatch event '{event_type}' to {GITHUB_MAIN_REPO}: {e}")
-    except Exception as e:
-        logger.error(f"[MCP API] Unexpected error sending repository_dispatch: {e}")
-# -----------------------------------------------------
-
-# --- UPDATED: Commit function to call send_repository_dispatch --- 
-def commit_changes(file_path: str, commit_message: str) -> Optional[str]:
-    """Commits changes for a specific file and returns the commit SHA."""
-    try:
-        repo = Repo(REPO_DIR)
-        # Ensure the file exists relative to the repo root
-        relative_path = os.path.relpath(file_path, REPO_DIR)
-        if not os.path.exists(os.path.join(REPO_DIR, relative_path)):
-             logger.warning(f"[MCP-Git] File not found for commit: {relative_path}")
-             return None
-
-        # Check if the file is tracked and has changes
-        if relative_path in repo.untracked_files or relative_path in [item.a_path for item in repo.index.diff(None)] or repo.is_dirty(path=relative_path):
-            repo.index.add([relative_path])
-            if repo.is_dirty(): # Check again after adding, maybe only untracked
-                commit = repo.index.commit(commit_message)
-                logger.info(f"[MCP-Git] Committed changes for {relative_path}: {commit_message} (SHA: {commit.hexsha})")
-                # --- ADDED CALL --- 
-                send_repository_dispatch(commit.hexsha)
-                # ------------------
-                return commit.hexsha
-            else:
-                logger.info(f"[MCP-Git] No staged changes to commit for {relative_path} after add.")
-                # If there were no staged changes, maybe the latest commit already contains this state
-                try:
-                    latest_commit_sha = repo.head.commit.hexsha
-                    # Optionally, check if the file content matches the last commit version
-                    return latest_commit_sha # Return latest SHA if no new commit needed
-                except Exception:
-                    return None # Should not happen in a valid repo
-        else:
-            logger.info(f"[MCP-Git] No changes detected in {relative_path} to commit.")
-            # Return the latest commit SHA if no changes
-            try:
-                latest_commit_sha = repo.head.commit.hexsha
-                return latest_commit_sha
-            except Exception:
-                 return None # Should not happen in a valid repo
-
-    except GitCommandError as e:
-        logger.error(f"[MCP-Git] Error committing {relative_path}: {e}")
-        return None
-    except Exception as e:
-        logger.error(f"[MCP-Git] Unexpected error during commit for {relative_path}: {e}")
-        return None
-# ----------------------------------------------------------------
-
-@app.post("/report")
-async def receive_report(report_data: Dict):
-    # ... (existing report handling logic) ...
-    report_type = report_data.get("type")
-    file_path_relative = report_data.get("filename")
-    content = report_data.get("code")
-    task_id = report_data.get("task_id")
-    role = report_data.get("role")
-    status = report_data.get("status", "completed") # Assume completed if not specified
-    error_message = report_data.get("error")
-
-    logger.info(f"[MCP API] Received report for task {task_id} from {role}. Type: {report_type}, Status: {status}")
-
-    # Update task status first
-    if task_id:
-        update_task_status(task_id, status, error_message)
-
-    commit_sha = None # Variable to store commit SHA
-    if report_type == "code" and file_path_relative and content is not None:
-        # Ensure content is string
-        if not isinstance(content, str):
-            content = json.dumps(content, indent=2)
-            
-        # Format code blocks before writing
-        formatted_content = format_code_blocks(content)
-            
-        full_path = os.path.join(REPO_DIR, file_path_relative)
-        try:
-            os.makedirs(os.path.dirname(full_path), exist_ok=True)
-            async with aiofiles.open(full_path, "w", encoding="utf-8") as f:
-                await f.write(formatted_content)
-            logger.info(f"[MCP API] Updated file: {full_path}")
-            # Commit changes after writing the file
-            commit_message = f"{role.capitalize()}: Update {file_path_relative} (Task: {task_id})"
-            # --- UPDATED CALL to get commit_sha --- 
-            commit_sha = commit_changes(full_path, commit_message)
-            # --------------------------------------
-            if commit_sha:
-                 update_task_status(task_id, "committed") # Update status after successful commit
-                 # --- REMOVED send_repository_dispatch here, moved inside commit_changes --- 
-
-            # Auto-create tasks for tester and documenter after executor commits
-            if role == "executor" and commit_sha:
-                logger.info(f"[MCP API] Executor finished task {task_id}. Creating tasks for tester and documenter.")
-                # Create tester task
-                tester_task = create_task_data(
-                    role="tester",
-                    prompt=f"Create pytest tests for the code in {file_path_relative}. Ensure good coverage.",
-                    file_path=file_path_relative,
-                    depends_on=task_id
-                )
-                add_task(tester_task)
-                # Create documenter task
-                doc_task = create_task_data(
-                    role="documenter",
-                    prompt=f"Generate documentation (e.g., docstrings, README section) for the code in {file_path_relative}.",
-                    file_path=file_path_relative,
-                    depends_on=task_id
-                )
-                add_task(doc_task)
-
-        except Exception as e:
-            logger.error(f"[MCP API] Error writing or committing file {full_path}: {e}")
-            update_task_status(task_id, "error", f"Failed to write/commit: {e}")
-
-    # Broadcast update (include commit_sha if available)
-    update_payload = {"task_id": task_id, "status": status, "role": role}
-    if error_message:
-        update_payload["error"] = error_message
-    if commit_sha:
-        update_payload["commit_sha"] = commit_sha # Include SHA in broadcast
-        
-    await manager.broadcast(json.dumps({"type": "status_update", "data": update_payload}))
-
-    return {"message": "Report received successfully"}

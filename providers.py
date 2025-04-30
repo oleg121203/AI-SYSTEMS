@@ -34,15 +34,6 @@ except ImportError:
     groq = None # Define groq as None if import fails
 
 try:
-    from mistralai.async_client import MistralAsyncClient
-    from mistralai.models.chat_completion import ChatMessage
-    import mistralai # Ensure the base module is imported for qualified names
-except ImportError:
-    MistralAsyncClient = None
-    ChatMessage = None
-    mistralai = None # Define mistralai as None if import fails
-
-try:
     import anthropic
 except ImportError:
     anthropic = None
@@ -70,10 +61,6 @@ if cohere is None:
 if AsyncGroq is None or groq is None:
     logger.warning(
         "Модуль 'groq' не установлен. GroqProvider не будет работать. Установите его: pip install groq"
-    )
-if MistralAsyncClient is None or ChatMessage is None:
-     logger.warning(
-        "Модуль 'mistralai' не установлен. CodestralProvider не будет работать. Установите его: pip install mistralai"
     )
 if anthropic is None:
     logger.warning(
@@ -218,11 +205,14 @@ class BaseProvider(ABC):
                     GeminiProvider,
                     CohereProvider,
                     TogetherProvider,
-                    CodestralProvider,
                 ),
             )
 
-            if hasattr(self, "api_key") and self.api_key and not is_sdk_provider:
+            # Add CodestralProvider check separately for Authorization header
+            if isinstance(self, CodestralProvider) and self.api_key:
+                headers["Authorization"] = f"Bearer {self.api_key}"
+
+            if hasattr(self, "api_key") and self.api_key and not is_sdk_provider and not isinstance(self, CodestralProvider):
                 current_headers = self._session.headers if self._session else {}
                 if "Authorization" not in current_headers:
                     headers["Authorization"] = f"Bearer {self.api_key}"
@@ -500,24 +490,38 @@ class GroqProvider(BaseProvider):
 
             # Get proxy from config
             proxy_url = self.config.get("proxy")
-            proxies = None
+            http_client_instance = None # Initialize http_client_instance to None
             if proxy_url:
                 proxies = {"http://": proxy_url, "https://": proxy_url}
                 logger.info(f"Using proxy {proxy_url} for Groq client.")
-
-            # Pass proxies to AsyncHttpxClient if needed
-            http_client = httpx.AsyncClient(proxies=proxies) if proxies else None
+                # Create httpx.AsyncClient with proxies
+                http_client_instance = httpx.AsyncClient(proxies=proxies)
 
             try:
-                # Pass the custom http_client if proxies are set
-                self._client = self.groq.AsyncGroq( # Use self.groq
-                    api_key=self.api_key,
-                    http_client=http_client
-                )
+                # Pass the custom http_client_instance ONLY if it was created (proxies are set)
+                if http_client_instance:
+                     self._client = self.groq.AsyncGroq(
+                        api_key=self.api_key,
+                        http_client=http_client_instance # Pass the created client
+                    )
+                else:
+                    # Initialize without custom http_client if no proxy
+                    self._client = self.groq.AsyncGroq(api_key=self.api_key)
+
                 logger.info("Groq AsyncClient initialized successfully.")
             except Exception as e:
                 logger.error(f"Error initializing Groq AsyncClient: {e}")
-                # Fallback or re-raise depending on desired behavior
+                # REMOVED: Manual closing of http_client_instance. The Groq client should manage this.
+                # if http_client_instance:
+                #     try:
+                #         loop = asyncio.get_event_loop()
+                #         if loop.is_running():
+                #             loop.create_task(http_client_instance.aclose())
+                #         else:
+                #             loop.run_until_complete(http_client_instance.aclose())
+                #     except Exception as close_err:
+                #          logger.error(f"Error closing httpx client during Groq init failure: {close_err}")
+
                 raise ValueError(f"Failed to initialize Groq client: {e}")
         return self._client
 
@@ -1311,23 +1315,21 @@ class TogetherProvider(BaseProvider):
 
 
 class CodestralProvider(BaseProvider):
-    """Провайдер для Mistral Codestral (использует mistralai SDK)."""
+    """Провайдер для Mistral Codestral (использует HTTP API)."""
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         super().__init__(config)
         self.name = "codestral"
-        # Use typing.Type to hint at the class type if direct import fails analysis
-        self._client_type: Optional[TypingType[MistralAsyncClient]] = MistralAsyncClient if mistralai else None
-        self._message_type: Optional[TypingType[ChatMessage]] = ChatMessage if mistralai else None
-        self._client: Optional[MistralAsyncClient] = None
+        # Ensure endpoint is set, default if not provided
+        if not self.endpoint:
+            self.endpoint = "https://codestral.mistral.ai/v1"
+            logger.info(f"Codestral endpoint not specified, using default: {self.endpoint}")
+        else:
+            # Ensure endpoint doesn't end with a slash
+            self.endpoint = self.endpoint.rstrip('/')
+            logger.info(f"Codestral endpoint configured: {self.endpoint}")
 
     def setup(self) -> None:
-        if not self._client_type or not self._message_type:
-             logger.error(
-                "Компоненты 'mistralai' (MistralAsyncClient, ChatMessage) не установлены или не импортированы. CodestralProvider не может быть настроен."
-            )
-             return
-
         self.api_key = (
             self.config.get("api_key")
             or os.environ.get("MISTRAL_API_KEY")
@@ -1339,57 +1341,93 @@ class CodestralProvider(BaseProvider):
             )
         else:
             logger.info("API ключ для Codestral/Mistral найден.")
-            try:
-                # Initialize using the stored type
-                self._client = self._client_type(api_key=self.api_key)
-                logger.info("Mistral AI AsyncClient настроен успешно.")
-            except Exception as e:
-                logger.error(f"Ошибка инициализации Mistral AI AsyncClient: {e}")
-                self._client = None
-
-    # Return the base client type, but internal logic relies on _client
-    def get_client(self) -> MistralAsyncClient:
-        if not self._client:
-            raise ValueError(
-                "Клиент Mistral AI AsyncClient не инициализирован (проверьте API ключ и установку библиотеки)."
-            )
-        return self._client
+            # No client initialization needed for HTTP API
+            logger.info("CodestralProvider настроен на использование HTTP API.")
 
     async def generate(
         self,
-        model: str,
-        messages: List[Dict[str, str]],
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        model: Optional[str] = None,
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
     ) -> str:
-        # Check if the necessary types were imported correctly
-        if not self._client or not self._message_type:
-            return "Ошибка генерации: Клиент SDK не инициализирован." + " (Mistral)"
+        if not self.api_key:
+            return "Ошибка генерации: API ключ Codestral/Mistral не установлен."
+        if not self.endpoint:
+            return "Ошибка генерации: Endpoint для Codestral не установлен."
 
-        model_to_use = self.config.get("model", model)
+        model_to_use = model or self.get_default_model() or "codestral-latest" # Default model
         max_tokens_to_use = max_tokens or self.config.get("max_tokens", 4096)
         temperature_to_use = temperature if temperature is not None else self.config.get("temperature", 0.7)
 
-        try:
-            client = self.get_client()
-            # Use the stored message type for instantiation
-            messages_typed = [self._message_type(role=msg["role"], content=msg["content"]) for msg in messages]
-            response = await client.chat(
-                model=model_to_use,
-                messages=messages_typed,
-                max_tokens=max_tokens_to_use,
-                temperature=temperature_to_use,
-            )
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
 
-            if response.choices and response.choices[0].message:
-                return response.choices[0].message.content or ""
-            else:
-                logger.warning(f"Неожиданный ответ от Codestral API: {response}")
-                # Use the constant
-                return "Ошибка генерации: Не получен корректный ответ от API."
+        payload = {
+            "model": model_to_use,
+            "messages": messages,
+            "max_tokens": max_tokens_to_use,
+            "temperature": temperature_to_use,
+            "stream": False, # Assuming non-streaming for now
+        }
+        # Remove None values from payload
+        payload = {k: v for k, v in payload.items() if v is not None}
+
+        api_url = f"{self.endpoint}/chat/completions"
+
+        try:
+            session = await self.get_client_session()
+            # Headers are now managed by get_client_session
+            async with session.post(api_url, json=payload) as response:
+                response_data = await response.json()
+                if response.status == 200:
+                    if response_data.get("choices") and response_data["choices"][0].get(
+                        "message"
+                    ):
+                        return response_data["choices"][0]["message"].get("content", "")
+                    else:
+                        logger.warning(
+                            f"Ответ от Codestral API ({model_to_use}) не содержит ожидаемых данных: {response_data}"
+                        )
+                        return "Ошибка генерации: Не получен корректный ответ от Codestral API."
+                else:
+                    # Attempt to get error message from response
+                    error_message = response_data.get("message", "Unknown API error")
+                    logger.error(
+                        f"Codestral API HTTP Error ({model_to_use}, {response.status}): {error_message}"
+                    )
+                    response.raise_for_status() # Raise exception for bad status
+
+        except aiohttp.ClientResponseError as e:
+            # Error message already logged above if possible
+            error_message = e.message
+            try:
+                # Try to parse JSON error again just in case
+                response_data = await e.response.json()
+                error_message = response_data.get("message", e.message)
+            except Exception:
+                pass # Keep original message if JSON parsing fails
+            return f"Ошибка генерации (Codestral API {e.status}): {error_message}"
+        except aiohttp.ClientError as e:
+            logger.error(f"Ошибка соединения с Codestral API {self.endpoint}: {e}")
+            return f"Ошибка генерации: Не удалось подключиться к Codestral API ({e})"
         except Exception as e:
-            logger.error(f"Ошибка при генерации ответа Codestral ({model_to_use}): {e}")
-            return f"Ошибка генерации (Codestral): {e}"
+            logger.error(
+                f"Неожиданная ошибка при генерации ответа с Codestral ({model_to_use}): {e}",
+                exc_info=True,
+            )
+            return f"Ошибка генерации (Codestral): {str(e)}"
+
+    def get_available_models(self) -> List[str]:
+        # Return a default list or the configured model, as we can't query the API without SDK easily
+        known = ["codestral-latest", "codestral-2405"]
+        default_model = self.get_default_model()
+        if default_model and default_model not in known:
+            known.append(default_model)
+        return known
 
 
 try:
