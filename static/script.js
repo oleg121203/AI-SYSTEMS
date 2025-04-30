@@ -1465,7 +1465,12 @@ function updateButtonState(aiId, isRunning) {
 // --- Theme Handling ---
 function getEditorTheme(appTheme) {
   // Simple mapping: dark themes use 'vs-dark', light themes use 'vs-light'
-  return appTheme === "dark" || appTheme === "winter" || appTheme === "autumn"
+  // ADDED: midnight and forest to the dark theme list
+  return appTheme === "dark" ||
+    appTheme === "winter" ||
+    appTheme === "autumn" ||
+    appTheme === "midnight" ||
+    appTheme === "forest"
     ? "vs-dark"
     : "vs-light";
 }
