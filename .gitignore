@@ -333,3 +333,6 @@ ASALocalRun/
 
 # Environment variables file
 .env
+
+# Custom ignores
+logs/
