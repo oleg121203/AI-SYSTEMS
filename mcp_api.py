@@ -89,8 +89,9 @@ except Exception as e:
     logging.error(f"CRITICAL: Error loading configuration: {e}. Exiting.")
     exit(1)
 
-# --- CHANGE: Define GITHUB_MAIN_REPO ---
+# --- CHANGE: Define GITHUB_MAIN_REPO and GITHUB_TOKEN ---
 GITHUB_MAIN_REPO = config.get("github_repo", "YOUR_GITHUB_USERNAME/YOUR_REPO_NAME")
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN") # Get token from environment variable
 # --- END CHANGE ---
 
 # --- Logging Setup ---
@@ -343,8 +344,9 @@ async def periodic_chart_updates():
 async def write_and_commit_code(
     file_rel_path: str, content: str, subtask_id: Optional[str]
 ):
-    """Helper function to write file content and commit changes."""
+    """Helper function to write file content, commit changes, and trigger dispatch.""" # Updated docstring
     global processed_tasks_count  # Доступ к глобальному счетчику
+    commit_successful = False # Flag to track commit success
     async with file_write_lock:  # Используем блокировку
         if not is_safe_path(repo_path, file_rel_path):
             logger.error(
@@ -374,6 +376,7 @@ async def write_and_commit_code(
                     if repo.is_dirty(index=True, working_tree=False):
                         repo.index.commit(commit_message)
                         logger.info(f"[API-Git] Committed changes for: {file_rel_path}")
+                        commit_successful = True # Mark commit as successful
                         # Обновляем историю после успешного коммита
                         processed_tasks_count += 1
                         processed_history.append(processed_tasks_count)
@@ -394,6 +397,9 @@ async def write_and_commit_code(
                         logger.info(
                             f"[API-Git] No changes staged for commit for: {file_rel_path}"
                         )
+                        # Consider if writing without changes should still trigger dispatch?
+                        # For now, only trigger if a commit was made.
+                        commit_successful = True # Or False depending on desired logic
 
                 # --- CHANGE: Use GitCommandError ---
                 except GitCommandError as e:
@@ -404,6 +410,29 @@ async def write_and_commit_code(
                     logger.error(
                         f"[API-Git] Unexpected error during commit for {file_rel_path}: {e}"
                     )
+
+            # --- CHANGE: Trigger repository_dispatch after successful commit ---
+            if commit_successful and GITHUB_TOKEN and GITHUB_MAIN_REPO != "YOUR_GITHUB_USERNAME/YOUR_REPO_NAME":
+                logger.info(f"[API-GitHub] Triggering repository_dispatch for {GITHUB_MAIN_REPO}")
+                headers = {
+                    "Authorization": f"token {GITHUB_TOKEN}",
+                    "Accept": "application/vnd.github.v3+json",
+                }
+                data = {"event_type": "code-committed-in-repo", "client_payload": {"file": file_rel_path, "subtask_id": subtask_id}}
+                dispatch_url = f"https://api.github.com/repos/{GITHUB_MAIN_REPO}/dispatches"
+                try:
+                    response = requests.post(dispatch_url, headers=headers, json=data, timeout=15)
+                    response.raise_for_status() # Raise exception for bad status codes
+                    logger.info(f"[API-GitHub] Successfully triggered repository_dispatch event 'code-committed-in-repo' for {file_rel_path}")
+                except requests.exceptions.RequestException as e:
+                    logger.error(f"[API-GitHub] Failed to trigger repository_dispatch: {e}")
+                except Exception as e:
+                     logger.error(f"[API-GitHub] Unexpected error during repository_dispatch: {e}")
+            elif not GITHUB_TOKEN:
+                 logger.warning("[API-GitHub] GITHUB_TOKEN not set. Skipping repository_dispatch.")
+            elif GITHUB_MAIN_REPO == "YOUR_GITHUB_USERNAME/YOUR_REPO_NAME":
+                 logger.warning("[API-GitHub] github_repo not configured in config.json. Skipping repository_dispatch.")
+            # --- END CHANGE ---
 
             return True
         except OSError as e:
@@ -564,7 +593,7 @@ def get_progress_chart_data():
     
     # Формуємо підсумкову точку даних з повною міткою часу
     return {
-        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%М:%S"),
         "completed_tasks": completed_tasks_count,
         "successful_tests": successful_tests_count,
         "git_actions": current_git_actions,
@@ -987,7 +1016,7 @@ async def update_ai_provider(data: dict):
         except Exception as e:
             logger.error(f"Failed to write updated config.json: {e}")
             raise HTTPException(
-                status_code=500, detail="Failed to save updated configuration file."
+                status_code(500), detail="Failed to save updated configuration file."
             )
     else:
         logger.info(message)
@@ -1065,7 +1094,7 @@ async def update_config(data: dict):
         except Exception as e:
             logger.error(f"Failed to write updated config.json: {e}")
             raise HTTPException(
-                status_code=500, detail="Failed to save updated configuration file."
+                status_code(500), detail="Failed to save updated configuration file."
             )
     else:
         logger.info("No configuration changes detected in update request.")
@@ -1111,7 +1140,7 @@ async def update_config_item(data: dict):
                 # Якщо ключа раніше не було, видаляємо його
                 config.pop(key, None)
             raise HTTPException(
-                status_code=500, detail=f"Failed to save updated configuration file for '{key}'."
+                status_code(500), detail=f"Failed to save updated configuration file for '{key}'."
             )
     else:
         logger.info(f"Configuration item '{key}' already has the value '{value}'. No change.")

@@ -260,24 +260,63 @@ def parse_json_from_response(response: str) -> Dict[str, Any]:
     import json
     import re
 
-    # Ищем JSON в ответе
+    # Покращений регулярний вираз для пошуку JSON: шукаємо як у блоках коду, так і без них
+    # 1. Спочатку шукаємо у блоці ```json ... ```
     json_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", response)
 
     if json_match:
-        json_str = json_match.group(1)
+        json_str = json_match.group(1).strip()
     else:
-        # Если нет блока кода, пробуем найти JSON без маркеров
-        json_match = re.search(r"(\{[\s\S]*\})", response)
+        # 2. Якщо немає блоку коду, шукаємо JSON об'єкт або масив напряму
+        json_match = re.search(r"(\{[\s\S]*\}|\[[\s\S]*\])", response)
         if json_match:
-            json_str = json_match.group(1)
+            json_str = json_match.group(1).strip()
         else:
+            # Якщо жоден метод не спрацював, логуємо помилку з оригінальною відповіддю
+            logging.error(f"JSON не знайдено у відповіді: {response[:200]}...")
             raise ValueError("JSON не найден в ответе")
 
     try:
+        # Додаємо логування для відлагодження
+        logging.debug(f"Extracted JSON string: {json_str[:100]}...")
         result = json.loads(json_str)
         return result
     except json.JSONDecodeError as e:
+        # Додаємо більше інформації про помилку і оригінальний рядок
+        logging.error(f"Помилка парсингу JSON: {e}. JSON рядок: {json_str[:200]}")
         raise ValueError(f"Ошибка парсинга JSON: {e}")
+
+
+# --- CHANGE: Add format_code_blocks function ---
+def format_code_blocks(text: str) -> str:
+    """
+    Ensures there is a space after the language identifier in markdown code blocks.
+    Example: ```python -> ``` python
+    Handles blocks with or without language identifiers.
+    """
+    # Pattern to find ``` followed by non-whitespace characters (language) and then the code block start
+    # It captures the language identifier
+    # Backslashes are double-escaped for JSON embedding (\\ becomes \\\\)
+    pattern = r"(```)(\\S+)(\\s*\\n)"
+
+    # Replacement function
+    def replace_func(match):
+        # match.group(1) is ```
+        # match.group(2) is the language identifier (e.g., python)
+        # match.group(3) is the whitespace/newline after the language
+        # Ensure there's a space before the language identifier
+        return f"{match.group(1)} {match.group(2)}{match.group(3)}"
+
+    # Apply the substitution
+    formatted_text = re.sub(pattern, replace_func, text)
+
+    # Handle code blocks without language identifiers (ensure ``` is followed by newline)
+    # This might be less common but good to handle edge cases
+    # Backslashes are double-escaped for JSON embedding (\\ becomes \\\\)
+    formatted_text = re.sub(r"(```)(?!\\s)(\\S)", r"\\1 \\2", formatted_text)
+
+    return formatted_text
+# --- END CHANGE ---
 
 
 async def process_file_tasks(structure: Dict[str, Any], mcp_api_url: str):
@@ -342,50 +381,65 @@ def extract_files_from_structure(structure: Dict[str, Any]) -> Dict[str, Any]:
                     "template": node.get("template", ""),
                     "code": node.get("code", ""),
                 }
-            else:
-                # Это директория или другой объект
+            elif "type" in node and node["type"] == "directory":
+                 # Это директория
+                 dir_name = node.get("name", "")
+                 # Construct path correctly, handling root case
+                 new_path = os.path.join(current_path, dir_name) if current_path else dir_name
+                 if "children" in node and isinstance(node["children"], list):
+                     for child in node["children"]:
+                         extract_from_node(child, new_path) # Recurse into children
+            # Handle root node or other dictionary structures if needed
+            # This assumes the structure primarily uses 'type': 'file'/'directory'
+            # and nests children within directories.
+            else: # If not file or directory, assume it's a container or root
+                # Iterate through values assuming they might be file/dir nodes or sub-structures
                 for key, value in node.items():
-                    if key == "children" and isinstance(value, list):
-                        # Обрабатываем детей
-                        for child in value:
-                            if "name" in child:
-                                new_path = current_path + child["name"] + "/"
-                                extract_from_node(child, new_path)
-                            else:
-                                extract_from_node(child, current_path)
-                    elif isinstance(value, (dict, list)):
-                        extract_from_node(value, current_path)
+                     # Avoid recursing on simple metadata if structure is mixed
+                     if isinstance(value, (dict, list)):
+                         # Decide if 'key' should be part of the path - depends on structure definition
+                         # Assuming keys are not part of path unless node['name'] is used
+                         extract_from_node(value, current_path) # Recurse on value
 
+        elif isinstance(node, list):
+             # If the node is a list (e.g., root is a list of items)
+             for item in node:
+                 extract_from_node(item, current_path)
+
+    # Start the extraction from the root structure
     extract_from_node(structure)
     return files
 
 
-async def wait_for_service(url, timeout=60):
-    """Чекає, поки сервіс стане доступним."""
-    start_time = asyncio.get_event_loop().time()
-    async with aiohttp.ClientSession() as session:
-        while asyncio.get_event_loop().time() - start_time < timeout:
-            try:
-                async with session.get(url, timeout=5) as resp:
-                    if resp.status < 400:
-                        logger.info({"message": f"Service at {url} is available"})
+async def wait_for_service(url: str, timeout: int = 60) -> bool:
+    """Waits for a service to become available at the given URL."""
+    start_time = time.time()
+    logger.info({"message": f"Waiting for service at {url}..."})
+    while time.time() - start_time < timeout:
+        try:
+            async with aiohttp.ClientSession() as session:
+                # Use a simple GET or HEAD request to check availability
+                async with session.get(url, timeout=5) as response:
+                    if response.status < 400: # Consider 2xx/3xx as success
+                        logger.info({"message": f"Service at {url} is available."})
                         return True
                     else:
-                        logger.warning(
-                            {
-                                "message": f"Service at {url} returned status {resp.status}"
-                            }
-                        )
-            except aiohttp.ClientError as e:
-                logger.warning({"message": f"Connection to {url} failed: {str(e)}"})
-            except Exception as e:
-                logger.warning(
-                    {"message": f"Unexpected error connecting to {url}: {str(e)}"}
-                )
-            await asyncio.sleep(2)
+                        logger.debug({"message": f"Service at {url} returned status {response.status}"})
+        except aiohttp.ClientConnectorError as e:
+             logger.debug({"message": f"Connection attempt to {url} failed: {str(e)}"})
+        except aiohttp.ClientError as e: # Catch other client errors like timeouts
+            logger.warning({"message": f"Error checking service {url}: {str(e)}"})
+        except asyncio.TimeoutError: # Specifically catch asyncio timeouts if session.get raises it
+             logger.debug({"message": f"Connection attempt to {url} timed out."})
+        except Exception as e:
+            logger.warning(
+                {"message": f"Unexpected error connecting to {url}: {str(e)}"}
+            )
+        # Wait before retrying
+        await asyncio.sleep(2)
 
-        logger.error({"message": f"Service at {url} not available after {timeout}s"})
-        return False
+    logger.error({"message": f"Service at {url} not available after {timeout}s"})
+    return False
 
 
 async def apply_request_delay(ai_identifier: str, role: Optional[str] = None):

@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Tuple, Union, Type as TypingType
 
@@ -39,7 +40,7 @@ except ImportError:
     anthropic = None
 
 
-# Определяем логгер *перед* его использованием
+# Initialize logger before using it
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
@@ -48,23 +49,23 @@ logger = logging.getLogger(__name__)
 # Log warnings for missing optional dependencies
 if Together is None:
     logger.warning(
-        "Модуль 'together' не установлен. TogetherProvider не будет работать. Установите его: pip install together"
+        "Module 'together' is not installed. TogetherProvider will not work. Install it with: pip install together"
     )
 if genai is None:
      logger.warning(
-        "Модуль 'google-generativeai' не установлен. GeminiProvider не будет работать. Установите его: pip install google-generativeai"
+        "Module 'google-generativeai' is not installed. GeminiProvider will not work. Install it with: pip install google-generativeai"
     )
 if cohere is None:
     logger.warning(
-        "Модуль 'cohere' не установлен. CohereProvider не будет работать. Установите его: pip install cohere"
+        "Module 'cohere' is not installed. CohereProvider will not work. Install it with: pip install cohere"
     )
 if AsyncGroq is None or groq is None:
     logger.warning(
-        "Модуль 'groq' не установлен. GroqProvider не будет работать. Установите его: pip install groq"
+        "Module 'groq' is not installed. GroqProvider will not work. Install it with: pip install groq"
     )
 if anthropic is None:
     logger.warning(
-        "Модуль 'anthropic' не установлен. AnthropicProvider не будет работать. Установите его: pip install anthropic"
+        "Module 'anthropic' is not installed. AnthropicProvider will not work. Install it with: pip install anthropic"
     )
 
 
@@ -153,6 +154,10 @@ class ProviderFactory:
             return TogetherProvider(provider_config)
         elif provider_type == "codestral":
             return CodestralProvider(provider_config)
+        elif provider_type == "gemini3":
+            return Gemini3Provider(provider_config)
+        elif provider_type == "gemini4":
+            return Gemini4Provider(provider_config)
         else:
             raise ValueError(f"Неподдерживаемый тип провайдера: {provider_type}")
 
@@ -532,55 +537,55 @@ class GroqProvider(BaseProvider):
         return self._client
 
     def select_optimal_model(self, prompt: str, requested_model: Optional[str] = None) -> str:
-        """Обирає оптимальну модель в залежності від складності запиту та вказаної моделі.
+        """Selects the optimal model based on prompt complexity and specified model.
         
         Args:
-            prompt: Текст запиту
-            requested_model: Модель, що була запрошена (може бути None)
+            prompt: The input prompt text
+            requested_model: The requested model (can be None)
             
         Returns:
-            str: Ім'я моделі для використання
+            str: The model name to use
         """
-        # Якщо вказана конкретна модель, використовуємо її
+        # If a specific model is requested, use it
         if requested_model:
             return requested_model
             
-        # Отримуємо модель за замовчуванням з конфігурації
+        # Get default model from configuration
         default_model = self.get_default_model()
         if default_model:
             return default_model
             
-        # Оцінюємо складність запиту на основі довжини
+        # Evaluate prompt complexity based on length
         prompt_length = len(prompt)
         
         if prompt_length < 500:
-            # Для коротких запитів використовуємо легку модель
+            # For short prompts, use a lightweight model
             return self._model_tiers["lightweight"][0]
         elif prompt_length < 2000:
-            # Для середніх запитів використовуємо балансну модель
+            # For medium prompts, use a balanced model
             return self._model_tiers["balanced"][0]
         else:
-            # Для складних запитів використовуємо потужну модель
+            # For complex prompts, use a powerful model
             return self._model_tiers["powerful"][0]
     
     def split_complex_prompt(self, prompt: str, max_length: int = 2000) -> List[str]:
-        """Розбиває складний запит на менші частини для оптимізації використання ресурсів.
+        """Splits a complex prompt into smaller parts to optimize resource usage.
         
         Args:
-            prompt: Вхідний запит
-            max_length: Максимальна довжина кожної частини
+            prompt: The input prompt
+            max_length: Maximum length of each part
             
         Returns:
-            List[str]: Список частин запиту
+            List[str]: List of prompt parts
         """
-        # Якщо запит короткий, повертаємо його як є
+        # If the prompt is short, return it as is
         if len(prompt) <= max_length:
             return [prompt]
             
-        # Спроба розділити за абзацами
+        # Try to split by paragraphs
         paragraphs = prompt.split('\n\n')
         
-        # Збираємо частини, не перевищуючи максимальну довжину
+        # Collect parts without exceeding the maximum length
         parts = []
         current_part = ""
         
@@ -595,7 +600,7 @@ class GroqProvider(BaseProvider):
                     parts.append(current_part)
                     current_part = paragraph
                 else:
-                    # Якщо параграф довший за max_length, розбиваємо за реченнями
+                    # If paragraph is longer than max_length, split by sentences
                     sentences = re.split(r'(?<=[.!?])\s+', paragraph)
                     current_sentence_group = ""
                     
@@ -610,7 +615,7 @@ class GroqProvider(BaseProvider):
                                 parts.append(current_sentence_group)
                                 current_sentence_group = sentence
                             else:
-                                # Якщо речення задовге, розбиваємо його просто на частини
+                                # If sentence is too long, split it into chunks
                                 sentence_parts = [sentence[i:i+max_length] 
                                                   for i in range(0, len(sentence), max_length)]
                                 parts.extend(sentence_parts)
@@ -618,7 +623,7 @@ class GroqProvider(BaseProvider):
                     if current_sentence_group:
                         parts.append(current_sentence_group)
         
-        # Додаємо останню частину, якщо вона є
+        # Add the last part if it exists
         if current_part:
             parts.append(current_part)
             
@@ -633,9 +638,9 @@ class GroqProvider(BaseProvider):
         temperature: Optional[float] = None,
     ) -> str:
         if not self.groq or not self.api_key: # Check self.groq
-            return "Ошибка генерации: провайдер Groq не настроен."
+            return "Error: Groq provider not configured."
 
-        # Використовуємо вибір оптимальної моделі
+        # Use optimal model selection
         model_to_use = self.select_optimal_model(prompt, model)
         max_tokens_to_use = max_tokens or self.config.get("max_tokens") or 4096
         temperature_to_use = (
@@ -644,29 +649,29 @@ class GroqProvider(BaseProvider):
             else self.config.get("temperature", 0.7)
         )
 
-        # Додамо тут флаг для прискорення роботи
+        # Flag for performance optimization
         enable_optimization = self.config.get("enable_optimization", True)
         
-        # Якщо запит занадто складний і увімкнена оптимізація, розбиваємо його
+        # If the prompt is too complex and optimization is enabled, split it
         if enable_optimization and len(prompt) > 2000:
             parts = self.split_complex_prompt(prompt)
             
-            # Якщо запит був розбитий на частини
+            # If the prompt was split into parts
             if len(parts) > 1:
                 logger.info(f"Prompt split into {len(parts)} parts for optimization")
                 responses = []
                 
-                # Обробляємо кожну частину
+                # Process each part
                 for i, part in enumerate(parts):
                     messages = []
                     
-                    # Для першої частини додаємо системний промпт, якщо він є
+                    # For the first part, add system prompt if it exists
                     if i == 0 and system_prompt:
                         messages.append({"role": "system", "content": system_prompt})
                     
-                    # Для всіх частин додаємо контекст
+                    # Add context for all parts
                     if i > 0:
-                        part_prompt = f"Це частина {i+1} з {len(parts)} запиту. " + part
+                        part_prompt = f"This is part {i+1} of {len(parts)} of the request. " + part
                     else:
                         part_prompt = part
                         
@@ -684,17 +689,17 @@ class GroqProvider(BaseProvider):
                             responses.append(response.choices[0].message.content or "")
                         else:
                             logger.warning(
-                                f"Ответ от Groq для части {i+1} не содержит ожидаемых данных"
+                                f"Response from Groq for part {i+1} does not contain expected data"
                             )
                             responses.append("")
                     except Exception as e:
-                        logger.error(f"Ошибка при обработке части {i+1}: {e}")
-                        responses.append(f"[Ошибка при обработке части {i+1}]")
+                        logger.error(f"Error processing part {i+1}: {e}")
+                        responses.append(f"[Error processing part {i+1}]")
                 
-                # Обʼєднуємо результати
+                # Combine results
                 return "\n\n".join(responses)
         
-        # Стандартний шлях - обробка запиту без розбиття
+        # Standard path - process the prompt without splitting
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
@@ -712,20 +717,20 @@ class GroqProvider(BaseProvider):
                 return response.choices[0].message.content or ""
             else:
                 logger.warning(
-                    f"Ответ от Groq не содержит ожидаемых данных: {response}"
+                    f"Response from Groq does not contain expected data: {response}"
                 )
-                return "Ошибка генерации: Не получен корректный ответ от API."
+                return "Error: No valid response received from API."
         except self.groq.APIError as e: # Use self.groq
             logger.error(
                 f"Groq API Error ({model_to_use}): Status={e.status_code}, Message={e.message}"
             )
-            return f"Ошибка генерации (Groq API {e.status_code}): {e.message}"
+            return f"Error (Groq API {e.status_code}): {e.message}"
         except Exception as e:
             logger.error(
-                f"Ошибка при генерации ответа с помощью Groq ({model_to_use}): {e}",
+                f"Error generating response with Groq ({model_to_use}): {e}",
                 exc_info=True,
             )
-            return f"Ошибка генерации: {str(e)}"
+            return f"Error: {str(e)}"
 
     def get_available_models(self) -> List[str]:
         # Додаємо модель llama-3.3-70b-versatile із прикладу запиту
@@ -1325,28 +1330,29 @@ class GeminiProvider(BaseProvider):
                         f" Block Reason: {response.prompt_feedback.block_reason}"
                     )
                 logger.warning(
-                    f"Ответ от Gemini ({model_to_use}) не содержит текст.{block_reason} Response: {response}"
+                    f"Response from Gemini ({model_to_use}) does not contain expected text.{block_reason} Response: {response}"
                 )
                 return (
-                    f"Ошибка генерации: Не получен текст от Gemini API.{block_reason}"
+                    f"Error: No text received from Gemini API.{block_reason}"
                 )
         except self.genai.types.generation_types.StopCandidateException as e:
             logger.error(f"Gemini Generation Stopped ({model_to_use}): {e}")
-            return f"Ошибка генерации (Gemini Stop): {e}"
+            return f"Error (Gemini Stop): {e}"
         except TypeError as e:
             logger.error(
-                f"TypeError при вызове Gemini API ({model_to_use}): {e}", exc_info=True
+                f"TypeError in Gemini API call ({model_to_use}): {e}", exc_info=True
             )
-            return f"Ошибка генерации (TypeError): {e}"
+            return f"Error (TypeError): {e}"
         except Exception as e:
             error_detail = str(e)
             if hasattr(e, "message"):
                 error_detail = e.message
             logger.error(
-                f"Ошибка при генерации ответа с помощью Gemini ({model_to_use}): {error_detail}",
+                f"Error generating response with Gemini ({model_to_use}): {error_detail}",
                 exc_info=True,
             )
-            return f"Ошибка генерации: {error_detail}"
+            # Return a specific error code that can be used to trigger fallback
+            return f"ERROR_QUOTA_EXCEEDED: {error_detail}" if "quota" in error_detail.lower() else f"Error: {error_detail}"
 
     def get_available_models(self) -> List[str]:
         known = ["gemini-1.5-pro-latest", "gemini-1.5-flash-latest", "gemini-pro"]
@@ -1483,19 +1489,35 @@ class CodestralProvider(BaseProvider):
             logger.info(f"Codestral endpoint configured: {self.endpoint}")
 
     def setup(self) -> None:
-        self.api_key = (
-            self.config.get("api_key")
-            or os.environ.get("MISTRAL_API_KEY")
-            or os.environ.get("CODESTRAL_API_KEY")
-        )
-        if not self.api_key:
-            logger.error(
-                "API ключ для Codestral/Mistral не найден ни в конфигурации, ни в MISTRAL_API_KEY/CODESTRAL_API_KEY."
+        # Check if this is the codestral2 provider and use its specific API key
+        if self.name == "codestral2":
+            self.api_key = (
+                self.config.get("api_key")
+                or os.environ.get("CODESTRAL2_API_KEY")
+                or os.environ.get("MISTRAL_API_KEY")
             )
+            if self.api_key:
+                logger.info("API key for Codestral2 found.")
+            else:
+                logger.error(
+                    "API key for Codestral2 not found in configuration or CODESTRAL2_API_KEY environment variable."
+                )
         else:
-            logger.info("API ключ для Codestral/Mistral найден.")
-            # No client initialization needed for HTTP API
-            logger.info("CodestralProvider настроен на использование HTTP API.")
+            # Regular codestral provider
+            self.api_key = (
+                self.config.get("api_key")
+                or os.environ.get("MISTRAL_API_KEY")
+                or os.environ.get("CODESTRAL_API_KEY")
+            )
+            if not self.api_key:
+                logger.error(
+                    "API key for Codestral/Mistral not found in configuration or MISTRAL_API_KEY/CODESTRAL_API_KEY."
+                )
+            else:
+                logger.info("API key for Codestral/Mistral found.")
+                
+        # No client initialization needed for HTTP API
+        logger.info("CodestralProvider configured to use HTTP API.")
 
     async def generate(
         self,
@@ -1581,6 +1603,186 @@ class CodestralProvider(BaseProvider):
         if default_model and default_model not in known:
             known.append(default_model)
         return known
+
+
+class Gemini3Provider(BaseProvider):
+    """Провайдер для Google Gemini3 через прямі API запити."""
+
+    def __init__(self, config: Optional[Dict[str, Any]] = None):
+        super().__init__(config)
+        self.name = "gemini3"
+        self.api_key = os.environ.get("GEMINI3_API_KEY")  # Використовуємо змінну оточення
+
+    def setup(self) -> None:
+        logger.info("Gemini3Provider налаштований через прямі API запити")
+        if not self.api_key:
+            logger.error("API ключ для Gemini3 не встановлено в змінній оточення GEMINI3_API_KEY")
+
+    async def generate(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        model: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
+    ) -> str:
+        model_to_use = model or self.get_default_model() or "gemini-2.0-flash"
+        max_tokens_to_use = max_tokens or self.config.get("max_tokens", 4096)
+        temperature_to_use = temperature if temperature is not None else self.config.get("temperature", 0.7)
+
+        # Формуємо вміст запиту
+        content = {"parts": [{"text": prompt}]}
+        
+        # Додаємо системний промпт, якщо він є
+        if (system_prompt):
+            payload = {
+                "contents": [
+                    {"parts": [{"text": system_prompt}]},
+                    content
+                ],
+                "generationConfig": {
+                    "maxOutputTokens": max_tokens_to_use,
+                    "temperature": temperature_to_use
+                }
+            }
+        else:
+            payload = {
+                "contents": [content],
+                "generationConfig": {
+                    "maxOutputTokens": max_tokens_to_use,
+                    "temperature": temperature_to_use
+                }
+            }
+
+        api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_to_use}:generateContent?key={self.api_key}"
+
+        try:
+            session = await self.get_client_session()
+            async with session.post(api_url, json=payload) as response:
+                if response.status == 200:
+                    response_data = await response.json()
+                    
+                    # Витягуємо текст відповіді
+                    if (response_data.get("candidates") and 
+                        response_data["candidates"][0].get("content") and 
+                        response_data["candidates"][0]["content"].get("parts")):
+                        
+                        text_parts = []
+                        for part in response_data["candidates"][0]["content"]["parts"]:
+                            if part.get("text"):
+                                text_parts.append(part["text"])
+                        
+                        return "".join(text_parts)
+                    else:
+                        logger.warning(
+                            f"Відповідь від Gemini3 API не містить очікуваних даних: {response_data}"
+                        )
+                        return "Помилка генерації: Не отримано коректну відповідь від Gemini3 API."
+                else:
+                    error_data = await response.json()
+                    error_message = error_data.get("error", {}).get("message", "Невідома помилка")
+                    logger.error(f"Gemini3 API HTTP помилка ({response.status}): {error_message}")
+                    return f"Помилка генерації (Gemini3 API {response.status}): {error_message}"
+                    
+        except aiohttp.ClientError as e:
+            logger.error(f"Помилка з'єднання з Gemini3 API: {e}")
+            return f"Помилка генерації: Не вдалося підключитися до Gemini3 API ({e})"
+        except Exception as e:
+            logger.error(f"Несподівана помилка при генерації відповіді з Gemini3: {e}", exc_info=True)
+            return f"Помилка генерації: {str(e)}"
+
+    def get_available_models(self) -> List[str]:
+        return ["gemini-2.0-flash", "gemini-2.0-pro", "gemini-1.5-flash", "gemini-1.5-pro"]
+
+
+class Gemini4Provider(BaseProvider):
+    """Провайдер для Google Gemini4 через прямі API запити, використовується для AI2 документатора."""
+
+    def __init__(self, config: Optional[Dict[str, Any]] = None):
+        super().__init__(config)
+        self.name = "gemini4"
+        self.api_key = os.environ.get("GEMINI4_API_KEY")  # Використовуємо змінну оточення
+
+    def setup(self) -> None:
+        logger.info("Gemini4Provider налаштований через прямі API запити для документації")
+        if not self.api_key:
+            logger.error("API ключ для Gemini4 не встановлено в змінній оточення GEMINI4_API_KEY")
+
+    async def generate(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        model: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
+    ) -> str:
+        model_to_use = model or self.get_default_model() or "gemini-2.0-pro"
+        max_tokens_to_use = max_tokens or self.config.get("max_tokens", 4096)
+        temperature_to_use = temperature if temperature is not None else self.config.get("temperature", 0.7)
+
+        # Формуємо вміст запиту
+        content = {"parts": [{"text": prompt}]}
+        
+        # Додаємо системний промпт, якщо він є
+        if (system_prompt):
+            payload = {
+                "contents": [
+                    {"parts": [{"text": system_prompt}]},
+                    content
+                ],
+                "generationConfig": {
+                    "maxOutputTokens": max_tokens_to_use,
+                    "temperature": temperature_to_use
+                }
+            }
+        else:
+            payload = {
+                "contents": [content],
+                "generationConfig": {
+                    "maxOutputTokens": max_tokens_to_use,
+                    "temperature": temperature_to_use
+                }
+            }
+
+        api_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_to_use}:generateContent?key={self.api_key}"
+
+        try:
+            session = await self.get_client_session()
+            async with session.post(api_url, json=payload) as response:
+                if response.status == 200:
+                    response_data = await response.json()
+                    
+                    # Витягуємо текст відповіді
+                    if (response_data.get("candidates") and 
+                        response_data["candidates"][0].get("content") and 
+                        response_data["candidates"][0]["content"].get("parts")):
+                        
+                        text_parts = []
+                        for part in response_data["candidates"][0]["content"]["parts"]:
+                            if part.get("text"):
+                                text_parts.append(part["text"])
+                        
+                        return "".join(text_parts)
+                    else:
+                        logger.warning(
+                            f"Відповідь від Gemini4 API не містить очікуваних даних: {response_data}"
+                        )
+                        return "Помилка генерації: Не отримано коректну відповідь від Gemini4 API."
+                else:
+                    error_data = await response.json()
+                    error_message = error_data.get("error", {}).get("message", "Невідома помилка")
+                    logger.error(f"Gemini4 API HTTP помилка ({response.status}): {error_message}")
+                    return f"Помилка генерації (Gemini4 API {response.status}): {error_message}"
+                    
+        except aiohttp.ClientError as e:
+            logger.error(f"Помилка з'єднання з Gemini4 API: {e}")
+            return f"Помилка генерації: Не вдалося підключитися до Gemini4 API ({e})"
+        except Exception as e:
+            logger.error(f"Несподівана помилка при генерації відповіді з Gemini4: {e}", exc_info=True)
+            return f"Помилка генерації: {str(e)}"
+
+    def get_available_models(self) -> List[str]:
+        return ["gemini-2.0-pro", "gemini-1.5-pro", "gemini-1.5-flash"]
 
 
 try:
