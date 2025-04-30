@@ -17,114 +17,197 @@
   --input-bg: #ffffff;
   --input-border: #ced4da;
   --input-text: #495057;
+  --button-bg: var(--primary-color);
+  --button-text: white;
+  --button-hover-bg: #0056b3; /* Darker primary */
+  --button-active-bg: #004085; /* Even darker primary */
+  --button-shadow: 0 3px 5px rgba(0, 0, 0, 0.2); /* Base shadow */
+  --button-inset-shadow: inset 0 1px 2px rgba(255, 255, 255, 0.4),
+    inset 0 -1px 1px rgba(0, 0, 0, 0.2); /* Subtle 3D inset */
+  --button-hover-shadow: 0 4px 7px rgba(0, 0, 0, 0.3);
+  --button-active-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.3); /* Pressed effect */
+  --panel-shadow: 0 5px 15px rgba(0, 0, 0, 0.15); /* Slightly deeper panel shadow */
 }
 
 /* Dark Theme Base (applied by default or via JS) */
 body[data-theme="dark"] {
-  --bg-color: #121212; /* Darker background */
-  --container-bg: #1e1e1e; /* Slightly lighter container */
-  --text-color: #e0e0e0;
-  --heading-color: #bb86fc; /* Purple accent */
-  --border-color: #333333; /* More subtle border */
-  --primary-color: #bb86fc;
-  --secondary-color: #a0a0a0; /* Lighter secondary text */
-  --tertiary-color: #03dac6; /* Teal accent */
-  --success-color: #4caf50;
-  --warning-color: #ffeb3b;
-  --error-color: #cf6679; /* Softer red */
-  --editor-bg: #1e1e1e;
-  --panel-shadow: 0 4px 12px rgba(0, 0, 0, 0.3); /* Stronger shadow for dark */
-  --button-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
-  --input-bg: #2c2c2c;
-  --input-border: #444444;
-  --input-text: #e0e0e0;
+  --bg-color: #0d0d0d; /* Darker background */
+  --container-bg: #1a1a1a; /* Slightly lighter container */
+  --text-color: #f0f0f0; /* Lighter text */
+  --heading-color: #c792ea; /* Adjusted purple */
+  --border-color: #404040; /* More visible border */
+  --primary-color: #c792ea;
+  --secondary-color: #a0a0a0;
+  --tertiary-color: #82aaff; /* Adjusted blue */
+  --success-color: #c3e88d; /* Adjusted green */
+  --warning-color: #ffcb6b; /* Adjusted yellow */
+  --error-color: #f07178; /* Adjusted red */
+  --editor-bg: #1a1a1a;
+  --panel-shadow: 0 6px 18px rgba(0, 0, 0, 0.5); /* Stronger shadow */
+  --input-bg: #2a2a2a;
+  --input-border: #555555;
+  --input-text: #f0f0f0;
+
+  /* Dark Theme Button Colors & Effects */
+  --button-bg: linear-gradient(
+    to bottom,
+    #5a4f6e,
+    #4e4260
+  ); /* Gradient using theme tones */
+  --button-text: #f0f0f0;
+  --button-hover-bg: linear-gradient(to bottom, #6a5f7e, #5e5270);
+  --button-active-bg: linear-gradient(
+    to top,
+    #5a4f6e,
+    #4e4260
+  ); /* Invert gradient for press */
+  --button-shadow: 0 3px 5px rgba(0, 0, 0, 0.4);
+  --button-inset-shadow: inset 0 1px 2px rgba(255, 255, 255, 0.1),
+    inset 0 -1px 1px rgba(0, 0, 0, 0.4);
+  --button-hover-shadow: 0 4px 7px rgba(0, 0, 0, 0.5);
+  --button-active-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.6);
 }
 
 /* Specific Dark Themes - Adjust colors as desired */
 [data-theme="winter"] {
   /* Dark Blue/Winter */
-  --bg-color: #0a192f; /* Deep blue */
-  --container-bg: #172a45; /* Slightly lighter blue */
-  --text-color: #ccd6f6; /* Light blueish text */
-  --heading-color: #64ffda; /* Aqua accent */
-  --border-color: #233554;
-  --primary-color: #64ffda;
-  --secondary-color: #8892b0;
-  --tertiary-color: #ffab70; /* Orange accent */
-  --success-color: #64ffda;
-  --warning-color: #ffd700;
-  --error-color: #ff79c6; /* Pink accent */
+  --bg-color: #05101f; /* Deeper blue */
+  --container-bg: #10203a; /* Slightly lighter blue */
+  --text-color: #d0d8f8; /* Lighter blueish text */
+  --heading-color: #70f8ff; /* Brighter Aqua accent */
+  --border-color: #2a4060;
+  --primary-color: #70f8ff;
+  --secondary-color: #909ab5;
+  --tertiary-color: #ffb880; /* Adjusted Orange accent */
+  --success-color: #70f8ff;
+  --warning-color: #ffee80;
+  --error-color: #ff8fcf; /* Adjusted Pink accent */
   --editor-bg: #0a192f;
-  --panel-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-  --button-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+  --panel-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+  --button-shadow: 0 3px 5px rgba(0, 0, 0, 0.4);
+  --button-inset-shadow: inset 0 1px 2px rgba(255, 255, 255, 0.1),
+    inset 0 -1px 1px rgba(0, 0, 0, 0.4);
+  --button-hover-shadow: 0 4px 7px rgba(0, 0, 0, 0.5);
+  --button-active-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.6);
   --input-bg: #172a45;
-  --input-border: #233554;
-  --input-text: #ccd6f6;
+  --input-border: #2a4060;
+  --input-text: #d0d8f8;
+
+  /* Winter Button Colors & Effects */
+  --button-bg: linear-gradient(
+    to bottom,
+    #2a4060,
+    #1f304f
+  ); /* Gradient using theme tones */
+  --button-text: #d0d8f8;
+  --button-hover-bg: linear-gradient(to bottom, #3a5070, #2f405f);
+  --button-active-bg: linear-gradient(to top, #2a4060, #1f304f);
 }
 
+/* Autumn Theme - Increased Contrast */
 [data-theme="autumn"] {
   /* Dark Orange/Autumn */
-  --bg-color: #2a1d1f; /* Dark reddish brown */
-  --container-bg: #3e2d2f; /* Lighter brown */
-  --text-color: #e6d8d4; /* Off-white text */
-  --heading-color: #ff8c42; /* Bright orange accent */
-  --border-color: #503a3c;
-  --primary-color: #ff8c42;
-  --secondary-color: #c4a89a;
-  --tertiary-color: #a5d6a7; /* Muted green accent */
-  --success-color: #a5d6a7;
-  --warning-color: #fff176; /* Pale yellow */
-  --error-color: #ef9a9a; /* Soft red */
+  --bg-color: #201518; /* Darker reddish brown */
+  --container-bg: #352528; /* Lighter brown */
+  --text-color: #f0e0dc; /* Lighter off-white text */
+  --heading-color: #ff9a58; /* Adjusted orange accent */
+  --border-color: #5a4548;
+  --primary-color: #ff9a58;
+  --secondary-color: #d0b5a5;
+  --tertiary-color: #b0e0b3; /* Adjusted Muted green accent */
+  --success-color: #b0e0b3;
+  --warning-color: #fff58c; /* Adjusted Pale yellow */
+  --error-color: #f5acaa; /* Adjusted Soft red */
   --editor-bg: #2a1d1f;
-  --panel-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-  --button-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+  --panel-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+  --button-shadow: 0 3px 5px rgba(0, 0, 0, 0.4);
+  --button-inset-shadow: inset 0 1px 2px rgba(255, 255, 255, 0.1),
+    inset 0 -1px 1px rgba(0, 0, 0, 0.4);
+  --button-hover-shadow: 0 4px 7px rgba(0, 0, 0, 0.5);
+  --button-active-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.6);
   --input-bg: #3e2d2f;
-  --input-border: #503a3c;
-  --input-text: #e6d8d4;
+  --input-border: #5a4548;
+  --input-text: #f0e0dc;
+
+  /* Autumn Button Colors & Effects */
+  --button-bg: linear-gradient(
+    to bottom,
+    #7a5f5f,
+    #6a4f4f
+  ); /* Gradient using theme tones */
+  --button-text: #f0e0dc;
+  --button-hover-bg: linear-gradient(to bottom, #8a6f6f, #7a5f5f);
+  --button-active-bg: linear-gradient(to top, #7a5f5f, #6a4f4f);
 }
 
-/* New Dark Themes */
-
-/* Midnight Theme (Dark Purple) */
+/* Midnight Theme - Increased Contrast */
 [data-theme="midnight"] {
-  --bg-color: #191724;
-  --container-bg: #26233a;
-  --text-color: #e0def4;
-  --heading-color: #eb6f92; /* Pink accent */
-  --border-color: #403d52;
-  --primary-color: #eb6f92;
-  --secondary-color: #908caa;
-  --tertiary-color: #f6c177; /* Gold accent */
-  --success-color: #31748f; /* Blueish green */
-  --warning-color: #f6c177;
-  --error-color: #eb6f92;
-  --editor-bg: #1f1d2e; /* Slightly different editor bg */
-  --panel-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-  --button-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
-  --input-bg: #26233a;
-  --input-border: #403d52;
-  --input-text: #e0def4;
+  --bg-color: #100f1a; /* Darker purple */
+  --container-bg: #201d30; /* Lighter purple */
+  --text-color: #e8e6fc; /* Lighter text */
+  --heading-color: #f07f9f; /* Adjusted Pink accent */
+  --border-color: #4a4660;
+  --primary-color: #f07f9f;
+  --secondary-color: #9893b8;
+  --tertiary-color: #f8c888; /* Adjusted Gold accent */
+  --success-color: #40809f; /* Adjusted Blueish green */
+  --warning-color: #f8c888;
+  --error-color: #f07f9f;
+  --editor-bg: #1f1d2e;
+  --panel-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+  --button-shadow: 0 3px 5px rgba(0, 0, 0, 0.4);
+  --button-inset-shadow: inset 0 1px 2px rgba(255, 255, 255, 0.1),
+    inset 0 -1px 1px rgba(0, 0, 0, 0.4);
+  --button-hover-shadow: 0 4px 7px rgba(0, 0, 0, 0.5);
+  --button-active-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.6);
+  --input-bg: #2a2640;
+  --input-border: #4a4660;
+  --input-text: #e8e6fc;
+
+  /* Midnight Button Colors & Effects */
+  --button-bg: linear-gradient(
+    to bottom,
+    #4a4660,
+    #3a3650
+  ); /* Gradient using theme tones */
+  --button-text: #e8e6fc;
+  --button-hover-bg: linear-gradient(to bottom, #5a5670, #4a4660);
+  --button-active-bg: linear-gradient(to top, #4a4660, #3a3650);
 }
 
-/* Forest Theme (Dark Green) */
+/* Forest Theme - Increased Contrast */
 [data-theme="forest"] {
-  --bg-color: #1a2a25; /* Dark green */
-  --container-bg: #243b33; /* Lighter green */
-  --text-color: #d8e8e3;
-  --heading-color: #81c784; /* Light green accent */
-  --border-color: #37524a;
-  --primary-color: #81c784;
-  --secondary-color: #a0b8af;
-  --tertiary-color: #ffcc80; /* Light orange accent */
-  --success-color: #a5d6a7;
-  --warning-color: #fff59d;
-  --error-color: #ef9a9a;
+  --bg-color: #101f1a; /* Darker green */
+  --container-bg: #1f352a; /* Lighter green */
+  --text-color: #e0f0e8; /* Lighter text */
+  --heading-color: #90d094; /* Adjusted Light green accent */
+  --border-color: #406055;
+  --primary-color: #90d094;
+  --secondary-color: #a8c0b8;
+  --tertiary-color: #ffd898; /* Adjusted Light orange accent */
+  --success-color: #b0e0b3;
+  --warning-color: #fff8b0;
+  --error-color: #f5acaa;
   --editor-bg: #1a2a25;
-  --panel-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-  --button-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+  --panel-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+  --button-shadow: 0 3px 5px rgba(0, 0, 0, 0.4);
+  --button-inset-shadow: inset 0 1px 2px rgba(255, 255, 255, 0.1),
+    inset 0 -1px 1px rgba(0, 0, 0, 0.4);
+  --button-hover-shadow: 0 4px 7px rgba(0, 0, 0, 0.5);
+  --button-active-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.6);
   --input-bg: #243b33;
-  --input-border: #37524a;
-  --input-text: #d8e8e3;
+  --input-border: #406055;
+  --input-text: #e0f0e8;
+
+  /* Forest Button Colors & Effects */
+  --button-bg: linear-gradient(
+    to bottom,
+    #406055,
+    #305045
+  ); /* Gradient using theme tones */
+  --button-text: #e0f0e8;
+  --button-hover-bg: linear-gradient(to bottom, #507065, #406055);
+  --button-active-bg: linear-gradient(to top, #406055, #305045);
 }
 
 /* Keep light themes for variety, but adjust if needed */
@@ -199,18 +282,29 @@ body {
 .theme-switcher button {
   padding: 6px 12px;
   cursor: pointer;
-  background: var(--primary-color);
-  color: white;
+  background: var(--button-bg);
+  color: var(--button-text);
   border: none;
-  border-radius: 4px;
-  transition: background-color 0.3s ease;
-  font-size: 0.9em;
-  box-shadow: var(--button-shadow); /* Apply theme shadow */
+  border-radius: 5px; /* Slightly more rounded */
+  transition: background 0.2s ease, transform 0.1s ease, box-shadow 0.2s ease;
+  font-size: 0.85em;
+  box-shadow: var(--button-shadow), var(--button-inset-shadow); /* Combine shadows */
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.2); /* Subtle text shadow */
 }
 
 .theme-switcher button:hover {
-  opacity: 0.9;
-  transform: translateY(-1px); /* Slight lift on hover */
+  background: var(--button-hover-bg);
+  transform: translateY(-1px); /* Slight lift */
+  box-shadow: var(--button-hover-shadow), var(--button-inset-shadow); /* Update outer shadow */
+  opacity: 1; /* Ensure full opacity on hover */
+}
+
+.theme-switcher button:active {
+  transform: translateY(1px); /* Press down */
+  background: var(--button-active-bg);
+  box-shadow: var(
+    --button-active-shadow
+  ); /* Use inset shadow for pressed effect */
 }
 
 .container {
@@ -297,26 +391,75 @@ body {
 
 .control-buttons button {
   padding: 8px 12px;
-  background: var(--primary-color);
-  color: white;
+  background: var(--button-bg);
+  color: var(--button-text);
   border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  transition: background-color 0.3s ease;
+  border-radius: 5px; /* Slightly more rounded */
+  transition: background 0.2s ease, transform 0.1s ease, box-shadow 0.2s ease;
   font-size: 0.9em;
-  box-shadow: var(--button-shadow); /* Apply theme shadow */
+  box-shadow: var(--button-shadow), var(--button-inset-shadow); /* Combine shadows */
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.2); /* Subtle text shadow */
 }
 
 .control-buttons button:hover {
-  opacity: 0.9;
-  transform: translateY(-1px); /* Slight lift on hover */
+  background: var(--button-hover-bg);
+  transform: translateY(-1px); /* Slight lift */
+  box-shadow: var(--button-hover-shadow), var(--button-inset-shadow); /* Update outer shadow */
+  opacity: 1; /* Ensure full opacity on hover */
+}
+
+.control-buttons button:active {
+  transform: translateY(1px); /* Press down */
+  background: var(--button-active-bg);
+  box-shadow: var(
+    --button-active-shadow
+  ); /* Use inset shadow for pressed effect */
 }
 
 .control-buttons button.on {
-  background-color: var(--success-color);
+  /* Use success color gradient */
+  background: linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--success-color) 100%, #fff 15%),
+    color-mix(in srgb, var(--success-color) 100%, #000 10%)
+  );
 }
+.control-buttons button.on:hover {
+  background: linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--success-color) 100%, #fff 25%),
+    var(--success-color)
+  );
+}
+.control-buttons button.on:active {
+  background: linear-gradient(
+    to top,
+    color-mix(in srgb, var(--success-color) 100%, #fff 15%),
+    color-mix(in srgb, var(--success-color) 100%, #000 10%)
+  );
+}
+
 .control-buttons button.off {
-  background-color: var(--error-color);
+  /* Use error color gradient */
+  background: linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--error-color) 100%, #fff 15%),
+    color-mix(in srgb, var(--error-color) 100%, #000 10%)
+  );
+}
+.control-buttons button.off:hover {
+  background: linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--error-color) 100%, #fff 25%),
+    var(--error-color)
+  );
+}
+.control-buttons button.off:active {
+  background: linear-gradient(
+    to top,
+    color-mix(in srgb, var(--error-color) 100%, #fff 15%),
+    color-mix(in srgb, var(--error-color) 100%, #000 10%)
+  );
 }
 
 .prompt-editor textarea,
@@ -348,20 +491,43 @@ body {
 .prompt-editor button,
 .config-item button /* Target the buffer save button */ {
   padding: 8px 15px;
-  background: var(--success-color);
-  color: white;
+  background: linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--success-color) 100%, #fff 15%),
+    color-mix(in srgb, var(--success-color) 100%, #000 10%)
+  );
+  color: var(--button-text);
   border: none;
-  border-radius: 4px;
+  border-radius: 5px; /* Slightly more rounded */
   cursor: pointer;
-  transition: background-color 0.3s ease, transform 0.2s ease;
+  transition: background 0.2s ease, transform 0.1s ease, box-shadow 0.2s ease;
   font-size: 0.9em;
   align-self: flex-start; /* Align button left */
-  box-shadow: var(--button-shadow); /* Apply theme shadow */
+  box-shadow: var(--button-shadow), var(--button-inset-shadow); /* Combine shadows */
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.2); /* Subtle text shadow */
 }
 .prompt-editor button:hover,
 .config-item button:hover {
-  opacity: 0.9;
-  transform: translateY(-1px); /* Slight lift on hover */
+  background: linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--success-color) 100%, #fff 25%),
+    var(--success-color)
+  );
+  transform: translateY(-1px); /* Slight lift */
+  box-shadow: var(--button-hover-shadow), var(--button-inset-shadow); /* Update outer shadow */
+  opacity: 1; /* Ensure full opacity on hover */
+}
+.prompt-editor button:active,
+.config-item button:active {
+  transform: translateY(1px); /* Press down */
+  background: linear-gradient(
+    to top,
+    color-mix(in srgb, var(--success-color) 100%, #fff 15%),
+    color-mix(in srgb, var(--success-color) 100%, #000 10%)
+  );
+  box-shadow: var(
+    --button-active-shadow
+  ); /* Use inset shadow for pressed effect */
 }
 
 /* Style for the config item container */
@@ -957,23 +1123,43 @@ body {
 
 .clear-log-button {
   padding: 5px 10px;
-  background: var(--secondary-color);
-  color: white;
+  background: linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--secondary-color) 100%, #fff 10%),
+    color-mix(in srgb, var(--secondary-color) 100%, #000 10%)
+  );
+  color: var(--button-text);
   border: none;
-  border-radius: 4px;
+  border-radius: 5px; /* Slightly more rounded */
   cursor: pointer;
-  transition: background-color 0.3s ease;
+  transition: background 0.2s ease, transform 0.1s ease, box-shadow 0.2s ease;
   font-size: 0.8em;
   align-self: flex-end; /* Position button to the right */
-  box-shadow: var(--button-shadow);
+  box-shadow: var(--button-shadow), var(--button-inset-shadow); /* Combine shadows */
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.2); /* Subtle text shadow */
 }
 
 .clear-log-button:hover {
-  opacity: 0.9;
+  background: linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--secondary-color) 100%, #fff 20%),
+    color-mix(in srgb, var(--secondary-color) 100%, #000 5%)
+  );
+  transform: translateY(-1px); /* Slight lift */
+  box-shadow: var(--button-hover-shadow), var(--button-inset-shadow); /* Update outer shadow */
+  opacity: 1; /* Ensure full opacity on hover */
 }
 
-.clear-log-button i {
-  margin-right: 5px;
+.clear-log-button:active {
+  background: linear-gradient(
+    to top,
+    color-mix(in srgb, var(--secondary-color) 100%, #fff 10%),
+    color-mix(in srgb, var(--secondary-color) 100%, #000 10%)
+  );
+  transform: translateY(1px); /* Press down */
+  box-shadow: var(
+    --button-active-shadow
+  ); /* Use inset shadow for pressed effect */
 }
 
 /* Remove old log panel styles if they exist */
