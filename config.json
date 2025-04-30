@@ -2,7 +2,7 @@
   "mcp_api": "http://localhost:7860",
   "web_port": 7860,
   "log_file": "logs/mcp.log",
-  "ai1_max_concurrent_tasks": 10,
+  "ai1_max_concurrent_tasks": 20,
   "target": "Create a Retro NES-Style Flash Game with FastAPI\nRole: You are an expert game developer specializing in modern tools (HTML5 + JavaScript, Phaser.js, or Godot). Your task is to create a simple yet addictive flash game inspired by classic NES/Dendy games (8-bit graphics, limited color palette, pixel art).\\n\\nCore Requirements:\\n- Genre: Platformer / Arcade (e.g., Super Mario Bros, Battle City, Contra)\\n\\nTech Stack:\\n- Frontend: HTML5 Canvas/WebGL (or frameworks like Phaser.js)\\n- Backend (if needed): FastAPI for high-performance endpoints (e.g., leaderboards)\\n- Sound: Chip-tune style (e.g., using jsfxr)\\n\\nGameplay:\\n- Basic mechanics: jumping, enemies, collectible coins\\n- 2-3 levels with gradually increasing difficulty\\n- Lives system and scoring (save progress via localStorage or FastAPI)\\n\\nRetro Aesthetics:\\n- Resolution: 256x240 pixels (NES-like)\\n- Color palette: 4-6 colors per sprite\\n- Tile-based level design\\n\\nBonus Features:\\n- Secret cheat codes (e.g., \"KONAMI code\" for extra lives)\\n- Pause/restart functionality\\n- Simple enemy AI (patrol or chase behavior)\\n\\nDeliverables:\\n- Full source code (HTML/JS or chosen framework)\\n- Setup instructions (local development + FastAPI deployment if used)\\n- Ideas for scaling (e.g., multiplayer, new levels)\\n\\nAsset Suggestions:\\n- Sprites: OpenGameArt.org (8-bit/16-bit sections)\\n- Sound: SFXR tools for NES-style effects\\n\\nNotes for AI:\\n- If using FastAPI, provide a minimal main.py with a /highscores endpoint.\\n- Example code for player movement (e.g., velocityX/Y) to help structure the response.\\n- Emphasize performance (lightweight JS, no lag on low-end devices).",
   "confidence_threshold": {
     "tests_passed": 0.5,
@@ -142,30 +142,33 @@
   },
   "request_delays": {
     "ai1": {
-      "min": 1.0,
-      "max": 3.0
+      "min": 0.1,
+      "max": 0.5
     },
     "ai2": {
       "executor": {
-        "min": 0.5,
-        "max": 2.0
+        "min": 0.2,
+        "max": 1.0
       },
       "tester": {
-        "min": 1.5,
-        "max": 4.0
+        "min": 0.2,
+        "max": 1.0
       },
       "documenter": {
-        "min": 1.5,
-        "max": 4.0
+        "min": 0.5,
+        "max": 1.5
       }
     },
     "ai3": {
-      "min": 2.0,
-      "max": 5.0
+      "min": 0.1,
+      "max": 0.5
     }
   },
   "desired_active_buffer": 500,
-  "ai1_desired_active_buffer": 2000,
+  "ai1_desired_active_buffer": 15,
+  "ai1_active_sleep_interval": 3,
+  "ai1_pending_sleep_interval": 5,
+  "ai1_idle_sleep_interval": 10,
   "github_repo": "YOUR_GITHUB_USERNAME/YOUR_REPO_NAME",
   "github_actions_check_interval": 60
 }

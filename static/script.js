@@ -4,6 +4,7 @@ const reconnectInterval = 10000; // Reconnect interval 5 seconds
 const maxReconnectAttempts = 10;
 let reconnectAttempts = 0;
 const MAX_LOG_LINES = 10; // Maximum number of log lines to keep
+let actualTotalTasks = 0; // Add global variable for actual total tasks
 
 // --- Global DOM Elements (cache them, assign in DOMContentLoaded) ---
 let logContent;
@@ -37,6 +38,178 @@ require(["vs/editor/editor.main"], function () {
   });
 });
 
+// --- WebSocket Message Handling ---
+
+function handleWebSocketMessage(event) {
+  try {
+    const data = JSON.parse(event.data);
+    console.log("WebSocket received data:", data); // Log all received data
+
+    // Prioritize specific types first
+    if (data.type) {
+      routeMessageByType(data);
+    } else {
+      // Handle messages without a 'type' field
+      handleTypeLessMessage(data);
+    }
+  } catch (e) {
+    console.error(
+      "Error parsing WebSocket message or updating UI:",
+      e,
+      "Raw data:",
+      event.data
+    );
+    logErrorToUI(`Error parsing WebSocket message: ${e}`);
+  }
+}
+
+function routeMessageByType(data) {
+  switch (data.type) {
+    case "full_status_update":
+      console.log("Processing full_status_update");
+      updateFullUI(data);
+      break;
+    case "status_update":
+      if (data.ai_status) {
+        console.log("Processing status_update (AI status only)");
+        updateAllButtonStates(data.ai_status);
+      }
+      break;
+    case "log_update":
+      handleLogUpdate(data.log_line);
+      break;
+    case "structure_update":
+      if (data.structure) {
+        updateFileStructure(data.structure);
+      }
+      break;
+    case "queue_update":
+      if (data.queues) {
+        updateQueues(data.queues);
+      }
+      break;
+    case "specific_update":
+      handleSpecificUpdate(data);
+      break;
+    case "ping":
+      console.log("Ping received");
+      break;
+    default:
+      console.warn("Received unhandled message type:", data.type, data);
+  }
+}
+
+function handleTypeLessMessage(data) {
+  if (data.log_line && Object.keys(data).length === 1) {
+    handleLogUpdate(data.log_line);
+  } else if (data.subtasks && Object.keys(data).length === 1) {
+    handleSubtaskUpdate(data.subtasks);
+  } else if (data.queues && Object.keys(data).length === 1) {
+    handleQueueOnlyUpdate(data.queues);
+  } else if (
+    data.progress_data ||
+    data.git_activity ||
+    data.task_status_distribution
+  ) {
+    handleChartUpdate(data);
+  } else {
+    // Only warn if it's an unknown structure without type
+    if (
+      !data.log_line &&
+      !data.subtasks /* Add other known type-less fields */
+    ) {
+      console.warn("Received unhandled typeless message structure:", data);
+    }
+  }
+}
+
+function handleLogUpdate(logLine) {
+  if (logLine && logContent) {
+    const logEntry = document.createElement("p");
+    logEntry.textContent = logLine;
+    if (logContent.innerHTML.includes("Connecting to server...")) {
+      logContent.innerHTML = "";
+    }
+    logContent.appendChild(logEntry);
+    while (logContent.childElementCount > MAX_LOG_LINES) {
+      if (logContent.firstChild) {
+        logContent.removeChild(logContent.firstChild);
+      }
+    }
+    logContent.scrollTop = logContent.scrollHeight;
+  }
+}
+
+function handleSubtaskUpdate(subtasksData) {
+  console.log("Processing subtasks-only update:", subtasksData);
+  Object.assign(subtask_status, subtasksData); // Merge updates
+  updateStats(subtask_status, null); // Pass null for queues
+  updateCharts({
+    task_status_distribution: calculateStatusDistribution(subtask_status),
+  });
+}
+
+function handleQueueOnlyUpdate(queuesData) {
+  console.log("Processing queues-only update:", queuesData);
+  updateQueues(queuesData);
+  updateCharts({ queues: queuesData }); // Update task distribution chart
+}
+
+function handleChartUpdate(chartData) {
+  console.log("Processing chart updates (direct or typeless):", chartData);
+  updateCharts(chartData);
+}
+
+function handleSpecificUpdate(data) {
+  console.log("Processing specific_update:", data);
+  // Wrap in block scope to allow lexical declarations
+  {
+    let needsChartUpdate = false;
+
+    if (data.queues) {
+      updateQueues(data.queues);
+      needsChartUpdate = true;
+    }
+    if (data.subtasks) {
+      Object.assign(subtask_status, data.subtasks);
+      updateStats(subtask_status, data.queues);
+      needsChartUpdate = true;
+    }
+    if (data.structure) {
+      updateFileStructure(data.structure);
+    }
+
+    if (
+      needsChartUpdate ||
+      data.progress_data ||
+      data.git_activity ||
+      data.task_status_distribution
+    ) {
+      const chartUpdateData = {
+        queues: data.queues,
+        task_status_distribution:
+          data.task_status_distribution ||
+          (needsChartUpdate
+            ? calculateStatusDistribution(subtask_status)
+            : undefined),
+        progress_data: data.progress_data,
+        git_activity: data.git_activity,
+      };
+      updateCharts(chartUpdateData);
+    }
+
+    if (data.log_line) {
+      handleLogUpdate(data.log_line);
+    }
+  }
+}
+
+function logErrorToUI(message) {
+  if (logContent) {
+    logContent.innerHTML += `<p><em><strong style="color:red;">${message}</strong></em></p>`;
+  }
+}
+
 // --- WebSocket Connection ---
 function connectWebSocket() {
   // Define wsUrl inside the function scope
@@ -64,199 +237,12 @@ function connectWebSocket() {
     ws.send(JSON.stringify({ action: "get_chart_updates" }));
   };
 
-  ws.onmessage = function (event) {
-    try {
-      const data = JSON.parse(event.data);
-      console.log("WebSocket received data:", data); // Log all received data
-
-      // --- Handle messages potentially missing 'type' field ---
-      if (!data.type) {
-        if (data.log_line && Object.keys(data).length === 1) {
-          // Handle log_line only message
-          if (logContent) {
-            const logEntry = document.createElement("p");
-            logEntry.textContent = data.log_line;
-            if (logContent.innerHTML.includes("Connecting to server...")) {
-              logContent.innerHTML = "";
-            }
-            logContent.appendChild(logEntry);
-            // Check if we've exceeded the maximum number of lines
-            while (logContent.childElementCount > MAX_LOG_LINES) {
-              // Remove the oldest log entry (first child)
-              if (logContent.firstChild) {
-                logContent.removeChild(logContent.firstChild);
-              }
-            }
-            logContent.scrollTop = logContent.scrollHeight;
-          }
-          return; // Message handled
-        } else if (data.subtasks && Object.keys(data).length === 1) {
-          // Handle subtasks only message
-          console.log("Processing subtasks-only update:", data.subtasks);
-          Object.assign(subtask_status, data.subtasks); // Merge updates
-          // Recalculate stats and update charts based on new subtask statuses
-          updateStats(subtask_status, null); // Pass null for queues, updateStats will read from DOM if needed
-          updateCharts({
-            task_status_distribution:
-              calculateStatusDistribution(subtask_status),
-          }); // Pass calculated distribution
-          return; // Message handled
-        } else if (data.queues && Object.keys(data).length === 1) {
-          // Додаємо обробку повідомлень, що містять лише поле queues
-          console.log("Processing queues-only update:", data.queues);
-          updateQueues(data.queues);
-          // updateQueues calls updateStats. Explicitly call updateCharts for queue-related charts.
-          updateCharts({ queues: data.queues }); // Pass queue data for task distribution chart
-          return; // Повідомлення оброблено
-        }
-        // Обробка даних для графіків
-        else if (
-          data.progress_data ||
-          data.git_activity ||
-          data.task_status_distribution
-        ) {
-          console.log("Processing chart updates (no type):", data);
-          // Centralize chart updating logic by calling updateCharts
-          updateCharts(data);
-          return; // Повідомлення оброблено
-        }
-        // Add more checks here for other potential type-less messages if needed
-      }
-
-      // --- Route message based on type (if present) ---
-      switch (data.type) {
-        case "full_status_update": // Periodic full status
-          console.log("Processing full_status_update");
-          updateFullUI(data); // This already calls updateCharts
-          break;
-        case "status_update": // Just AI on/off status
-          if (data.ai_status) {
-            console.log("Processing status_update (AI status only)");
-            updateAllButtonStates(data.ai_status);
-          }
-          break;
-        case "log_update": // Append log line
-          if (data.log_line && logContent) {
-            const logEntry = document.createElement("p");
-            logEntry.textContent = data.log_line;
-            // Clear "Connecting..." message on first real log
-            if (logContent.innerHTML.includes("Connecting to server...")) {
-              logContent.innerHTML = "";
-            }
-            logContent.appendChild(logEntry);
-            // Check if we've exceeded the maximum number of lines
-            while (logContent.childElementCount > MAX_LOG_LINES) {
-              // Remove the oldest log entry (first child)
-              if (logContent.firstChild) {
-                logContent.removeChild(logContent.firstChild);
-              }
-            }
-            logContent.scrollTop = logContent.scrollHeight; // Auto-scroll
-          }
-          break;
-        case "structure_update": // Specific structure update
-          if (data.structure) {
-            updateFileStructure(data.structure);
-          }
-          break;
-        case "queue_update": // Specific queue update
-          if (data.queues) {
-            updateQueues(data.queues);
-          }
-          break;
-        case "specific_update": // Handle targeted updates
-          console.log("Processing specific_update:", data); // Log specific updates
-          let needsChartUpdate = false;
-          // Update queues first if present
-          if (data.queues) {
-            updateQueues(data.queues); // updateQueues calls updateStats
-            needsChartUpdate = true; // Queue changes affect task chart
-          }
-          if (data.subtasks) {
-            Object.assign(subtask_status, data.subtasks);
-            // Recalculate stats using the updated subtask_status and potentially updated queues
-            updateStats(subtask_status, data.queues);
-            needsChartUpdate = true; // Subtask changes affect status chart and stats
-          }
-          if (data.structure) {
-            updateFileStructure(data.structure);
-          }
-          // Explicitly call updateCharts if relevant data is present or implied
-          // Also include chart-specific data if it arrived in this message
-          if (
-            needsChartUpdate ||
-            data.progress_data ||
-            data.git_activity ||
-            data.task_status_distribution
-          ) {
-            // Combine potentially separate data pieces for updateCharts
-            const chartUpdateData = {
-              queues: data.queues, // For task chart
-              task_status_distribution:
-                data.task_status_distribution ||
-                (needsChartUpdate
-                  ? calculateStatusDistribution(subtask_status)
-                  : undefined), // For status chart
-              progress_data: data.progress_data, // For progress chart
-              git_activity: data.git_activity, // For git chart
-            };
-            updateCharts(chartUpdateData);
-          }
-
-          // Handle log lines within specific updates too
-          if (data.log_line && logContent) {
-            const logEntry = document.createElement("p");
-            logEntry.textContent = data.log_line;
-            if (logContent.innerHTML.includes("Connecting to server...")) {
-              logContent.innerHTML = "";
-            }
-            logContent.appendChild(logEntry);
-            // Check if we've exceeded the maximum number of lines
-            while (logContent.childElementCount > MAX_LOG_LINES) {
-              // Remove the oldest log entry (first child)
-              if (logContent.firstChild) {
-                logContent.removeChild(logContent.firstChild);
-              }
-            }
-            logContent.scrollTop = logContent.scrollHeight;
-          }
-          break;
-        case "ping": // Ignore ping messages
-          console.log("Ping received");
-          break;
-        default:
-          // Only warn if type is present but not handled, or if it's an unknown structure without type
-          if (
-            data.type ||
-            (!data.log_line &&
-              !data.subtasks) /* Add other known type-less fields */
-          ) {
-            console.warn(
-              "Received unhandled message type or structure:",
-              data.type,
-              data
-            );
-          }
-        // The generic update attempt is removed from here as specific handlers are preferred.
-        // If necessary, a more robust generic handler could be added.
-      }
-    } catch (e) {
-      console.error(
-        "Error parsing WebSocket message or updating UI:",
-        e,
-        "Raw data:",
-        event.data
-      );
-      if (logContent)
-        logContent.innerHTML += `<p><em><strong style="color:red;">Error parsing WebSocket message:</strong> ${e}</em></p>`;
-    }
-  };
+  // Use the new handler function
+  ws.onmessage = handleWebSocketMessage;
 
   ws.onerror = function (event) {
     console.error("WebSocket error observed:", event);
-    if (logContent)
-      logContent.innerHTML +=
-        '<p><em><strong style="color:red;">WebSocket error.</strong></em></p>';
+    logErrorToUI("WebSocket error.");
     showNotification("WebSocket error", "error");
   };
 
@@ -291,6 +277,14 @@ function updateFullUI(data) {
   if (data.ai_status) {
     updateAllButtonStates(data.ai_status);
   }
+  // Update actual total tasks if provided
+  if (data.actual_total_tasks !== undefined) {
+    actualTotalTasks = data.actual_total_tasks;
+    console.log(
+      `[Stats Update] Actual total tasks updated to: ${actualTotalTasks}`
+    );
+  }
+
   // Ensure queues are updated *before* stats if both are present
   if (data.queues) {
     updateQueues(data.queues);
@@ -311,31 +305,14 @@ function updateFullUI(data) {
     );
 
     // Pass both subtask status and queue data (if available) for the new calculation
+    // Use the updated global actualTotalTasks
     updateStats(subtask_status, data.queues);
   } else if (data.processed !== undefined && data.efficiency !== undefined) {
-    // Fallback if only legacy stats are available
-    console.log("[Stats Update] Using legacy stats update.");
+    // Fallback to legacy update if subtasks/actual_total_tasks not present
     updateStatsLegacy(data);
-  } else if (data.queues) {
-    // If only queues updated, still recalculate stats
-    console.log("[Stats Update] Queues updated, recalculating stats.");
-    updateStats(subtask_status, data.queues);
   } else {
-    // If no relevant data, update stats with current known state
-    console.log(
-      "[Stats Update] No relevant data in message, updating stats from current global state."
-    );
-    // Need current queue counts for the new calculation. Get them from the DOM.
-    const currentQueuesData = {
-      executor: Array(parseInt(queueCounts.executor?.textContent || "0")).fill(
-        {}
-      ), // Dummy array of correct length
-      tester: Array(parseInt(queueCounts.tester?.textContent || "0")).fill({}),
-      documenter: Array(
-        parseInt(queueCounts.documenter?.textContent || "0")
-      ).fill({}),
-    };
-    updateStats(subtask_status, currentQueuesData);
+    // If only subtasks are present, still update stats
+    updateStats(subtask_status, null); // Pass null for queues if not available
   }
 
   console.log("Calling updateCharts from updateFullUI"); // Log chart update trigger
@@ -350,6 +327,7 @@ function updateFullUI(data) {
 }
 
 // Renamed function to reflect its purpose better
+// Modify updateStats to use the global actualTotalTasks
 function updateStats(current_subtask_statuses, current_queues_data) {
   // Calculate completed tasks from the status object
   const completed = Object.values(current_subtask_statuses).filter(
@@ -374,16 +352,18 @@ function updateStats(current_subtask_statuses, current_queues_data) {
       parseInt(queueCounts.documenter?.textContent || "0", 10);
   }
 
-  // Total Tasks should reflect all known subtasks
-  const knownTasksCount = Object.keys(current_subtask_statuses).length;
-  const total = knownTasksCount; // Use the count of all known statuses as the total
+  // Total Tasks now uses the global actualTotalTasks
+  const total =
+    actualTotalTasks > 0
+      ? actualTotalTasks
+      : Object.keys(current_subtask_statuses).length; // Fallback if actualTotalTasks is 0
+  const knownTasksCount = Object.keys(current_subtask_statuses).length; // Keep track of known tasks
 
-  // Calculate efficiency based on the number of tasks we have status for
-  const efficiency =
-    knownTasksCount > 0 ? ((completed / knownTasksCount) * 100).toFixed(1) : 0;
+  // Calculate efficiency based on the ACTUAL total number of tasks
+  const efficiency = total > 0 ? ((completed / total) * 100).toFixed(1) : 0;
 
   console.log(
-    `[Stats Update] Calculated - Completed: ${completed}, In Queues: ${tasksInQueues}, Total Known: ${total}, Efficiency: ${efficiency}%`
+    `[Stats Update] Calculated - Completed: ${completed}, In Queues: ${tasksInQueues}, Total (Actual): ${total}, Known Statuses: ${knownTasksCount}, Efficiency: ${efficiency}%`
   );
 
   if (statElements.total) statElements.total.textContent = total; // Update total tasks display
@@ -410,29 +390,26 @@ function updateQueues(queuesData) {
     const countSpan = queueCounts[role];
     if (!ul || !countSpan) return; // Skip if elements not found
 
-    const tasks = queuesData[role] || [];
+    const tasks = queuesData?.[role] || []; // Optional chaining
     const currentCount = parseInt(countSpan.textContent || "0", 10);
 
     // Check if the count or task list structure might change
-    // Optimization: Only redraw list if counts differ significantly or structure changes
-    if (
-      tasks.length !== currentCount ||
-      ul.children.length !== tasks.length /* Add more checks if needed */
-    ) {
+    if (tasks.length !== currentCount || ul.children.length !== tasks.length) {
       queuesChanged = true;
       ul.innerHTML = ""; // Clear existing list only if needed
       countSpan.textContent = tasks.length; // Update count
 
       tasks.forEach((task) => {
-        if (!task || !task.id || !task.text) {
+        // Optional chaining for task properties
+        if (!task?.id || !task?.text) {
           console.warn("Skipping invalid task object in queue:", task);
           return;
         }
         const li = document.createElement("li");
-        // Use 'pending' as a default if no status is known yet
         const status = task.status || subtask_status[task.id] || "pending";
         li.setAttribute("data-status", status);
 
+        // ... (rest of li creation remains the same)
         // --- Summary Row ---
         const summaryDiv = document.createElement("div");
         summaryDiv.className = "task-summary";
@@ -472,7 +449,8 @@ function updateQueues(queuesData) {
       // Optimization: If count is the same, just update statuses if needed
       Array.from(ul.children).forEach((li, index) => {
         const task = tasks[index];
-        if (!task || !task.id) return;
+        // Optional chaining
+        if (!task?.id) return;
         const newStatus = task.status || subtask_status[task.id] || "pending";
         const currentStatus = li.getAttribute("data-status");
         if (newStatus !== currentStatus) {
@@ -486,6 +464,7 @@ function updateQueues(queuesData) {
   });
 
   // Update stats using the new function, passing current queue data and global subtask status
+  // It will use the global actualTotalTasks internally
   updateStats(subtask_status, queuesData);
 
   // Update the task distribution chart if it exists and queues changed
@@ -521,24 +500,54 @@ function getStatusIcon(status) {
   }
 }
 
-function updateCharts(data) {
-  console.log("updateCharts called with data:", JSON.stringify(data, null, 2)); // Log incoming data
+// --- Chart Initialization and Update Functions ---
 
+function initializeCharts() {
+  initializeTaskChart();
+  initializeProgressChart();
+  initializeGitChart();
+  initializeStatusPieChart();
+}
+
+function updateCharts(data) {
+  console.log("updateCharts called with data:", JSON.stringify(data, null, 2));
+
+  // Initialize charts if they don't exist
+  if (!taskChart || !progressChart || !gitChart || !statusPieChart) {
+    initializeCharts();
+  }
+
+  let chartsUpdated = false;
+
+  if (updateTaskChartData(data.queues)) chartsUpdated = true;
+  if (updateProgressChartData(data.progress_data, data.git_activity))
+    chartsUpdated = true;
+  if (updateGitChartData(data.git_activity)) chartsUpdated = true;
+  if (updateStatusPieChartData(data.task_status_distribution))
+    chartsUpdated = true;
+
+  if (chartsUpdated) {
+    updateAllChartThemes(); // Apply theme colors
+    console.log("[Chart Update] One or more charts updated visually.");
+  } else {
+    console.log(
+      "[Chart Update] No chart data changed, skipping visual update."
+    );
+  }
+}
+
+function getBaseChartOptions() {
   const chartColor = getChartFontColor();
-  // ... (chartOptions definition remains the same)
-  const chartOptions = {
+  return {
     responsive: true,
     maintainAspectRatio: false,
     scales: {
       y: {
         beginAtZero: true,
-        grid: {
-          color: `${chartColor}20`, // Напівпрозорі лінії сітки
-        },
+        grid: { color: `${chartColor}20` },
         ticks: {
           color: chartColor,
           callback: function (value) {
-            // Check if label exists and includes '%'
             const label =
               this.chart.config._config.data.datasets[0]?.label || "";
             return value + (label.includes("%") ? "%" : "");
@@ -546,464 +555,394 @@ function updateCharts(data) {
         },
       },
       x: {
-        grid: {
-          color: `${chartColor}20`,
-        },
+        grid: { color: `${chartColor}20` },
         ticks: { color: chartColor },
       },
     },
     plugins: {
       legend: {
-        labels: {
-          color: chartColor,
-          font: {
-            size: 12,
-          },
-        },
+        labels: { color: chartColor, font: { size: 12 } },
       },
-      title: {
-        display: true,
-        color: chartColor,
-      },
+      title: { display: true, color: chartColor },
     },
-    animation: {
-      duration: 750,
-      easing: "easeInOutCubic",
-    },
+    animation: { duration: 750, easing: "easeInOutCubic" },
   };
+}
 
-  // --- Initialize Charts (if they don't exist) ---
-
-  // Task Distribution Chart (Bar)
-  // ... (initialization code remains the same)
-  if (!taskChart) {
-    const ctx = document.getElementById("taskChart")?.getContext("2d");
-    if (ctx) {
-      taskChart = new Chart(ctx, {
-        type: "bar",
-        data: {
-          labels: ["Executor", "Tester", "Documenter"],
-          datasets: [
-            {
-              label: "Tasks in Queue",
-              data: [0, 0, 0],
-              backgroundColor: [
-                "rgba(54, 162, 235, 0.6)",
-                "rgba(75, 192, 192, 0.6)",
-                "rgba(255, 159, 64, 0.6)",
-              ],
-              borderColor: [
-                "rgba(54, 162, 235, 1)",
-                "rgba(75, 192, 192, 1)",
-                "rgba(255, 159, 64, 1)",
-              ],
-              borderWidth: 1,
-            },
-          ],
-        },
-        options: {
-          ...chartOptions,
-          plugins: {
-            ...chartOptions.plugins,
-            title: {
-              ...chartOptions.plugins.title,
-              text: "Tasks Distribution",
-            },
+// --- Task Chart ---
+function initializeTaskChart() {
+  if (taskChart) return;
+  const ctx = document.getElementById("taskChart")?.getContext("2d");
+  if (ctx) {
+    const baseOptions = getBaseChartOptions();
+    taskChart = new Chart(ctx, {
+      type: "bar",
+      data: {
+        labels: ["Executor", "Tester", "Documenter"],
+        datasets: [
+          {
+            label: "Tasks in Queue",
+            data: [0, 0, 0],
+            backgroundColor: [
+              "rgba(54, 162, 235, 0.6)",
+              "rgba(75, 192, 192, 0.6)",
+              "rgba(255, 159, 64, 0.6)",
+            ],
+            borderColor: [
+              "rgba(54, 162, 235, 1)",
+              "rgba(75, 192, 192, 1)",
+              "rgba(255, 159, 64, 1)",
+            ],
+            borderWidth: 1,
           },
+        ],
+      },
+      options: {
+        ...baseOptions,
+        plugins: {
+          ...baseOptions.plugins,
+          title: { ...baseOptions.plugins.title, text: "Tasks Distribution" },
         },
-      });
-    }
+      },
+    });
   }
+}
 
-  // Progress Chart (Line)
-  if (!progressChart) {
-    const ctx = document.getElementById("progressChart")?.getContext("2d");
-    if (ctx) {
-      progressChart = new Chart(ctx, {
-        type: "line",
-        data: {
-          labels: [], // Timestamps
-          datasets: [
-            {
-              label: "Completed Tasks",
-              data: [],
-              borderColor: "rgb(54, 162, 235)",
-              tension: 0.1,
-              yAxisID: "yCount", // Assign to the count axis
-            },
-            {
-              label: "Successful Tests",
-              data: [],
-              borderColor: "rgb(255, 99, 132)",
-              tension: 0.1,
-              yAxisID: "yCount", // Assign to the count axis
-            },
-            {
-              label: "Git Actions",
-              data: [],
-              borderColor: "rgb(255, 205, 86)",
-              tension: 0.1,
-              yAxisID: "yCount", // Assign to the count axis
-            },
-          ],
-        },
-        options: {
-          ...chartOptions, // Inherit base options
-          scales: {
-            x: {
-              // ... existing x-axis config ...
-              ticks: {
-                color: chartColor,
-                // --- HIDE X-AXIS LABELS ---
-                display: false,
-                // --- END HIDE ---
-                maxRotation: 0,
-                minRotation: 0,
-                autoSkip: true,
-                maxTicksLimit: 10, // Limit ticks for performance/readability
-              },
-            },
-            yCount: {
-              type: "linear",
-              // --- CHANGE: Position yCount axis to the left ---
-              position: "left",
-              // --- END CHANGE ---
-              beginAtZero: true,
-              title: {
-                display: true,
-                text: "Count",
-                color: chartColor,
-              },
-              ticks: {
-                color: chartColor,
-                stepSize: 1, // Ensure integer steps for counts
-              },
-              grid: {
-                drawOnChartArea: false, // Only draw grid for the primary axis (optional)
-                color: `${chartColor}20`,
-              },
-            },
-          },
-          plugins: {
-            ...chartOptions.plugins,
-            title: {
-              ...chartOptions.plugins.title,
-              text: "Project Progress Over Time",
-            },
-            tooltip: {
-              callbacks: {
-                // Custom tooltip to show all values for a given time point
-                label: function (context) {
-                  let label = context.dataset.label || "";
-                  if (label) {
-                    label += ": ";
-                  }
-                  if (context.parsed.y !== null) {
-                    label += context.parsed.y;
-                  }
-                  return label;
-                },
-                title: function (tooltipItems) {
-                  // Display the full timestamp in the tooltip title
-                  return tooltipItems[0].label; // The label is the timestamp
-                },
-              },
-            },
-          },
-        },
-      });
-    }
+function updateTaskChartData(queuesData) {
+  if (!taskChart || !queuesData) return false;
+  console.log(
+    "[Chart Update] Updating Task Distribution with queue data:",
+    queuesData
+  );
+  const newData = [
+    (queuesData.executor || []).length,
+    (queuesData.tester || []).length,
+    (queuesData.documenter || []).length,
+  ];
+  if (
+    JSON.stringify(taskChart.data.datasets[0].data) !== JSON.stringify(newData)
+  ) {
+    taskChart.data.datasets[0].data = newData;
+    console.log("[Chart Update] Task Distribution data changed.");
+    return true;
   }
+  return false;
+}
 
-  // Git Commits Chart (Line)
-  // ... (initialization code remains the same)
-  if (!gitChart) {
-    const ctx = document.getElementById("gitChart")?.getContext("2d");
-    if (ctx) {
-      gitChart = new Chart(ctx, {
-        type: "line",
-        data: {
-          labels: [], // Example: ['Day 1', 'Day 2', ...]
-          datasets: [
-            {
-              label: "Commits Over Time",
-              data: [], // Example: [5, 8, 12, ...]
-              backgroundColor: "rgba(255, 159, 64, 0.2)",
-              borderColor: "rgba(255, 159, 64, 1)",
-              borderWidth: 2,
-              tension: 0.4,
-              fill: true,
-            },
-          ],
-        },
-        options: {
-          ...chartOptions,
-          plugins: {
-            ...chartOptions.plugins,
-            title: {
-              ...chartOptions.plugins.title,
-              text: "Git Activity",
+// --- Progress Chart ---
+const MAX_PROGRESS_POINTS = 20;
+
+function initializeProgressChart() {
+  if (progressChart) return;
+  const ctx = document.getElementById("progressChart")?.getContext("2d");
+  if (ctx) {
+    const baseOptions = getBaseChartOptions();
+    progressChart = new Chart(ctx, {
+      type: "line",
+      data: {
+        labels: [], // Timestamps
+        datasets: [
+          {
+            label: "Completed Tasks",
+            data: [],
+            borderColor: "rgb(54, 162, 235)",
+            tension: 0.1,
+            yAxisID: "yCount",
+          },
+          {
+            label: "Successful Tests",
+            data: [],
+            borderColor: "rgb(255, 99, 132)",
+            tension: 0.1,
+            yAxisID: "yCount",
+          },
+          {
+            label: "Git Actions",
+            data: [],
+            borderColor: "rgb(255, 205, 86)",
+            tension: 0.1,
+            yAxisID: "yCount",
+          },
+        ],
+      },
+      options: {
+        ...baseOptions,
+        scales: {
+          x: {
+            ...baseOptions.scales.x,
+            ticks: {
+              ...baseOptions.scales.x.ticks,
+              display: false,
+              maxRotation: 0,
+              minRotation: 0,
+              autoSkip: true,
+              maxTicksLimit: 10,
             },
           },
-        },
-      });
-    }
-  }
-
-  // Status Distribution Chart (Doughnut)
-  // ... (initialization code remains the same)
-  if (!statusPieChart) {
-    const ctx = document.getElementById("statusPieChart")?.getContext("2d");
-    if (ctx) {
-      statusPieChart = new Chart(ctx, {
-        type: "doughnut",
-        data: {
-          labels: ["Pending", "Processing", "Completed", "Failed", "Other"],
-          datasets: [
-            {
-              label: "Task Status Distribution",
-              data: [0, 0, 0, 0, 0],
-              backgroundColor: [
-                "rgba(255, 205, 86, 0.7)", // Yellow for Pending
-                "rgba(54, 162, 235, 0.7)", // Blue for Processing
-                "rgba(75, 192, 192, 0.7)", // Green for Completed
-                "rgba(255, 99, 132, 0.7)", // Red for Failed
-                "rgba(201, 203, 207, 0.7)", // Grey for Other
-              ],
-              borderColor: [
-                "rgba(255, 205, 86, 1)",
-                "rgba(54, 162, 235, 1)",
-                "rgba(75, 192, 192, 1)",
-                "rgba(255, 99, 132, 1)",
-                "rgba(201, 203, 207, 1)",
-              ],
-              borderWidth: 1,
-            },
-          ],
-        },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          plugins: {
-            legend: {
-              position: "right",
-              labels: { color: chartColor },
-            },
+          yCount: {
+            type: "linear",
+            position: "left",
+            beginAtZero: true,
             title: {
               display: true,
-              text: "Task Statuses",
-              color: chartColor,
+              text: "Count",
+              color: baseOptions.plugins.title.color,
+            },
+            ticks: { color: baseOptions.scales.y.ticks.color, stepSize: 1 },
+            grid: {
+              drawOnChartArea: false,
+              color: baseOptions.scales.y.grid.color,
             },
           },
         },
-      });
-    }
-  }
-
-  // --- Update Chart Data ---
-
-  let chartsUpdated = false;
-  const MAX_PROGRESS_POINTS = 20; // Max data points for progress chart
-
-  // Update Task Distribution (Bar Chart) - Based on QUEUE data
-  if (taskChart && data.queues) {
-    console.log(
-      "[Chart Update] Updating Task Distribution with queue data:",
-      data.queues
-    );
-    const newData = [
-      (data.queues.executor || []).length,
-      (data.queues.tester || []).length,
-      (data.queues.documenter || []).length,
-    ];
-    // Check if data actually changed before updating
-    if (
-      JSON.stringify(taskChart.data.datasets[0].data) !==
-      JSON.stringify(newData)
-    ) {
-      taskChart.data.datasets[0].data = newData;
-      chartsUpdated = true;
-      console.log("[Chart Update] Task Distribution data changed.");
-    }
-  }
-
-  // --- CHANGE: Update Progress Chart (Line Chart) - Append new data point ---
-  if (progressChart && data.progress_data) {
-    const newDataPoint = data.progress_data;
-    console.log("Progress data received:", newDataPoint);
-
-    if (newDataPoint && newDataPoint.timestamp) {
-      const labels = progressChart.data.labels;
-      const datasets = progressChart.data.datasets;
-
-      const completedTasksDataset = datasets.find(
-        (ds) => ds.label === "Completed Tasks"
-      );
-      const successfulTestsDataset = datasets.find(
-        (ds) => ds.label === "Successful Tests"
-      );
-      const gitActionsDataset = datasets.find(
-        (ds) => ds.label === "Git Actions"
-      );
-
-      // --- CHANGE: Get latest Git Action count from git_activity if available ---
-      let latestGitActionCount = newDataPoint.git_actions; // Default to value in progress_data
-      if (
-        data.git_activity &&
-        data.git_activity.values &&
-        data.git_activity.values.length > 0
-      ) {
-        latestGitActionCount =
-          data.git_activity.values[data.git_activity.values.length - 1];
-        console.log(
-          `[Chart Update] Using latest git_actions value from git_activity: ${latestGitActionCount}`
-        );
-      } else {
-        console.log(
-          `[Chart Update] Using git_actions value from progress_data: ${latestGitActionCount}`
-        );
-      }
-      // --- END CHANGE ---
-
-      // Format timestamp for label (e.g., HH:MM)
-      const displayTimestamp = new Date(
-        newDataPoint.timestamp
-      ).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-
-      // Add new data
-      labels.push(newDataPoint.timestamp); // Store full timestamp for tooltip
-      if (completedTasksDataset)
-        completedTasksDataset.data.push(newDataPoint.completed_tasks);
-      if (successfulTestsDataset)
-        successfulTestsDataset.data.push(newDataPoint.successful_tests);
-      // --- ADD LOGGING ---
-      console.log(
-        `[Chart Update] Pushing git_actions value: ${latestGitActionCount}`
-      ); // Use the determined value
-      // --- END LOGGING ---
-      if (gitActionsDataset) gitActionsDataset.data.push(latestGitActionCount); // Use the determined value
-
-      // Limit data points
-      if (labels.length > MAX_PROGRESS_POINTS) {
-        labels.shift(); // Remove oldest label
-        if (completedTasksDataset) completedTasksDataset.data.shift();
-        if (successfulTestsDataset) successfulTestsDataset.data.shift();
-        if (gitActionsDataset) gitActionsDataset.data.shift();
-      }
-
-      // Update x-axis labels (displaying only HH:MM)
-      progressChart.data.labels = labels.map((ts) =>
-        new Date(ts).toLocaleTimeString([], {
-          hour: "2-digit",
-          minute: "2-digit",
-        })
-      );
-
-      console.log(
-        "[Chart Update] Updating Progress Chart with new data point."
-      );
-      chartsUpdated = true;
-    }
-  } else if (progressChart) {
-    // console.log("[Chart Update] No new progress data received.");
-  }
-  // --- END CHANGE ---
-
-  // Update Git Activity Chart (Line Chart) - Based on GIT_ACTIVITY
-  if (gitChart && data.git_activity) {
-    console.log(
-      "[Chart Update] Updating Git Activity Chart with data:",
-      data.git_activity
-    );
-    if (data.git_activity.labels && data.git_activity.values) {
-      if (
-        JSON.stringify(gitChart.data.labels) !==
-          JSON.stringify(data.git_activity.labels) ||
-        JSON.stringify(gitChart.data.datasets[0].data) !==
-          JSON.stringify(data.git_activity.values)
-      ) {
-        gitChart.data.labels = data.git_activity.labels;
-        gitChart.data.datasets[0].data = data.git_activity.values;
-        chartsUpdated = true;
-        console.log("[Chart Update] Git Activity data changed.");
-      }
-    } else {
-      console.warn(
-        "[Chart Update] Git activity data missing labels or values:",
-        data.git_activity
-      );
-    }
-  } else if (gitChart) {
-    // console.log("[Chart Update] No git_activity received for Git Chart.");
-  }
-
-  // Update Status Distribution Chart (Doughnut Chart) - Based on TASK_STATUS_DISTRIBUTION
-  if (statusPieChart && data.task_status_distribution) {
-    console.log(
-      "[Chart Update] Updating Status Distribution with data:",
-      data.task_status_distribution
-    );
-    const statusCounts = data.task_status_distribution;
-    const newData = [
-      statusCounts.pending || 0, // Use || 0 as fallback
-      statusCounts.processing || 0,
-      statusCounts.completed || 0,
-      statusCounts.failed || 0,
-      statusCounts.other || 0,
-    ];
-    if (
-      JSON.stringify(statusPieChart.data.datasets[0].data) !==
-      JSON.stringify(newData)
-    ) {
-      statusPieChart.data.datasets[0].data = newData;
-      chartsUpdated = true;
-      console.log("[Chart Update] Status Distribution data changed.");
-    }
-  } else if (statusPieChart) {
-    // console.log("[Chart Update] No task_status_distribution received for Status Chart.");
-  }
-
-  // Update all charts if any data changed
-  if (chartsUpdated) {
-    // Ensure colors are correct for the current theme before updating
-    const newChartColor = getChartFontColor(); // Recalculate color
-
-    [taskChart, progressChart, gitChart, statusPieChart].forEach((chart) => {
-      if (chart) {
-        // Update common options like colors
-        if (chart.options.scales) {
-          if (chart.options.scales.y) {
-            chart.options.scales.y.ticks.color = newChartColor;
-            chart.options.scales.y.grid.color = `${newChartColor}20`;
-            if (chart.options.scales.y.title)
-              chart.options.scales.y.title.color = newChartColor;
-          }
-          if (chart.options.scales.y1) {
-            // For progress chart second axis
-            chart.options.scales.y1.ticks.color = newChartColor;
-            if (chart.options.scales.y1.title)
-              chart.options.scales.y1.title.color = newChartColor;
-          }
-          if (chart.options.scales.x) {
-            chart.options.scales.x.ticks.color = newChartColor;
-            chart.options.scales.x.grid.color = `${newChartColor}20`;
-          }
-        }
-        if (chart.options.plugins && chart.options.plugins.legend) {
-          chart.options.plugins.legend.labels.color = newChartColor;
-        }
-        if (chart.options.plugins && chart.options.plugins.title) {
-          chart.options.plugins.title.color = newChartColor;
-        }
-        // Call update
-        chart.update();
-      }
+        plugins: {
+          ...baseOptions.plugins,
+          title: {
+            ...baseOptions.plugins.title,
+            text: "Project Progress Over Time",
+          },
+          tooltip: {
+            callbacks: {
+              label: (context) =>
+                `${context.dataset.label || ""}: ${context.parsed.y ?? "N/A"}`,
+              title: (tooltipItems) => tooltipItems[0]?.label || "", // Use optional chaining
+            },
+          },
+        },
+      },
     });
-    console.log("[Chart Update] One or more charts updated visually.");
+  }
+}
+
+function updateProgressChartData(progressData, gitActivityData) {
+  if (!progressChart || !progressData?.timestamp) return false; // Optional chaining
+
+  console.log("Progress data received:", progressData);
+
+  const labels = progressChart.data.labels;
+  const datasets = progressChart.data.datasets;
+  const completedTasksDataset = datasets.find(
+    (ds) => ds.label === "Completed Tasks"
+  );
+  const successfulTestsDataset = datasets.find(
+    (ds) => ds.label === "Successful Tests"
+  );
+  const gitActionsDataset = datasets.find((ds) => ds.label === "Git Actions");
+
+  // Use latest Git Action count from git_activity if available, else from progress_data
+  let latestGitActionCount = progressData.git_actions;
+  if (gitActivityData?.values?.length > 0) {
+    // Optional chaining
+    latestGitActionCount =
+      gitActivityData.values[gitActivityData.values.length - 1];
+    console.log(
+      `[Chart Update] Using latest git_actions value from git_activity: ${latestGitActionCount}`
+    );
   } else {
     console.log(
-      "[Chart Update] No chart data changed, skipping visual update."
+      `[Chart Update] Using git_actions value from progress_data: ${latestGitActionCount}`
     );
+  }
+
+  // Add new data
+  labels.push(progressData.timestamp); // Store full timestamp for tooltip
+  completedTasksDataset?.data.push(progressData.completed_tasks); // Optional chaining
+  successfulTestsDataset?.data.push(progressData.successful_tests); // Optional chaining
+  console.log(
+    `[Chart Update] Pushing git_actions value: ${latestGitActionCount}`
+  );
+  gitActionsDataset?.data.push(latestGitActionCount); // Optional chaining
+
+  // Limit data points
+  if (labels.length > MAX_PROGRESS_POINTS) {
+    labels.shift();
+    completedTasksDataset?.data.shift();
+    successfulTestsDataset?.data.shift();
+    gitActionsDataset?.data.shift();
+  }
+
+  // Update x-axis labels (displaying only HH:MM)
+  progressChart.data.labels = labels.map((ts) =>
+    new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+  );
+
+  console.log("[Chart Update] Updating Progress Chart with new data point.");
+  return true;
+}
+
+// --- Git Chart ---
+function initializeGitChart() {
+  if (gitChart) return;
+  const ctx = document.getElementById("gitChart")?.getContext("2d");
+  if (ctx) {
+    const baseOptions = getBaseChartOptions();
+    gitChart = new Chart(ctx, {
+      type: "line",
+      data: {
+        labels: [],
+        datasets: [
+          {
+            label: "Commits Over Time",
+            data: [],
+            backgroundColor: "rgba(255, 159, 64, 0.2)",
+            borderColor: "rgba(255, 159, 64, 1)",
+            borderWidth: 2,
+            tension: 0.4,
+            fill: true,
+          },
+        ],
+      },
+      options: {
+        ...baseOptions,
+        plugins: {
+          ...baseOptions.plugins,
+          title: { ...baseOptions.plugins.title, text: "Git Activity" },
+        },
+      },
+    });
+  }
+}
+
+function updateGitChartData(gitActivityData) {
+  if (!gitChart || !gitActivityData?.labels || !gitActivityData?.values)
+    return false; // Optional chaining
+
+  console.log(
+    "[Chart Update] Updating Git Activity Chart with data:",
+    gitActivityData
+  );
+  if (
+    JSON.stringify(gitChart.data.labels) !==
+      JSON.stringify(gitActivityData.labels) ||
+    JSON.stringify(gitChart.data.datasets[0].data) !==
+      JSON.stringify(gitActivityData.values)
+  ) {
+    gitChart.data.labels = gitActivityData.labels;
+    gitChart.data.datasets[0].data = gitActivityData.values;
+    console.log("[Chart Update] Git Activity data changed.");
+    return true;
+  }
+  return false;
+}
+
+// --- Status Pie Chart ---
+function initializeStatusPieChart() {
+  if (statusPieChart) return;
+  const ctx = document.getElementById("statusPieChart")?.getContext("2d");
+  if (ctx) {
+    const baseOptions = getBaseChartOptions(); // Get base options for colors
+    statusPieChart = new Chart(ctx, {
+      type: "doughnut",
+      data: {
+        labels: ["Pending", "Processing", "Completed", "Failed", "Other"],
+        datasets: [
+          {
+            label: "Task Status Distribution",
+            data: [0, 0, 0, 0, 0],
+            backgroundColor: [
+              "rgba(255, 205, 86, 0.7)", // Yellow
+              "rgba(54, 162, 235, 0.7)", // Blue
+              "rgba(75, 192, 192, 0.7)", // Green
+              "rgba(255, 99, 132, 0.7)", // Red
+              "rgba(201, 203, 207, 0.7)", // Grey
+            ],
+            borderColor: [
+              "rgba(255, 205, 86, 1)",
+              "rgba(54, 162, 235, 1)",
+              "rgba(75, 192, 192, 1)",
+              "rgba(255, 99, 132, 1)",
+              "rgba(201, 203, 207, 1)",
+            ],
+            borderWidth: 1,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: {
+            position: "right",
+            labels: { color: baseOptions.plugins.legend.labels.color },
+          },
+          title: {
+            display: true,
+            text: "Task Statuses",
+            color: baseOptions.plugins.title.color,
+          },
+        },
+      },
+    });
+  }
+}
+
+function updateStatusPieChartData(statusDistributionData) {
+  if (!statusPieChart || !statusDistributionData) return false;
+
+  console.log(
+    "[Chart Update] Updating Status Distribution with data:",
+    statusDistributionData
+  );
+  const newData = [
+    statusDistributionData.pending || 0,
+    statusDistributionData.processing || 0,
+    statusDistributionData.completed || 0,
+    statusDistributionData.failed || 0,
+    statusDistributionData.other || 0,
+  ];
+  if (
+    JSON.stringify(statusPieChart.data.datasets[0].data) !==
+    JSON.stringify(newData)
+  ) {
+    statusPieChart.data.datasets[0].data = newData;
+    console.log("[Chart Update] Status Distribution data changed.");
+    return true;
+  }
+  return false;
+}
+
+// --- Chart Theme Update ---
+function updateAllChartThemes() {
+  const newChartColor = getChartFontColor();
+  [taskChart, progressChart, gitChart, statusPieChart].forEach((chart) => {
+    updateChartTheme(chart, newChartColor);
+  });
+}
+
+function updateChartTheme(chart, chartColor) {
+  if (!chart?.options) return; // Optional chaining
+
+  try {
+    // Update common options like colors
+    if (chart.options.scales) {
+      if (chart.options.scales.y) {
+        chart.options.scales.y.ticks.color = chartColor;
+        chart.options.scales.y.grid.color = `${chartColor}20`;
+        if (chart.options.scales.y.title)
+          chart.options.scales.y.title.color = chartColor;
+      }
+      // Update yCount axis for progress chart
+      if (chart.options.scales.yCount) {
+        chart.options.scales.yCount.ticks.color = chartColor;
+        chart.options.scales.yCount.grid.color = `${chartColor}20`;
+        if (chart.options.scales.yCount.title)
+          chart.options.scales.yCount.title.color = chartColor;
+      }
+      if (chart.options.scales.x) {
+        chart.options.scales.x.ticks.color = chartColor;
+        chart.options.scales.x.grid.color = `${chartColor}20`;
+      }
+    }
+    // Optional chaining for plugins
+    if (chart.options.plugins?.legend?.labels) {
+      chart.options.plugins.legend.labels.color = chartColor;
+    }
+    if (chart.options.plugins?.title) {
+      chart.options.plugins.title.color = chartColor;
+    }
+    chart.update();
+  } catch (error) {
+    console.error("Error updating chart theme:", error, "Chart:", chart);
   }
 }
 
@@ -1044,8 +983,8 @@ function updateFileStructure(structureData) {
   function renderNode(node, parentUl, currentPath = "") {
     // --- Add logging here ---
     console.log(
-      `Rendering node at path: '${currentPath}'. Node type: ${typeof node}`,
-      node
+      `Rendering node at path: '${currentPath}'. Node type: ${typeof node}`
+      // node // Avoid logging potentially huge objects
     );
     if (typeof node !== "object" || node === null) {
       console.error(
@@ -1070,10 +1009,10 @@ function updateFileStructure(structureData) {
         }
         return String(keyA).localeCompare(String(keyB)); // Then alphabetical
       });
-      console.log(
-        `Sorted entries for path '${currentPath}':`,
-        entries.map((e) => e[0])
-      ); // Log sorted keys
+      // console.log(
+      //   `Sorted entries for path '${currentPath}':`,
+      //   entries.map((e) => e[0])
+      // ); // Log sorted keys - can be noisy
     } catch (sortError) {
       console.error(
         `Error sorting entries for node at path '${currentPath}':`,
@@ -1094,9 +1033,9 @@ function updateFileStructure(structureData) {
 
       try {
         // --- Add logging inside try ---
-        console.log(
-          `Processing entry: Key='${key}', Type='${typeof value}', Path='${currentPath}'`
-        );
+        // console.log(
+        //   `Processing entry: Key='${key}', Type='${typeof value}', Path='${currentPath}'`
+        // ); // Can be noisy
         // ---
 
         const isDirectory = typeof value === "object" && value !== null;
@@ -1105,7 +1044,7 @@ function updateFileStructure(structureData) {
           : String(key);
 
         if (isDirectory) {
-          console.log(`Rendering folder: ${itemPath}`);
+          // console.log(`Rendering folder: ${itemPath}`); // Noisy
           li.innerHTML = `<span class="folder"><i class="fas fa-folder"></i> ${String(
             key
           )}</span>`;
@@ -1128,18 +1067,16 @@ function updateFileStructure(structureData) {
 
           // Recurse only if the directory is not empty
           if (Object.keys(value).length > 0) {
-            console.log(`Recursing into folder: ${itemPath}`);
+            // console.log(`Recursing into folder: ${itemPath}`); // Noisy
             renderNode(value, subUl, itemPath); // Recurse
           } else {
-            console.log(`Folder is empty: ${itemPath}`);
-            // Optionally add a placeholder for empty folders
-            // subUl.innerHTML = "<li><em>(empty)</em></li>";
+            // console.log(`Folder is empty: ${itemPath}`); // Noisy
           }
         } else {
           // It's a file
-          console.log(`Rendering file: ${itemPath}`);
+          // console.log(`Rendering file: ${itemPath}`); // Noisy
           const iconClass = getFileIcon(String(key));
-          console.log(`Icon for ${key}: ${iconClass}`); // Log icon class
+          // console.log(`Icon for ${key}: ${iconClass}`); // Log icon class
           li.innerHTML = `<span class="file" data-path="${itemPath}"><i class="fas ${iconClass}"></i> ${String(
             key
           )}</span>`;
@@ -1166,16 +1103,14 @@ function updateFileStructure(structureData) {
           }
         }
       } catch (error) {
-        // Log the specific error and the item being processed
         console.error(
           `Error rendering node entry: Key='${key}', Path='${currentPath}', ValueType='${typeof value}':`,
           error,
           "Value:",
           value
         );
-        // Update the existing li with error message instead of adding a new one
         li.style.color = "red";
-        li.textContent = `Error rendering ${key}`; // Keep the original error message format
+        li.textContent = `Error rendering ${key}`;
       }
     }
   }
@@ -1191,136 +1126,89 @@ function updateFileStructure(structureData) {
   }
 }
 
-// Need to also define getFileIcon if it's not already defined correctly
+// Refactored getFileIcon using a map
+const fileIconMap = {
+  // Specific names
+  ".gitignore": "fa-code-branch",
+  ".gitattributes": "fa-code-branch",
+  dockerfile: "fa-box-open",
+  makefile: "fa-file-code",
+  // Extensions
+  py: "fa-file-code",
+  js: "fa-file-code",
+  html: "fa-file-code",
+  css: "fa-file-code",
+  json: "fa-file-code",
+  md: "fa-file-lines",
+  ts: "fa-file-code",
+  java: "fa-file-code",
+  c: "fa-file-code",
+  h: "fa-file-code",
+  cpp: "fa-file-code",
+  hpp: "fa-file-code",
+  cs: "fa-file-code",
+  go: "fa-file-code",
+  php: "fa-file-code",
+  rb: "fa-file-code",
+  swift: "fa-file-code",
+  xml: "fa-file-code",
+  yaml: "fa-file-alt",
+  yml: "fa-file-alt",
+  sh: "fa-terminal",
+  bash: "fa-terminal",
+  zsh: "fa-terminal",
+  sql: "fa-database",
+  txt: "fa-file-alt",
+  log: "fa-file-alt",
+  csv: "fa-file-csv",
+  tsv: "fa-file-csv",
+  png: "fa-file-image",
+  jpg: "fa-file-image",
+  jpeg: "fa-file-image",
+  gif: "fa-file-image",
+  bmp: "fa-file-image",
+  ico: "fa-file-image",
+  svg: "fa-file-image",
+  mp3: "fa-file-audio",
+  wav: "fa-file-audio",
+  ogg: "fa-file-audio",
+  flac: "fa-file-audio",
+  aac: "fa-file-audio",
+  mp4: "fa-file-video",
+  avi: "fa-file-video",
+  mov: "fa-file-video",
+  wmv: "fa-file-video",
+  mkv: "fa-file-video",
+  pdf: "fa-file-pdf",
+  doc: "fa-file-word",
+  docx: "fa-file-word",
+  xls: "fa-file-excel",
+  xlsx: "fa-file-excel",
+  ppt: "fa-file-powerpoint",
+  pptx: "fa-file-powerpoint",
+  zip: "fa-file-archive",
+  rar: "fa-file-archive",
+  "7z": "fa-file-archive",
+  tar: "fa-file-archive",
+  gz: "fa-file-archive",
+  db: "fa-database",
+  sqlite: "fa-database",
+};
+
 function getFileIcon(fileName) {
-  // Ensure fileName is treated as a string
-  const nameStr = String(fileName);
-  // Handle files starting with '.' like .gitignore
-  const ext = nameStr.includes(".")
-    ? nameStr.split(".").pop().toLowerCase()
-    : "";
-  const baseName = nameStr.toLowerCase();
+  const nameStr = String(fileName).toLowerCase();
+  const ext = nameStr.includes(".") ? nameStr.split(".").pop() : "";
 
-  // Prioritize specific names (FontAwesome 6 Free icons)
-  // Note: Some brand icons (like fa-python, fa-js) might require FontAwesome Pro or specific setup.
-  // Using generic icons for broader compatibility first.
-  if (baseName === ".gitignore" || baseName === ".gitattributes")
-    return "fa-code-branch"; // Git icon
-  if (baseName === "dockerfile") return "fa-box-open"; // Generic box icon for Docker
-  if (baseName === "makefile") return "fa-file-code";
-
-  switch (ext) {
-    // Code files
-    case "py":
-      return "fa-file-code"; // Generic code
-    case "js":
-      return "fa-file-code"; // Generic code
-    case "html":
-      return "fa-file-code";
-    case "css":
-      return "fa-file-code"; // fa-css3-alt exists but might need setup
-    case "json":
-      return "fa-file-code";
-    case "md":
-      return "fa-file-lines"; // Text file icon
-    case "ts":
-      return "fa-file-code";
-    case "java":
-      return "fa-file-code";
-    case "c":
-    case "h":
-      return "fa-file-code";
-    case "cpp":
-    case "hpp":
-      return "fa-file-code";
-    case "cs":
-      return "fa-file-code";
-    case "go":
-      return "fa-file-code";
-    case "php":
-      return "fa-file-code";
-    case "rb":
-      return "fa-file-code"; // fa-gem exists but might need setup
-    case "swift":
-      return "fa-file-code";
-    case "xml":
-      return "fa-file-code";
-    case "yaml":
-    case "yml":
-      return "fa-file-alt"; // Use alt text file icon
-    case "sh":
-    case "bash":
-    case "zsh":
-      return "fa-terminal";
-    case "sql":
-      return "fa-database";
-
-    // Text/Data files
-    case "txt":
-      return "fa-file-alt";
-    case "log":
-      return "fa-file-alt";
-    case "csv":
-      return "fa-file-csv";
-    case "tsv":
-      return "fa-file-csv"; // Use same icon as CSV
-
-    // Image files
-    case "png":
-    case "jpg":
-    case "jpeg":
-    case "gif":
-    case "bmp":
-    case "ico":
-    case "svg":
-      return "fa-file-image";
-
-    // Audio files
-    case "mp3":
-    case "wav":
-    case "ogg":
-    case "flac":
-    case "aac":
-      return "fa-file-audio";
-
-    // Video files
-    case "mp4":
-    case "avi":
-    case "mov":
-    case "wmv":
-    case "mkv":
-      return "fa-file-video";
-
-    // Document files
-    case "pdf":
-      return "fa-file-pdf";
-    case "doc":
-    case "docx":
-      return "fa-file-word";
-    case "xls":
-    case "xlsx":
-      return "fa-file-excel";
-    case "ppt":
-    case "pptx":
-      return "fa-file-powerpoint";
-
-    // Archive files
-    case "zip":
-    case "rar":
-    case "7z":
-    case "tar":
-    case "gz":
-      return "fa-file-archive";
-
-    // Other
-    case "db":
-    case "sqlite":
-      return "fa-database";
-
-    // Default
-    default:
-      return "fa-file"; // Default file icon
+  // Check specific names first
+  if (fileIconMap[nameStr]) {
+    return fileIconMap[nameStr];
   }
+  // Check extension
+  if (ext && fileIconMap[ext]) {
+    return fileIconMap[ext];
+  }
+  // Default icon
+  return "fa-file";
 }
 
 async function loadFileContent(path) {
@@ -1493,36 +1381,7 @@ function setTheme(theme) {
 
   // Update chart colors ONLY if charts have been initialized
   if (taskChart) {
-    // Check if the first chart exists as a proxy for all charts being initialized
-    const chartColor = getChartFontColor();
-    [taskChart, progressChart, gitChart, statusPieChart].forEach((chart) => {
-      if (chart && chart.options) {
-        // Check if chart and options exist
-        try {
-          // Update axis colors only if scales exist (for bar/line charts)
-          if (chart.options.scales?.y?.ticks) {
-            chart.options.scales.y.ticks.color = chartColor;
-          }
-          if (chart.options.scales?.x?.ticks) {
-            chart.options.scales.x.ticks.color = chartColor;
-          }
-
-          // Update legend colors if legend exists
-          if (chart.options.plugins?.legend?.labels) {
-            chart.options.plugins.legend.labels.color = chartColor;
-          }
-
-          // Update title color if title exists
-          if (chart.options.plugins?.title) {
-            chart.options.plugins.title.color = chartColor;
-          }
-
-          chart.update(); // Update the chart to apply color changes
-        } catch (error) {
-          console.error("Error updating chart theme:", error, "Chart:", chart);
-        }
-      }
-    });
+    updateAllChartThemes(); // Use the refactored theme update function
   }
 
   console.log(`Theme set to: ${theme}`);
@@ -1589,7 +1448,10 @@ async function toggleAI(ai) {
     // updateButtonState(ai, !isOn);
     showNotification(`${ai.toUpperCase()} ${action} request sent`, "info");
   } catch (error) {
-    // Error already shown by sendRequest
+    // Error already shown by sendRequest, but log it for debugging
+    console.error(`Failed to ${action} ${ai}:`, error);
+    // Optionally show a more specific error notification if needed
+    // showNotification(`Failed to ${action} ${ai}: ${error.message}`, "error");
   }
 }
 
@@ -1597,14 +1459,20 @@ async function startAll() {
   try {
     await sendRequest("/start_all");
     showNotification("Start All request sent", "info");
-  } catch (error) {}
+  } catch (error) {
+    console.error("Failed to start all AI:", error);
+    // Error already shown by sendRequest
+  }
 }
 
 async function stopAll() {
   try {
     await sendRequest("/stop_all");
     showNotification("Stop All request sent", "info");
-  } catch (error) {}
+  } catch (error) {
+    console.error("Failed to stop all AI:", error);
+    // Error already shown by sendRequest
+  }
 }
 
 async function resetSystem() {
@@ -1614,16 +1482,14 @@ async function resetSystem() {
     )
   ) {
     try {
-      // Clear first, then restart (adjust endpoints if needed)
       await sendRequest("/clear", "POST");
-      await sendRequest("/start_all", "POST"); // Or individual start endpoints
+      await sendRequest("/start_all", "POST");
       showNotification("System reset and restart requested", "info");
-      // Clear local UI elements immediately for responsiveness
       logContent.innerHTML = "<p><em>System reset requested...</em></p>";
-      updateQueues({ executor: [], tester: [], documenter: [] }); // Clear queues visually
-      updateStats({}, {}); // Reset stats
-      // Charts might need explicit clearing or will update on next WS message
+      updateQueues({ executor: [], tester: [], documenter: [] });
+      updateStats({}, {});
     } catch (error) {
+      console.error("Failed to reset system:", error);
       // Error handled by sendRequest
     }
   }
@@ -1660,8 +1526,8 @@ async function saveConfig() {
     await sendRequest("/update_config", "POST", configData);
     showNotification("Configuration saved successfully", "success");
   } catch (error) {
-    // Error handled by sendRequest
-    showNotification("Failed to save configuration", "error"); // Specific message
+    console.error("Failed to save configuration:", error);
+    showNotification("Failed to save configuration", "error");
   }
 }
 
@@ -1696,6 +1562,7 @@ async function saveConfigItem(key, elementId) {
     await sendRequest("/update_config_item", "POST", data);
     showNotification(`${key} saved successfully`, "success");
   } catch (error) {
+    console.error(`Failed to save config item ${key}:`, error);
     showNotification(`Failed to save ${key}`, "error");
   }
 }
@@ -1710,13 +1577,23 @@ async function clearRepo() {
     try {
       const response = await sendRequest("/clear_repo", "POST");
       showNotification(
-        response.status || "Repository cleared and re-initialized.",
+        response?.status || "Repository cleared and re-initialized.", // Optional chaining
         "success"
       );
-      // Optionally, refresh file structure or other UI elements
-      fetchAndUpdateStructure(); // Assuming this function exists to refresh the file tree
+      // Refresh file structure after clearing
+      // Assuming fetchAndUpdateStructure exists or implement it:
+      // fetchAndUpdateStructure();
+      // For now, just clear the displayed structure:
+      const fileStructureDiv = document.getElementById("file-structure");
+      if (fileStructureDiv)
+        fileStructureDiv.innerHTML =
+          "<p><em>Repository cleared. Refreshing...</em></p>";
+      // Request full status update to get new structure
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ action: "get_full_status" }));
+      }
     } catch (error) {
-      // Error already shown by sendRequest
+      console.error("Failed to clear repository:", error);
       showNotification("Failed to clear repository.", "error");
     }
   }
@@ -1763,8 +1640,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Initial UI state (optional, WebSocket should provide data)
   updateQueues({ executor: [], tester: [], documenter: [] });
-  updateStats({}, {}); // Виправлено виклик функції з updateStatsFromSubtasks на updateStats
-
+  // Initial call to updateStats uses the default actualTotalTasks = 0
+  updateStats({}, {});
   console.log("Initialization complete.");
 });
 
