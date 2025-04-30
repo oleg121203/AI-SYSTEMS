@@ -3,7 +3,7 @@ let ws;
 const reconnectInterval = 10000; // Reconnect interval 5 seconds
 const maxReconnectAttempts = 10;
 let reconnectAttempts = 0;
-const MAX_LOG_LINES = 10; // Maximum number of log lines to keep
+const MAX_LOG_LINES = 30; // Maximum number of log lines to keep
 let actualTotalTasks = 0; // Add global variable for actual total tasks
 
 // --- Global DOM Elements (cache them, assign in DOMContentLoaded) ---
@@ -1655,6 +1655,11 @@ document.addEventListener("DOMContentLoaded", () => {
       updateLoadDescription(this.value);
     });
   }
+
+  // Set up the log panel auto-retract behavior
+  setupLogPanelBehavior();
+
+  console.log("Initialization complete.");
 });
 
 // --- Helper function to calculate status distribution ---
@@ -1780,5 +1785,37 @@ function saveLoadLevel() {
   } catch (error) {
     console.error(`Помилка збереження рівня навантаження:`, error);
     showNotification(`Помилка збереження рівня навантаження`, "error");
+  }
+}
+
+// --- Log Panel Auto-Retract ---
+let logPanelTimeoutId = null; // Variable to hold the timeout ID
+
+function setupLogPanelBehavior() {
+  const logPanelContainer = document.querySelector(".log-panel-container");
+
+  if (logPanelContainer) {
+    logPanelContainer.addEventListener("mouseenter", () => {
+      // Clear any existing timeout when the mouse enters the area
+      if (logPanelTimeoutId) {
+        clearTimeout(logPanelTimeoutId);
+        logPanelTimeoutId = null;
+        console.log("Log panel retract timer cleared (mouse entered).");
+      }
+      // Add a class to ensure it's visible (CSS handles the transition)
+      logPanelContainer.classList.add("log-panel-hover");
+    });
+
+    logPanelContainer.addEventListener("mouseleave", () => {
+      // Start a timer to retract the panel when the mouse leaves
+      logPanelTimeoutId = setTimeout(() => {
+        logPanelContainer.classList.remove("log-panel-hover");
+        console.log("Log panel retracted after 3s timeout.");
+        logPanelTimeoutId = null;
+      }, 3000); // 3000 milliseconds = 3 seconds
+      console.log("Log panel retract timer started (3s).");
+    });
+  } else {
+    console.error("Log panel container not found for setting up behavior.");
   }
 }

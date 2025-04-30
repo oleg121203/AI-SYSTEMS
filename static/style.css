@@ -182,6 +182,7 @@ body {
   justify-content: space-between;
   align-items: center;
   flex-wrap: wrap; /* Allow wrapping on small screens */
+  margin-top: 10px; /* Add margin to prevent overlap with trigger */
 }
 
 .header h1 {
@@ -664,7 +665,7 @@ body {
 
 /* Log Panel */
 #log-content {
-  height: 150px; /* REDUCE height for horizontal layout */
+  height: 420px; /* INCREASED HEIGHT for more log lines */
   overflow-y: auto;
   background: var(--bg-color);
   border: 1px solid var(--border-color);
@@ -863,4 +864,122 @@ body {
 .load-description p {
   margin: 0;
   line-height: 1.4;
+}
+
+/* Log Panel - Moved to Top */
+.log-panel-container {
+  position: fixed; /* Keep it at the top */
+  top: 0;
+  left: 0;
+  width: 100%;
+  z-index: 1001; /* Ensure it's above other content */
+  /* Initially small height for the trigger area */
+  height: 10px;
+  overflow: hidden; /* Hide the panel initially */
+  transition: height 0.5s ease-in-out; /* Smooth height transition */
+}
+
+.log-panel-trigger {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 10px; /* Height of the trigger area */
+  cursor: pointer; /* Indicate it's interactive (optional) */
+  /* background: rgba(255, 0, 0, 0.1); /* Optional: for debugging trigger area */
+}
+
+.log-panel {
+  /* Styles for the log panel itself */
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  background: var(--container-bg);
+  border: 1px solid var(--border-color);
+  border-top: none; /* No top border as it connects to the edge */
+  border-radius: 0 0 8px 8px; /* Rounded bottom corners */
+  box-shadow: var(--panel-shadow);
+  padding: 15px;
+  box-sizing: border-box;
+  transform: translateY(-100%); /* Initially hidden above */
+  transition: transform 0.5s ease-in-out; /* Smooth slide transition */
+  display: flex;
+  flex-direction: column;
+}
+
+/* Show panel on container hover OR when explicitly marked */
+.log-panel-container:hover,
+.log-panel-container.log-panel-hover {
+  /* ADDED .log-panel-hover */
+  height: 500px; /* INCREASED HEIGHT for more log lines */
+  overflow: visible; /* Allow panel to be seen */
+}
+
+.log-panel-container:hover .log-panel,
+.log-panel-container.log-panel-hover .log-panel {
+  transform: translateY(0); /* Slide panel down */
+}
+
+.log-panel h2 {
+  margin-top: 0;
+  margin-bottom: 10px;
+  color: var(--heading-color);
+  font-size: 1.1em;
+  border-bottom: 1px solid var(--border-color);
+  padding-bottom: 8px;
+}
+
+#log-content {
+  height: 420px; /* INCREASED HEIGHT for more log lines */
+  overflow-y: auto;
+  background: var(--bg-color);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 10px;
+  font-family: monospace;
+  font-size: 0.85em;
+  flex-grow: 1;
+  color: var(--text-color);
+  margin-bottom: 10px; /* Space before button */
+}
+
+#log-content p {
+  margin: 2px 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+#log-content em {
+  color: var(--secondary-color);
+  font-style: normal;
+}
+
+.clear-log-button {
+  padding: 5px 10px;
+  background: var(--secondary-color);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.3s ease;
+  font-size: 0.8em;
+  align-self: flex-end; /* Position button to the right */
+  box-shadow: var(--button-shadow);
+}
+
+.clear-log-button:hover {
+  opacity: 0.9;
+}
+
+.clear-log-button i {
+  margin-right: 5px;
+}
+
+/* Remove old log panel styles if they exist */
+/* .log-panel { ... remove old grid/margin styles ... } */
+
+/* Adjust main container padding if needed to avoid overlap when log is closed */
+.header {
+  margin-top: 10px; /* Add margin to prevent overlap with trigger */
 }
