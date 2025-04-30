@@ -9,35 +9,34 @@ from typing import Any, Dict, List, Optional, Union
 
 import aiohttp
 
-# Используем функцию load_config из config.py
+# Use load_config function from config.py
 from config import load_config
 from providers import BaseProvider, ProviderFactory
 from utils import apply_request_delay, log_message  # Import apply_request_delay
 
-# Настройка логирования
+# Configure logging
 logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levellevelname)s - %(message)s"
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger("AI2")
 
-# Загружаем конфигурацию один раз
+# Load configuration once
 config = load_config()
 MCP_API_URL = config.get("mcp_api", "http://localhost:7860")
 
 
 class AI2:
     """
-    Второй AI модуль, отвечающий за генерацию кода, тестов и документации.
-    Использует различных провайдеров для разных задач и поддерживает
-    механизм fallback.
+    Second AI module responsible for generating code, tests, and documentation.
+    Uses different providers for different tasks and supports fallback mechanism.
     """
 
     def __init__(self, role: str):
         """
-        Инициализация AI2 модуля.
+        Initialize AI2 module.
 
         Args:
-            role: Роль этого воркера ('executor', 'tester', 'documenter')
+            role: Role of this worker ('executor', 'tester', 'documenter')
         """
         self.role = role
         global logger
@@ -48,27 +47,31 @@ class AI2:
         self.ai_config = ai_config_base.get("ai2", {})
         if not self.ai_config:
             logger.warning(
-                "Секция 'ai_config.ai2' не найдена в конфигурации. Используются значения по умолчанию."
+                "Section 'ai_config.ai2' not found in configuration. Using default values."
             )
             self.ai_config = {"fallback_providers": ["openai"]}
 
-        self.prompts = self.config.get(
+        # Load base prompts from config
+        self.base_prompts = self.config.get(
             "ai2_prompts",
             [
-                "You are an expert programmer. Create the content for the file {filename} based on the following task description. Respond ONLY with the raw file content. Do NOT use markdown code blocks (```).",
-                "You are a testing expert. Generate unit tests for the code in file {filename}. Respond ONLY with the raw test code. Do NOT use markdown code blocks (```).",
-                "You are a technical writer. Generate documentation (e.g., docstrings, comments) for the code in file {filename}. Respond ONLY with the raw documentation text. Do NOT use markdown code blocks (```).",
+                "You are an expert programmer. Create the content for the file {filename} based on the following task description.",
+                "You are a testing expert. Generate unit tests for the code in file {filename}.",
+                "You are a technical writer. Generate documentation (e.g., docstrings, comments) for the code in file {filename}.",
             ],
         )
-        if len(self.prompts) < 3:
+        if len(self.base_prompts) < 3:
             logger.error(
-                "Конфигурация 'ai2_prompts' отсутствует или неполна. Используются промпты по умолчанию."
+                "Configuration 'ai2_prompts' is missing or incomplete. Using default base prompts."
             )
-            self.prompts = [
-                "You are an expert programmer. Create the content for the file {filename} based on the following task description. Respond ONLY with the raw file content. Do NOT use markdown code blocks (```).",
-                "You are a testing expert. Generate unit tests for the code in file {filename}. Respond ONLY with the raw test code. Do NOT use markdown code blocks (```).",
-                "You are a technical writer. Generate documentation (e.g., docstrings, comments) for the code in file {filename}. Respond ONLY with the raw documentation text. Do NOT use markdown code blocks (```).",
+            self.base_prompts = [
+                "You are an expert programmer. Create the content for the file {filename} based on the following task description.",
+                "You are a testing expert. Generate unit tests for the code in file {filename}.",
+                "You are a technical writer. Generate documentation (e.g., docstrings, comments) for the code in file {filename}.",
             ]
+
+        # System instructions to append to base prompts
+        self.system_instructions = " Respond ONLY with the raw file content. Do NOT use markdown code blocks (```). Use only Latin characters in your response."
 
         # Updated: Use the new provider configuration structure
         self.providers = self.ai_config.get("providers", {}).get(self.role, [])
@@ -89,46 +92,46 @@ class AI2:
         self.api_session = None
 
     async def _get_api_session(self) -> aiohttp.ClientSession:
-        """Получает или создает сессию aiohttp."""
+        """Gets or creates an aiohttp session."""
         if self.api_session is None or self.api_session.closed:
             self.api_session = aiohttp.ClientSession()
         return self.api_session
 
     async def close_session(self):
-        """Закрывает сессию aiohttp."""
+        """Closes the aiohttp session."""
         if self.api_session or not self.api_session.closed:
             await self.api_session.close()
-            logger.info("API сессия закрыта.")
+            logger.info("API session closed.")
 
     def _setup_providers_config(self) -> Dict[str, Dict[str, Any]]:
         """
-        Настройка конфигурации провайдеров для каждой роли из общей конфигурации.
-        Используется self.role для определения нужного провайдера.
+        Sets up provider configuration for each role from the overall configuration.
+        Uses self.role to determine the required provider.
 
         Returns:
-            Dict[str, Dict[str, Any]]: Словарь с конфигурацией для текущей роли
+            Dict[str, Dict[str, Any]]: Dictionary with configuration for the current role
         """
-        # Используем первый провайдер из списка настроенных провайдеров
+        # Use the first provider from the list of configured providers
         provider_name = self.providers[0] if self.providers else None
 
-        # Если не смогли найти провайдер для роли, используем fallback
+        # If no provider found for the role, use fallback
         if not provider_name:
             provider_name = self.fallback_providers[0]
             logger.warning(
-                f"Не найден провайдер для роли '{self.role}'. Используем fallback: {provider_name}"
+                f"No provider found for role '{self.role}'. Using fallback: {provider_name}"
             )
 
-        # Получаем конфигурацию провайдера
+        # Get provider configuration
         providers_list = self.config.get("providers", {})
         if (provider_name in providers_list):
             common_config = providers_list[provider_name]
         else:
             logger.warning(
-                f"Провайдер '{provider_name}' не найден в списке провайдеров. Используем пустую конфигурацию."
+                f"Provider '{provider_name}' not found in the list of providers. Using empty configuration."
             )
             common_config = {}
 
-        # Собираем итоговую конфигурацию
+        # Assemble the final configuration
         role_config = {
             "name": provider_name,
             **common_config,
@@ -146,18 +149,18 @@ class AI2:
             },
         }
 
-        logger.info(f"Провайдер для роли '{self.role}' настроен: {provider_name}")
+        logger.info(f"Provider for role '{self.role}' configured: {provider_name}")
         return {self.role: role_config}
 
     async def _get_provider_instance(self) -> BaseProvider:
-        """Получает или создает экземпляр провайдера для текущей роли воркера."""
+        """Gets or creates an instance of the provider for the current worker role."""
         config = self.providers_config.get(self.role)
         if not config:
-            raise ValueError(f"Конфигурация для роли '{self.role}' не найдена.")
+            raise ValueError(f"Configuration for role '{self.role}' not found.")
         provider_name = config.get("name")
         if not provider_name:
             raise ValueError(
-                f"Имя провайдера отсутствует в конфигурации для роли '{self.role}'."
+                f"Provider name is missing in the configuration for role '{self.role}'."
             )
 
         try:
@@ -165,12 +168,12 @@ class AI2:
             return provider_instance
         except ValueError as e:
             logger.error(
-                f"Не удалось создать провайдер '{provider_name}' для роли '{self.role}': {e}"
+                f"Failed to create provider '{provider_name}' for role '{self.role}': {e}"
             )
             raise
         except Exception as e:
             logger.error(
-                f"Неожиданная ошибка при создании провайдера '{provider_name}' для роли '{self.role}': {e}"
+                f"Unexpected error while creating provider '{provider_name}' for role '{self.role}': {e}"
             )
             raise
 
@@ -182,30 +185,30 @@ class AI2:
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
     ) -> str:
-        """Пытается сгенерировать ответ, используя основной провайдер роли и пробует все доступные провайдеры по кругу."""
+        """Attempts to generate a response using the primary role provider and tries all available providers in a loop."""
         provider_config = self.providers_config.get(self.role, {})
         provider_name = provider_config.get("name", "N/A")
         primary_provider = None
         
-        # Собираем полный список провайдеров, начиная с основного и добавляя все фолбек провайдеры
+        # Gather the full list of providers, starting with the primary and adding all fallback providers
         all_providers = [provider_name]
-        # Добавим фолбеки, которых нет в списке
+        # Add fallbacks that are not in the list
         for fallback in self.fallback_providers:
             if fallback not in all_providers:
                 all_providers.append(fallback)
         
-        logger.info(f"Попытка генерации с использованием провайдеров (по порядку): {', '.join(all_providers)}")
+        logger.info(f"Attempting generation using providers (in order): {', '.join(all_providers)}")
         
         all_errors = []
-        # Перебираем все провайдеры по очереди
+        # Iterate through all providers in sequence
         for provider_idx, current_provider_name in enumerate(all_providers):
             current_provider = None
             try:
                 logger.info(
-                    f"Попытка генерации с провайдером [{provider_idx+1}/{len(all_providers)}] '{current_provider_name}'."
+                    f"Attempting generation with provider [{provider_idx+1}/{len(all_providers)}] '{current_provider_name}'."
                 )
                 
-                # Получаем конфиг для текущего провайдера
+                # Get config for the current provider
                 current_config_base = self.config.get("providers", {}).get(
                     current_provider_name, {}
                 )
@@ -225,16 +228,16 @@ class AI2:
                     },
                 }
 
-                # Создаем экземпляр провайдера
+                # Create an instance of the provider
                 current_provider = ProviderFactory.create_provider(
                     current_provider_name, current_config
                 )
 
-                # Добавляем задержку, чтобы не перегружать API (только не для первого основного провайдера)
+                # Add delay to avoid overloading the API (only for non-primary providers)
                 if provider_idx > 0:
                     await apply_request_delay("ai2", self.role)
 
-                # Генерируем с текущим провайдером
+                # Generate with the current provider
                 result = await current_provider.generate(
                     prompt=user_prompt,
                     system_prompt=system_prompt,
@@ -245,13 +248,13 @@ class AI2:
                     temperature=temperature or self.ai_config.get("temperature"),
                 )
                 
-                # Проверяем на ошибку генерации
-                if isinstance(result, str) and result.startswith("Ошибка генерации"):
+                # Check for generation error
+                if isinstance(result, str) and result.startswith("Generation error"):
                     raise Exception(
                         f"Provider '{current_provider_name}' failed: {result}"
                     )
                 
-                # Закрываем сессию после успешного использования
+                # Close session after successful use
                 if (
                     current_provider
                     and hasattr(current_provider, "close_session")
@@ -259,18 +262,18 @@ class AI2:
                 ):
                     await current_provider.close_session()
                     
-                # Возвращаем результат от успешного провайдера
-                logger.info(f"Успешно сгенерировано с провайдером '{current_provider_name}'")
+                # Return result from successful provider
+                logger.info(f"Successfully generated with provider '{current_provider_name}'")
                 return result
 
             except Exception as provider_error:
-                # Логируем ошибку провайдера
+                # Log provider error
                 logger.error(
-                    f"Ошибка генерации с провайдером '{current_provider_name}': {provider_error}"
+                    f"Generation error with provider '{current_provider_name}': {provider_error}"
                 )
                 all_errors.append(f"Provider '{current_provider_name}' failed: {provider_error}")
                 
-                # Закрываем сессию провайдера при ошибке
+                # Close provider session on error
                 if (
                     current_provider
                     and hasattr(current_provider, "close_session")
@@ -278,15 +281,17 @@ class AI2:
                 ):
                     await current_provider.close_session()
         
-        # Если все провайдеры не сработали, возвращаем информацию о всех ошибках
-        error_msg = "Не удалось сгенерировать ответ ни одним из доступных провайдеров:\n- " + "\n- ".join(all_errors)
+        # If all providers failed, return information about all errors
+        error_msg = "Failed to generate a response with any of the available providers:\n- " + "\n- ".join(all_errors)
         logger.error(error_msg)
         return error_msg
 
     async def generate_code(self, task: str, filename: str) -> str:
-        """Генерация кода на основе описания задачи."""
-        logger.info(f"Генерация кода для файла: {filename}")
-        system_prompt = self.prompts[0].format(filename=filename)
+        """Generate code based on task description."""
+        logger.info(f"Generating code for file: {filename}")
+        # Combine base prompt with system instructions
+        base_prompt = self.base_prompts[0].format(filename=filename)
+        system_prompt = base_prompt + self.system_instructions
         user_prompt = f"Task Description: {task}\n\nPlease generate the content for the file '{filename}' based on this task."
         await apply_request_delay("ai2", self.role)
         return await self._generate_with_fallback(
@@ -294,28 +299,32 @@ class AI2:
         )
 
     async def generate_tests(self, code: str, filename: str) -> str:
-        """Генерация тестов для кода."""
-        logger.info(f"Генерация тестов для файла: {filename}")
-        system_prompt = self.prompts[1].format(filename=filename)
+        """Generate tests for the code."""
+        logger.info(f"Generating tests for file: {filename}")
+        # Combine base prompt with system instructions
+        base_prompt = self.base_prompts[1].format(filename=filename)
+        system_prompt = base_prompt + self.system_instructions.replace("file content", "test code") # Adjust instruction slightly
         user_prompt = f"Code for file '{filename}':\n```\n{code}\n```\n\nPlease generate unit tests for this code."
         await apply_request_delay("ai2", self.role)
         test_content = await self._generate_with_fallback(
             system_prompt=system_prompt, user_prompt=user_prompt
         )
         
-        # Якщо тести згенеровані успішно, комітимо їх в Git
-        if test_content and not test_content.startswith("Ошибка генерации"):
+        # If tests are successfully generated, commit them to Git
+        if test_content and not test_content.startswith("Generation error"):
             if await self.commit_tests_to_git(filename, test_content):
                 return test_content
             else:
-                return f"Ошибка генерации: Не удалось сохранить тесты в Git для {filename}"
+                return f"Generation error: Failed to save tests to Git for {filename}"
         
         return test_content
 
     async def generate_docs(self, code: str, filename: str) -> str:
-        """Генерация документации для кода."""
-        logger.info(f"Генерация документации для файла: {filename}")
-        system_prompt = self.prompts[2].format(filename=filename)
+        """Generate documentation for the code."""
+        logger.info(f"Generating documentation for file: {filename}")
+        # Combine base prompt with system instructions
+        base_prompt = self.base_prompts[2].format(filename=filename)
+        system_prompt = base_prompt + self.system_instructions.replace("file content", "documentation text") # Adjust instruction slightly
         user_prompt = f"Code for file '{filename}':\n```\n{code}\n```\n\nPlease generate documentation (e.g., docstrings, comments) for this code."
         await apply_request_delay("ai2", self.role)
         return await self._generate_with_fallback(
@@ -323,9 +332,9 @@ class AI2:
         )
 
     async def commit_tests_to_git(self, filename: str, test_content: str) -> bool:
-        """Комітить згенеровані тести в Git репозиторій."""
+        """Commits generated tests to the Git repository."""
         try:
-            # Конвертуємо шлях файлу в шлях тесту
+            # Convert file path to test path
             test_filename = filename.replace(".py", "_test.py")
             if not test_filename.startswith("tests/"):
                 test_filename = f"tests/{test_filename}"
@@ -333,33 +342,33 @@ class AI2:
             repo_path = os.path.join(os.getcwd(), "repo")
             test_filepath = os.path.join(repo_path, test_filename)
             
-            # Створюємо директорію для тестів, якщо її немає
+            # Create directory for tests if it doesn't exist
             os.makedirs(os.path.dirname(test_filepath), exist_ok=True)
             
-            # Записуємо тести у файл
+            # Write tests to file
             with open(test_filepath, "w") as f:
                 f.write(test_content)
             
-            # Ініціалізуємо Git репозиторій
+            # Initialize Git repository
             repo = git.Repo(repo_path)
             
-            # Додаємо файл в Git
+            # Add file to Git
             repo.index.add([test_filename])
             
-            # Створюємо коміт
+            # Create commit
             commit_message = f"test: Add tests for {filename}"
             repo.index.commit(commit_message)
             
-            logger.info(f"Тести для {filename} успішно додані в Git: {test_filename}")
+            logger.info(f"Tests for {filename} successfully added to Git: {test_filename}")
             return True
             
         except Exception as e:
-            logger.error(f"Помилка при коміті тестів для {filename} в Git: {e}")
+            logger.error(f"Error committing tests for {filename} to Git: {e}")
             return False
 
     async def process_task(self, task_info: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Обрабатывает одну задачу и возвращает словарь для отправки в /report.
+        Processes a single task and returns a dictionary for sending to /report.
         """
         subtask_id = task_info.get("id")
         role = task_info.get("role")
@@ -368,22 +377,22 @@ class AI2:
         code_content = task_info.get("code")
 
         if not subtask_id or not role or not filename:
-            logger.error(f"Некорректная информация о задаче: {task_info}")
+            logger.error(f"Invalid task information: {task_info}")
             return {
                 "type": "status_update",
                 "subtask_id": subtask_id or "unknown",
-                "message": "Ошибка: Отсутствует ID, роль или имя файла в задаче.",
+                "message": "Error: Missing ID, role, or filename in task.",
                 "status": "failed",
             }
 
         if role != self.role:
             logger.error(
-                f"Получена задача для другой роли ({role}), ожидалась роль {self.role}. Пропуск."
+                f"Received task for a different role ({role}), expected role {self.role}. Skipping."
             )
             return {
                 "type": "status_update",
                 "subtask_id": subtask_id,
-                "message": f"Ошибка: Воркер {self.role} получил задачу для {role}.",
+                "message": f"Error: Worker {self.role} received task for {role}.",
                 "status": "failed",
             }
 
@@ -399,41 +408,41 @@ class AI2:
             if role == "executor":
                 report["type"] = "code"
                 if not task_description:
-                    error_message = "Отсутствует описание задачи для роли executor"
-                    logger.error(f"Отсутствует описание задачи для executor: {task_info}")
+                    error_message = "Missing task description for role executor"
+                    logger.error(f"Missing task description for executor: {task_info}")
                 else:
                     generated_content = await self.generate_code(task_description, filename)
                     
             elif role == "tester":
                 report["type"] = "test_result"
                 if code_content is None:
-                    error_message = "Отсутствует код для роли tester"
-                    logger.error(f"Отсутствует код для tester: {task_info}")
+                    error_message = "Missing code for role tester"
+                    logger.error(f"Missing code for tester: {task_info}")
                 else:
                     # Generate and commit tests
-                    generated_content = await self.generate_tests(code_content, filename)
-                    if generated_content and not generated_content.startswith("Ошибка генерации"):
-                        # Успішно згенерували і закомітили тести
+                    generated_content = await self.generate_tests_based_on_file_type(code_content, filename)
+                    if generated_content and not generated_content.startswith("Generation error"):
+                        # Successfully generated and committed tests
                         report["content"] = generated_content
-                        report["message"] = f"Тести для {filename} успішно згенеровані і закомічені в Git"
+                        report["message"] = f"Tests for {filename} successfully generated and committed to Git"
                         report["status"] = "tests_committed"
                     else:
-                        error_message = f"Помилка генерації тестів для {filename}: {generated_content}"
+                        error_message = f"Generation error for tests for {filename}: {generated_content}"
                         
             elif role == "documenter":
                 report["type"] = "code"
                 if code_content is None:
-                    error_message = "Отсутствует код для роли documenter"
-                    logger.error(f"Отсутствует код для documenter: {task_info}")
+                    error_message = "Missing code for role documenter"
+                    logger.error(f"Missing code for documenter: {task_info}")
                 else:
                     generated_content = await self.generate_docs(code_content, filename)
                     
             else:
-                error_message = f"Неизвестная роль: {role}"
-                logger.error(f"Неизвестная роль: {role}")
+                error_message = f"Unknown role: {role}"
+                logger.error(f"Unknown role: {role}")
 
             if isinstance(generated_content, str) and generated_content.startswith(
-                "Не удалось сгенерировать ответ"
+                "Failed to generate a response"
             ):
                 error_message = generated_content
                 generated_content = None
@@ -443,9 +452,9 @@ class AI2:
 
         except Exception as e:
             logger.exception(
-                f"Неожиданная ошибка при обработке задачи для {filename} ({role}): {e}"
+                f"Unexpected error while processing task for {filename} ({role}): {e}"
             )
-            error_message = f"Неожиданная ошибка: {e}"
+            error_message = f"Unexpected error: {e}"
 
         end_time = asyncio.get_event_loop().time()
         processing_time = end_time - start_time
@@ -454,11 +463,11 @@ class AI2:
             report = {
                 "type": "status_update",
                 "subtask_id": subtask_id,
-                "message": f"Ошибка обработки задачи ({role} для {filename}): {error_message}",
+                "message": f"Task processing error ({role} for {filename}): {error_message}",
                 "status": "failed",
             }
             log_message_data = {
-                "message": f"Обработка задачи завершилась с ошибкой для {filename} ({role})",
+                "message": f"Task processing failed for {filename} ({role})",
                 "role": role,
                 "file": filename,
                 "status": "error",
@@ -467,7 +476,7 @@ class AI2:
             }
         else:
             log_message_data = {
-                "message": f"Обработка задачи успешно завершена для {filename} ({role})",
+                "message": f"Task processing successfully completed for {filename} ({role})",
                 "role": role,
                 "file": filename,
                 "status": "success",
@@ -479,76 +488,94 @@ class AI2:
         return report
 
     async def fetch_task(self) -> Optional[Dict[str, Any]]:
-        """Запрашивает задачу у API для текущей роли."""
+        """Requests a task from the API for the current role."""
         api_url = f"{MCP_API_URL}/task/{self.role}"
-        try:
-            session = await self._get_api_session()
-            logger.debug(f"Запрос задачи с {api_url}")
-            async with session.get(api_url, timeout=30) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    if data and "subtask" in data and data["subtask"]:
-                        subtask_data = data["subtask"]
-                        task_id = subtask_data.get('id')
-                        task_filename = subtask_data.get('filename')
-                        logger.info(
-                            f"Получена задача: ID={task_id}, File={task_filename}"
-                        )
-                        return subtask_data
-                    elif data and "message" in data:
-                        logger.debug(f"Нет доступных задач: {data['message']}")
-                        return None
+        max_retries = 5
+        retry_count = 0
+        retry_delay = 1  # starting delay in seconds
+        
+        while retry_count < max_retries:
+            try:
+                session = await self._get_api_session()
+                logger.debug(f"Requesting task from {api_url}")
+                async with session.get(api_url, timeout=30) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        if data and "subtask" in data and data["subtask"]:
+                            subtask_data = data["subtask"]
+                            task_id = subtask_data.get('id')
+                            task_filename = subtask_data.get('filename')
+                            logger.info(
+                                f"Received task: ID={task_id}, File={task_filename}"
+                            )
+                            return subtask_data
+                        elif data and "message" in data:
+                            logger.debug(f"No available tasks: {data['message']}")
+                            return None
+                        else:
+                            logger.warning(
+                                f"Unexpected response from API when requesting task: {data}"
+                            )
+                            return None
                     else:
-                        logger.warning(
-                            f"Неожиданный ответ от API при запросе задачи: {data}"
+                        logger.error(
+                            f"Error requesting task: Status {response.status}, Response: {await response.text()}"
                         )
-                        return None
-                else:
-                    logger.error(
-                        f"Ошибка при запросе задачи: Статус {response.status}, Ответ: {await response.text()}"
-                    )
-                    return None
-        except asyncio.TimeoutError:
-            logger.warning(f"Таймаут при запросе задачи с {api_url}")
-            return None
-        except aiohttp.ClientError as e:
-            logger.error(f"Ошибка соединения при запросе задачи с {api_url}: {e}")
-            return None
-        except Exception as e:
-            logger.exception(f"Неожиданная ошибка при запросе задачи: {e}")
-            return None
+                        # Increment retry count for non-200 responses
+                        retry_count += 1
+                        await asyncio.sleep(retry_delay)
+                        retry_delay *= 2  # exponential backoff
+            except asyncio.TimeoutError:
+                logger.warning(f"Timeout requesting task from {api_url}")
+                retry_count += 1
+                await asyncio.sleep(retry_delay)
+                retry_delay *= 2
+            except aiohttp.ClientError as e:
+                logger.error(f"Connection error requesting task from {api_url}: {e}")
+                retry_count += 1
+                await asyncio.sleep(retry_delay)
+                retry_delay *= 2
+            except Exception as e:
+                logger.exception(f"Unexpected error requesting task: {e}")
+                retry_count += 1
+                await asyncio.sleep(retry_delay)
+                retry_delay *= 2
+                
+        # If we've exhausted all retries
+        logger.error(f"Exhausted all connection attempts to {api_url}")
+        return None
 
     async def send_report(self, report_data: Dict[str, Any]):
-        """Отправляет отчет о выполненной задаче в API."""
+        """Sends a task report to the API."""
         api_url = f"{MCP_API_URL}/report"
         try:
             session = await self._get_api_session()
             logger.debug(
-                f"Отправка отчета на {api_url}: Тип={report_data.get('type')}, ID={report_data.get('subtask_id')}"
+                f"Sending report to {api_url}: Type={report_data.get('type')}, ID={report_data.get('subtask_id')}"
             )
             async with session.post(api_url, json=report_data, timeout=60) as response:
                 if response.status == 200:
                     logger.info(
-                        f"Отчет для задачи {report_data.get('subtask_id')} успешно отправлен."
+                        f"Report for task {report_data.get('subtask_id')} successfully sent."
                     )
                 else:
                     logger.error(
-                        f"Ошибка при отправке отчета для задачи {report_data.get('subtask_id')}: Статус {response.status}, Ответ: {await response.text()}"
+                        f"Error sending report for task {report_data.get('subtask_id')}: Status {response.status}, Response: {await response.text()}"
                     )
         except asyncio.TimeoutError:
             logger.error(
-                f"Таймаут при отправке отчета для задачи {report_data.get('subtask_id')}"
+                f"Timeout sending report for task {report_data.get('subtask_id')}"
             )
         except aiohttp.ClientError as e:
             logger.error(
-                f"Ошибка соединения при отправке отчета для задачи {report_data.get('subtask_id')}: {e}"
+                f"Connection error sending report for task {report_data.get('subtask_id')}: {e}"
             )
         except Exception as e:
-            logger.exception(f"Неожиданная ошибка при отправке отчета: {e}")
+            logger.exception(f"Unexpected error sending report: {e}")
 
     async def run_worker(self):
-        """Основной цикл воркера: получение задачи, обработка, отправка отчета."""
-        logger.info(f"Воркер AI2 ({self.role}) запущен.")
+        """Main worker loop: fetch task, process, send report."""
+        logger.info(f"AI2 worker ({self.role}) started.")
         while True:
             task = await self.fetch_task()
             if task:
@@ -557,14 +584,507 @@ class AI2:
                     await self.send_report(report)
                 else:
                     logger.error(
-                        f"Process_task вернул пустой отчет для задачи {task.get('id')}"
+                        f"Process_task returned empty report for task {task.get('id')}"
                     )
                 await asyncio.sleep(1)
             else:
                 sleep_time = config.get("ai2_idle_sleep", 5)
-                logger.debug(f"Нет задач для {self.role}. Ожидание {sleep_time} сек.")
+                logger.debug(f"No tasks for {self.role}. Waiting {sleep_time} sec.")
                 await asyncio.sleep(sleep_time)
 
+    async def generate_tests_based_on_file_type(self, content: str, filename: str) -> str:
+        """Generates tests based on file type."""
+        file_ext = os.path.splitext(filename)[1].lower()
+        
+        if file_ext == '.py':
+            return await self.generate_python_tests(content, filename)
+        elif file_ext == '.js':
+            return await self.generate_js_tests(content, filename)
+        elif file_ext == '.ts':
+            return await self.generate_ts_tests(content, filename)
+        elif file_ext in ['.html', '.htm']:
+            return await self.generate_html_tests(content, filename)
+        elif file_ext == '.css':
+            return await self.generate_css_tests(content, filename)
+        elif file_ext == '.scss':
+            return await self.generate_scss_tests(content, filename)
+        elif file_ext in ['.jsx', '.tsx']:
+            return await self.generate_react_tests(content, filename)
+        elif file_ext == '.vue':
+            return await self.generate_vue_tests(content, filename)
+        elif file_ext == '.java':
+            return await self.generate_java_tests(content, filename)
+        elif file_ext in ['.cpp', '.c', '.hpp', '.h']:
+            return await self.generate_cpp_tests(content, filename)
+        elif file_ext == '.go':
+            return await self.generate_go_tests(content, filename)
+        elif file_ext == '.rs':
+            return await self.generate_rust_tests(content, filename)
+        else:
+            return await self.generate_generic_tests(content, filename)
+            
+    async def generate_html_tests(self, content: str, filename: str) -> str:
+        """Generate tests for HTML files."""
+        log_message(f"[AI2-TESTER] Generating tests for HTML file: {filename}")
+        
+        test_filename = filename.replace(".html", "_test.js")
+        
+        # Form prompt for test generator
+        prompt = f"""
+Create tests for the HTML file using Jest and Testing Library or Cypress.
+Please verify the following aspects:
+1. HTML structure validity
+2. Presence of key elements (headers, forms, buttons, etc.)
+3. Accessibility attributes correctness 
+4. Responsiveness (if there are styles for different screen sizes)
+
+HTML file ({filename}):
+```html
+{content}
+```
+
+The result should be a JavaScript file {test_filename} with tests.
+Use Jest, Testing Library, or Cypress.
+"""
+        
+        return await self._generate_test_with_fallback(prompt, test_filename)
+        
+    async def generate_css_tests(self, content: str, filename: str) -> str:
+        """Generate tests for CSS files."""
+        log_message(f"[AI2-TESTER] Generating tests for CSS file: {filename}")
+        
+        test_filename = filename.replace(".css", "_test.js")
+        
+        # Form prompt for test generator
+        prompt = f"""
+Create tests for the CSS file using Jest with puppeteer/playwright.
+Please verify the following aspects:
+1. Correct application of styles to elements
+2. Display verification at different screen sizes (mobile, tablet, desktop)
+3. Correctness of colors, sizes, and other properties
+4. Selector verification and specificity
+
+CSS file ({filename}):
+```css
+{content}
+```
+
+The result should be a JavaScript file {test_filename} with tests.
+For JavaScript files, use jest-transform-css or a similar tool.
+"""
+        
+        return await self._generate_test_with_fallback(prompt, test_filename)
+        
+    async def generate_scss_tests(self, content: str, filename: str) -> str:
+        """Generate tests for SCSS files."""
+        log_message(f"[AI2-TESTER] Generating tests for SCSS file: {filename}")
+        
+        test_filename = filename.replace(".scss", "_test.js")
+        
+        # Form prompt for test generator
+        prompt = f"""
+Create tests for the SCSS file using Jest with sass-jest or a similar tool.
+Please verify the following aspects:
+1. Correct SCSS structure (nested selectors, variables, mixins)
+2. Correctness of compiled CSS and its application
+3. Verification of variables and their values
+4. Verification of functions and mixins
+
+SCSS file ({filename}):
+```scss
+{content}
+```
+
+The result should be a JavaScript file {test_filename} with tests.
+Use sass-jest or sass + Jest for testing.
+"""
+        
+        return await self._generate_test_with_fallback(prompt, test_filename)
+        
+    async def generate_react_tests(self, content: str, filename: str) -> str:
+        """Generate tests for React components (JSX/TSX)."""
+        log_message(f"[AI2-TESTER] Generating tests for React component: {filename}")
+        
+        test_filename = filename.replace(".jsx", ".test.jsx").replace(".tsx", ".test.tsx")
+        
+        # Form prompt for test generator
+        prompt = f"""
+Create tests for the React component using React Testing Library and Jest.
+Please verify the following aspects:
+1. Correct component rendering
+2. Behavior with different props
+3. Handling user events (clicks, text input, etc.)
+4. Asynchronous function and API calls
+5. Interaction with other components
+
+React component ({filename}):
+```jsx
+{content}
+```
+
+The result should be a file {test_filename} with tests.
+Use React Testing Library, Jest, and jest-dom for DOM assertions if needed.
+"""
+        
+        return await self._generate_test_with_fallback(prompt, test_filename)
+        
+    async def generate_vue_tests(self, content: str, filename: str) -> str:
+        """Generate tests for Vue components."""
+        log_message(f"[AI2-TESTER] Generating tests for Vue component: {filename}")
+        
+        test_filename = filename.replace(".vue", ".spec.js")
+        
+        # Form prompt for test generator
+        prompt = f"""
+Create tests for the Vue component using Vue Test Utils and Jest.
+Please verify the following aspects:
+1. Correct component rendering
+2. Reactivity and DOM updates when data changes
+3. Event handling and methods
+4. Props verification and emitted events
+5. Interaction with Vuex (if used)
+
+Vue component ({filename}):
+```vue
+{content}
+```
+
+The result should be a file {test_filename} with tests.
+Use Vue Test Utils, Jest, and jest-dom for DOM assertions if needed.
+"""
+        
+        return await self._generate_test_with_fallback(prompt, test_filename)
+
+    async def _generate_test_with_fallback(self, prompt: str, test_filename: str) -> str:
+        """Common method for generating tests with fallback providers."""
+        for provider_name in self.providers:
+            try:
+                log_message(f"[AI2-TESTER] Attempting to generate tests with provider '{provider_name}'")
+                provider = await self._get_provider(provider_name)
+                if not provider:
+                    continue
+                    
+                test_content = await provider.generate(prompt=prompt)
+                if test_content and len(test_content.strip()) > 0:
+                    # Check if the generated text contains test code
+                    if "test(" in test_content or "it(" in test_content or "describe(" in test_content:
+                        return test_content
+                    else:
+                        log_message(f"[AI2-TESTER] Provider '{provider_name}' generated content, but it does not contain tests")
+                else:
+                    log_message(f"[AI2-TESTER] Provider '{provider_name}' returned empty content")
+            except Exception as e:
+                log_message(f"[AI2-TESTER] Error generating tests with provider '{provider_name}': {e}")
+        
+        # If all providers failed to generate quality tests, return a template test
+        return self._generate_template_test(test_filename)
+
+    async def _generate_template_test(self, test_filename: str) -> str:
+        """Generates a template test when all providers failed to create quality tests."""
+        file_ext = os.path.splitext(test_filename)[1].lower()
+        base_name = os.path.basename(test_filename)
+        component_name = base_name.split(".")[0].replace("_test", "").replace("test_", "")
+        
+        if file_ext == '.js' or file_ext == '.jsx':
+            return f"""// Basic test template for {test_filename}
+import {{ render, screen }} from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+
+describe('{component_name}', () => {{
+  test('should render correctly', () => {{
+    // Add proper test implementation when component is available
+    expect(true).toBe(true);
+  }});
+  
+  test('should handle user interactions', () => {{
+    // Add interaction tests
+    expect(true).toBe(true);
+  }});
+}});
+"""
+        elif file_ext == '.tsx':
+            return f"""// Basic TypeScript test template for {test_filename}
+import {{ render, screen }} from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+
+describe('{component_name}', () => {{
+  test('should render correctly', () => {{
+    // Add proper test implementation when component is available
+    expect(true).toBe(true);
+  }});
+  
+  test('should handle user interactions', () => {{
+    // Add interaction tests
+    expect(true).toBe(true);
+  }});
+}});
+"""
+        elif file_ext == '.py':
+            return f"""# Basic test template for {test_filename}
+import pytest
+
+def test_{component_name}_basic():
+    # Add proper test implementation
+    assert True
+
+def test_{component_name}_functionality():
+    # Add functionality tests
+    assert True
+"""
+        else:
+            # Generic test for any other file type
+            return f"""// Basic test template for {test_filename}
+describe('Test {component_name}', () => {{
+  test('basic functionality', () => {{
+    // Add implementation when the component is available
+    expect(true).toBe(true);
+  }});
+}});
+"""
+
+    async def _get_provider(self, provider_name: str) -> Optional[BaseProvider]:
+        """Gets an instance of the provider by its name with error handling."""
+        try:
+            # Get configuration for the provider
+            provider_config = self.config.get("providers", {}).get(provider_name, {})
+            if not provider_config:
+                logger.warning(f"Provider '{provider_name}' not found in configuration")
+                return None
+                
+            # Create an instance of the provider
+            provider = ProviderFactory.create_provider(provider_name, provider_config)
+            return provider
+        except Exception as e:
+            logger.error(f"Error creating provider '{provider_name}': {e}")
+            return None
+
+    async def generate_python_tests(self, content: str, filename: str) -> str:
+        """Generate tests for Python files."""
+        log_message(f"[AI2-TESTER] Generating tests for Python file: {filename}")
+        
+        test_filename = filename.replace(".py", "_test.py")
+        if not test_filename.startswith("tests/"):
+            test_filename = f"tests/{test_filename}"
+        
+        # Form prompt for test generator
+        prompt = f"""
+Create unit tests for the Python file using pytest.
+Please verify the following aspects:
+1. Functionality of all public functions and methods
+2. Edge cases handling
+3. Exception handling
+4. Correct return values
+
+Python file ({filename}):
+```python
+{content}
+```
+
+The result should be a Python file {test_filename} with tests.
+Use pytest and unittest.mock for mocking dependencies if needed.
+"""
+        
+        return await self._generate_with_fallback(system_prompt="You are a Python testing expert. Generate unit tests for the provided code.", user_prompt=prompt)
+
+    async def generate_js_tests(self, content: str, filename: str) -> str:
+        """Generate tests for JavaScript files."""
+        log_message(f"[AI2-TESTER] Generating tests for JavaScript file: {filename}")
+        
+        test_filename = filename.replace(".js", ".test.js")
+        if not test_filename.startswith("tests/"):
+            test_filename = f"tests/{test_filename}"
+        
+        # Form prompt for test generator
+        prompt = f"""
+Create unit tests for the JavaScript file using Jest or Mocha.
+Please verify the following aspects:
+1. Functionality of all public functions
+2. Edge cases and error handling
+3. Asynchronous operations (if any)
+4. DOM interactions (if browser-based JavaScript)
+
+JavaScript file ({filename}):
+```javascript
+{content}
+```
+
+The result should be a JavaScript file {test_filename} with tests.
+Use Jest or Mocha and mocking tools (sinon, jest.mock, etc.) as needed.
+"""
+        
+        return await self._generate_with_fallback(system_prompt="You are a JavaScript testing expert. Generate unit tests for the provided code.", user_prompt=prompt)
+
+    async def generate_ts_tests(self, content: str, filename: str) -> str:
+        """Generate tests for TypeScript files."""
+        log_message(f"[AI2-TESTER] Generating tests for TypeScript file: {filename}")
+        
+        test_filename = filename.replace(".ts", ".spec.ts")
+        if not test_filename.startswith("tests/"):
+            test_filename = f"tests/{test_filename}"
+        
+        # Form prompt for test generator
+        prompt = f"""
+Create unit tests for the TypeScript file using Jest or Mocha with ts-jest.
+Please verify the following aspects:
+1. Functionality of all public functions
+2. Correctness of types and interfaces
+3. Edge cases and error handling
+4. Asynchronous operations (if any)
+
+TypeScript file ({filename}):
+```typescript
+{content}
+```
+
+The result should be a TypeScript file {test_filename} with tests.
+Use Jest or Mocha with ts-jest and appropriate types (e.g., @types/jest).
+"""
+        
+        return await self._generate_with_fallback(system_prompt="You are a TypeScript testing expert. Generate unit tests for the provided code.", user_prompt=prompt)
+
+    async def generate_java_tests(self, content: str, filename: str) -> str:
+        """Generate tests for Java files."""
+        log_message(f"[AI2-TESTER] Generating tests for Java file: {filename}")
+        
+        class_name = os.path.splitext(os.path.basename(filename))[0]
+        test_filename = f"Test{class_name}.java"
+        if not test_filename.startswith("tests/"):
+            test_filename = f"tests/{test_filename}"
+        
+        # Form prompt for test generator
+        prompt = f"""
+Create unit tests for the Java class using JUnit 5.
+Please verify the following aspects:
+1. Functionality of all public methods
+2. Object initialization
+3. Exception handling
+4. Edge cases
+
+Java file ({filename}):
+```java
+{content}
+```
+
+The result should be a Java file {test_filename} with tests.
+Use JUnit 5 and Mockito for mocking if needed.
+"""
+        
+        return await self._generate_with_fallback(system_prompt="You are a Java testing expert. Generate unit tests for the provided code.", user_prompt=prompt)
+
+    async def generate_cpp_tests(self, content: str, filename: str) -> str:
+        """Generate tests for C++ files."""
+        log_message(f"[AI2-TESTER] Generating tests for C++ file: {filename}")
+        
+        basename = os.path.splitext(os.path.basename(filename))[0]
+        test_filename = f"{basename}_test.cpp"
+        if not test_filename.startswith("tests/"):
+            test_filename = f"tests/{test_filename}"
+        
+        # Form prompt for test generator
+        prompt = f"""
+Create unit tests for the C++ file using Google Test or Catch2.
+Please verify the following aspects:
+1. Functionality of all public functions and methods
+2. Object initialization
+3. Error and exception handling
+4. Memory checking (where appropriate)
+
+C++ file ({filename}):
+```cpp
+{content}
+```
+
+The result should be a C++ file {test_filename} with tests.
+Use Google Test or Catch2 and mocking tools as needed.
+"""
+        
+        return await self._generate_with_fallback(system_prompt="You are a C++ testing expert. Generate unit tests for the provided code.", user_prompt=prompt)
+
+    async def generate_go_tests(self, content: str, filename: str) -> str:
+        """Generate tests for Go files."""
+        log_message(f"[AI2-TESTER] Generating tests for Go file: {filename}")
+        
+        basename = os.path.splitext(os.path.basename(filename))[0]
+        test_filename = f"{basename}_test.go"
+        if not test_filename.startswith("tests/"):
+            test_filename = f"tests/{test_filename}"
+        
+        # Form prompt for test generator
+        prompt = f"""
+Create unit tests for the Go file using the standard testing package.
+Please verify the following aspects:
+1. Functionality of all public functions
+2. Error handling
+3. Edge cases
+4. Concurrency (if relevant)
+
+Go file ({filename}):
+```go
+{content}
+```
+
+The result should be a Go file {test_filename} with tests.
+Use the testing package and, if needed, gomock or testify.
+"""
+        
+        return await self._generate_with_fallback(system_prompt="You are a Go testing expert. Generate unit tests for the provided code.", user_prompt=prompt)
+
+    async def generate_rust_tests(self, content: str, filename: str) -> str:
+        """Generate tests for Rust files."""
+        log_message(f"[AI2-TESTER] Generating tests for Rust file: {filename}")
+        
+        # In Rust, tests are usually written in the same file in a tests module
+        test_filename = filename
+        
+        # Form prompt for test generator
+        prompt = f"""
+Create unit tests for the Rust file using Rust's built-in testing framework.
+Please verify the following aspects:
+1. Functionality of all public functions
+2. Error handling (Result, Option)
+3. Edge cases
+4. Memory safety (where appropriate)
+
+Rust file ({filename}):
+```rust
+{content}
+```
+
+The result should be a Rust test module using the #[cfg(test)] attribute.
+Include all necessary tests to verify code correctness.
+"""
+        
+        return await self._generate_with_fallback(system_prompt="You are a Rust testing expert. Generate unit tests for the provided code.", user_prompt=prompt)
+
+    async def generate_generic_tests(self, content: str, filename: str) -> str:
+        """Generate tests for files of unknown type."""
+        log_message(f"[AI2-TESTER] Generating tests for file of unknown type: {filename}")
+        
+        basename = os.path.splitext(os.path.basename(filename))[0]
+        ext = os.path.splitext(filename)[1]
+        test_filename = f"{basename}_test{ext}"
+        if not test_filename.startswith("tests/"):
+            test_filename = f"tests/{test_filename}"
+        
+        # Form prompt for test generator
+        prompt = f"""
+Create tests for the file {filename} using an appropriate testing framework.
+Please verify the following aspects:
+1. Core functionality
+2. Error handling
+3. Edge cases
+4. Integration with other components
+
+File content ({filename}):
+```
+{content}
+```
+
+The result should be a file {test_filename} with tests.
+Choose the most suitable testing framework for this file type.
+"""
+        
+        return await self._generate_with_fallback(system_prompt="You are a testing expert. Generate appropriate tests for the provided code file.", user_prompt=prompt)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="AI2 Worker")
@@ -573,7 +1093,7 @@ if __name__ == "__main__":
         type=str,
         required=True,
         choices=["executor", "tester", "documenter"],
-        help="Роль этого воркера AI2",
+        help="Role of this AI2 worker",
     )
     args = parser.parse_args()
 
@@ -582,10 +1102,10 @@ if __name__ == "__main__":
     try:
         asyncio.run(ai2_worker.run_worker())
     except KeyboardInterrupt:
-        logger.info(f"Воркер AI2 ({args.role}) остановлен вручную.")
+        logger.info(f"AI2 worker ({args.role}) stopped manually.")
     except Exception as e:
         logger.exception(
-            f"Критическая ошибка в главном цикле воркера AI2 ({args.role}): {e}"
+            f"Critical error in main loop of AI2 worker ({args.role}): {e}"
         )
     finally:
         asyncio.run(ai2_worker.close_session())

@@ -113,26 +113,34 @@ def _commit_changes(repo: Repo, file_paths: list, message: str):
 
 
 async def generate_structure(target: str) -> Optional[Dict]: # Add target param, update return type
-    prompt = f""" # Use f-string to include target
-Generate a JSON structure for a project with the target: "{target}".
+    # Load base prompt from configuration
+    base_prompt_template = config.get("ai3_prompt", "Generate a JSON structure for a project with the target: \"{target}\".")
+    base_prompt = base_prompt_template.format(target=target) # Format the target
+
+    # System instructions added in code
+    system_instructions = """
 Respond ONLY with the JSON structure itself, enclosed in triple backticks (```json ... ```).
 The structure should be a valid JSON object representing directories and files. Use null for files.
+Use only Latin characters for all generated names (files, directories).
 Example:
 ```json
-{{
-  "src": {{
+{
+  "src": {
     "main.py": null,
     "utils.py": null
-  }},
-  "tests": {{
+  },
+  "tests": {
     "test_main.py": null
-  }},
+  },
   "README.md": null,
   ".gitignore": null
-}}
+}
 ```
 Do not include any explanatory text before or after the JSON block. Ensure the JSON is well-formed.
 """
+    # Combine base prompt and system instructions
+    full_prompt = base_prompt + "\n" + system_instructions
+
     ai_config_base = config.get("ai_config", {})
     ai3_config = ai_config_base.get("ai3", {})
     if not ai3_config:
@@ -152,10 +160,9 @@ Do not include any explanatory text before or after the JSON block. Ensure the J
             provider: BaseProvider = ProviderFactory.create_provider(provider_name)
             try:
                 await apply_request_delay("ai3")
-                # Pass the prompt directly, assuming the provider handles the target variable if needed internally
-                # or update the prompt generation logic if target is still required.
+                # Use the full prompt
                 response_text = await provider.generate(
-                    prompt=prompt, # Pass the static prompt string
+                    prompt=full_prompt, # Pass the combined prompt
                     model=ai3_config.get("model"),
                     max_tokens=ai3_config.get("max_tokens"),
                     temperature=ai3_config.get("temperature"),
@@ -398,7 +405,7 @@ class AI3:
         self.last_check_time = time.time()
 
     def _init_or_open_repo(self, repo_path: str) -> Repo:
-        """Ініціалізує новий або відкриває існуючий Git репозиторій."""
+        """Initializes a new or opens an existing Git repository."""
         try:
             logger.info(f"[AI3-Git] Attempting to open repository at: {repo_path}")
             Path(repo_path).mkdir(parents=True, exist_ok=True)
@@ -433,25 +440,25 @@ class AI3:
                 raise
 
     async def clear_and_init_repo(self):
-        """Очищає існуючий репозиторій та ініціалізує новий."""
+        """Clears the existing repository and initializes a new one."""
         try:
-            # Перевірити, чи існує репозиторій
+            # Check if the repository exists
             if os.path.exists(self.repo_dir):
-                # Видалити репозиторій
+                # Remove the repository
                 logger.info(f"[AI3-Git] Removing existing repository directory: {self.repo_dir}")
                 shutil.rmtree(self.repo_dir)
                 logger.info(f"[AI3-Git] Removed existing repository: {self.repo_dir}")
 
-            # Створити каталог репозиторію та ініціалізувати Git
+            # Create the repository directory and initialize Git
             logger.info(f"[AI3-Git] Creating new repository directory: {self.repo_dir}")
             os.makedirs(self.repo_dir, exist_ok=True)
             
-            # Варіант 1: Використати GitPython (рекомендовано)
+            # Option 1: Use GitPython (recommended)
             try:
                 self.repo = Repo.init(self.repo_dir)
                 logger.info(f"[AI3-Git] Successfully initialized new repository at: {self.repo_dir}")
                 
-                # Додати .gitignore
+                # Add .gitignore
                 gitignore_path = os.path.join(self.repo_dir, GITIGNORE_FILENAME) # Use constant
                 with open(gitignore_path, "w", encoding="utf-8") as f:
                     f.write("**/__pycache__\n")
@@ -459,12 +466,12 @@ class AI3:
                     f.write(".DS_Store\n")
                 logger.info(f"[AI3-Git] Created .gitignore in {self.repo_dir}")
                 
-                # Налаштувати користувача Git
+                # Configure Git user
                 with self.repo.config_writer() as git_config:
                     git_config.set_value('user', 'email', 'ai3@example.com')
                     git_config.set_value('user', 'name', 'AI3 System')
                 
-                # Додати та закомітити gitignore
+                # Add and commit gitignore
                 self.repo.git.add(gitignore_path)
                 self.repo.git.commit('-m', 'Initial commit (gitignore)')
                 logger.info("[AI3-Git] Added and committed .gitignore file")
@@ -473,7 +480,7 @@ class AI3:
                 logger.error(f"[AI3-Git] Error using GitPython: {git_err}")
                 logger.info("[AI3-Git] Falling back to subprocess method")
                 
-                # Варіант 2: Використати subprocess як запасний варіант
+                # Option 2: Use subprocess as a fallback
                 init_result = subprocess.run(
                     ["git", "init"],
                     cwd=self.repo_dir,
@@ -483,22 +490,22 @@ class AI3:
                 )
                 logger.info(f"[AI3-Git] Initialized Git repository via subprocess: {init_result.stdout}")
                 
-                # Створити .gitignore
+                # Create .gitignore
                 gitignore_path = os.path.join(self.repo_dir, GITIGNORE_FILENAME) # Use constant
                 with open(gitignore_path, "w", encoding="utf-8") as f:
                     f.write("**/__pycache__\n")
                     f.write("*.pyc\n")
                     f.write(".DS_Store\n")
                 
-                # Налаштувати користувача Git
+                # Configure Git user
                 subprocess.run(["git", "config", "user.email", "ai3@example.com"], cwd=self.repo_dir, check=False)
                 subprocess.run(["git", "config", "user.name", "AI3 System"], cwd=self.repo_dir, check=False)
                 
-                # Додати та закомітити
+                # Add and commit
                 subprocess.run(["git", "add", GITIGNORE_FILENAME], cwd=self.repo_dir, check=True) # Use constant
                 subprocess.run(["git", "commit", "-m", "Initial commit (gitignore)"], cwd=self.repo_dir, check=True)
                 
-                # Перепризначити об'єкт repo для подальшого використання
+                # Reassign the repo object for further use
                 self.repo = Repo(self.repo_dir)
             
             logger.info("[AI3-Git] Repository successfully cleared and initialized.")
@@ -511,13 +518,13 @@ class AI3:
             return False
 
     async def create_session(self):
-        """Створює aiohttp ClientSession, якщо вона ще не існує."""
+        """Creates an aiohttp ClientSession if it does not already exist."""
         if self.session is None or self.session.closed:
             self.session = aiohttp.ClientSession()
             logger.info("[AI3] Created new aiohttp ClientSession.")
 
     async def close_session(self):
-        """Закриває aiohttp ClientSession, якщо вона існує."""
+        """Closes the aiohttp ClientSession if it exists."""
         if self.session and not self.session.closed: # Fix: 'и' -> 'and'
             await self.session.close()
             self.session = None
@@ -749,20 +756,20 @@ class AI3:
             logger.error(f"[AI3] Error requesting error fix task: {e}")
 
     async def update_file_and_commit(self, file_path_relative: str, content: str):
-        """Оновлює файл у репозиторії та комітить зміни."""
+        """Updates a file in the repository and commits the changes."""
         repo_dir = DEFAULT_REPO_DIR # Use constant
         full_path = os.path.join(repo_dir, file_path_relative)
 
         try:
-            # Переконатися, що директорія існує
+            # Ensure the directory exists
             os.makedirs(os.path.dirname(full_path), exist_ok=True)
 
-            # Записати вміст файлу
+            # Write the file content
             with open(full_path, "w", encoding="utf-8") as f:
                 f.write(content)
-            logger.info(f"Оновлено файл: {full_path}")
+            logger.info(f"Updated file: {full_path}")
 
-            # Додати файл до індексу Git
+            # Add the file to the Git index
             add_result = subprocess.run(
                 ["git", "add", full_path],
                 cwd=repo_dir,
@@ -771,14 +778,14 @@ class AI3:
                 text=True,
             )
             if add_result.returncode != 0:
-                logger.error(f"Помилка 'git add' для {full_path}: {add_result.stderr}")
-                return  # Не продовжувати, якщо add не вдався
+                logger.error(f"Error 'git add' for {full_path}: {add_result.stderr}")
+                return  # Do not proceed if add failed
 
-            logger.info(f"Додано до індексу Git: {full_path}")
+            logger.info(f"Added to Git index: {full_path}")
 
-            # Закомітити зміни
-            commit_message = f"AI3: Оновлено {file_path_relative}"
-            # Використовує глобально налаштованого користувача Git (з new_repo.sh)
+            # Commit the changes
+            commit_message = f"AI3: Updated {file_path_relative}"
+            # Use globally configured Git user (from new_repo.sh)
             commit_result = subprocess.run(
                 ["git", "commit", "-m", commit_message],
                 cwd=repo_dir,
@@ -787,53 +794,53 @@ class AI3:
                 text=True,
             )
             if commit_result.returncode != 0:
-                # Можливо, коміт не вдався, бо не було змін (це нормально)
+                # Commit may fail if there are no changes (this is normal)
                 if (
                     "nothing to commit, working tree clean" not in commit_result.stdout
                     and "no changes added to commit" not in commit_result.stderr
                 ):
                     logger.error(
-                        f"Помилка 'git commit' для {file_path_relative}: {commit_result.stderr}"
+                        f"Error 'git commit' for {file_path_relative}: {commit_result.stderr}"
                     )
                 else:
-                    logger.info(f"Немає змін для коміту в файлі: {file_path_relative}")
+                    logger.info(f"No changes to commit in file: {file_path_relative}")
 
             else:
-                logger.info(f"Зроблено коміт для файлу: {file_path_relative}")
+                logger.info(f"Committed file: {file_path_relative}")
 
         except FileNotFoundError:
             logger.error( # Remove f-string
-                "Помилка: команда 'git' не знайдена. Переконайтеся, що Git встановлено та доступний у PATH."
+                "Error: 'git' command not found. Ensure Git is installed and available in PATH."
             )
         except Exception as e:
             logger.error(
-                f"Не вдалося оновити або закомітити файл {file_path_relative}: {e}"
+                f"Failed to update or commit file {file_path_relative}: {e}"
             )
 
     async def handle_ai2_output(self, data):
-        # ... логіка для вилучення file_path та content ...
-        file_path = data.get("filename")  # Або інше поле, що містить шлях
-        content = data.get("code")  # Або інше поле, що містить вміст
+        # ... logic to extract file_path and content ...
+        file_path = data.get("filename")  # Or another field containing the path
+        content = data.get("code")  # Or another field containing the content
 
         if file_path and content is not None: # Fix: 'і' -> 'and'
-            # Переконайтеся, що file_path є відносним шляхом всередині 'repo/'
+            # Ensure file_path is a relative path inside 'repo/'
             if file_path.startswith(os.path.abspath(DEFAULT_REPO_DIR)): # Use constant
                 file_path = os.path.relpath(file_path, DEFAULT_REPO_DIR) # Use constant
 
             await self.update_file_and_commit(file_path, content)
         else:
             logger.warning(
-                f"Не вдалося вилучити шлях до файлу або вміст зі звіту AI2: {data}"
+                f"Failed to extract file path or content from AI2 report: {data}"
             )
 
     async def monitor_github_actions(self):
-        """Моніторить результати GitHub Actions та надсилає рекомендації на основі аналізу.
-        Ця функція безперервно перевіряє статус GitHub Actions через GitHub API
-        та обробляє результати тестування.
+        """Monitors GitHub Actions results and sends recommendations based on analysis.
+        This function continuously checks the status of GitHub Actions via the GitHub API
+        and processes the test results.
         """
         logger.info("[AI3] Starting GitHub Actions monitoring...")
         
-        # Конфігурація GitHub API
+        # GitHub API configuration
         github_token = os.getenv("GITHUB_TOKEN") # Read from env
         github_repo = os.getenv("GITHUB_REPO_TO_MONITOR") # Read from env
         
@@ -846,11 +853,11 @@ class AI3:
             "Accept": "application/vnd.github.v3+json"
         }
         
-        # Основний цикл моніторингу
+        # Main monitoring loop
         while True:
             try:
                 await self.create_session()
-                # Отримуємо останні workflow runs
+                # Get the latest workflow runs
                 async with self.session.get(
                     f"https://api.github.com/repos/{github_repo}/actions/runs", # Use github_repo variable
                     headers=headers
@@ -859,42 +866,42 @@ class AI3:
                         runs_data = await response.json()
                         workflow_runs = runs_data.get("workflow_runs", [])
                         
-                        # Обробляємо тільки останній завершений workflow run
+                        # Process only the latest completed workflow run
                         for run in workflow_runs:
                             run_id = run.get("id")
                             run_status = run.get("status")
                             run_conclusion = run.get("conclusion")
                             
                             if run_status == "completed":
-                                # Зберігаємо інформацію про завершений run, якщо ми його ще не обробляли
+                                # Save information about the completed run if we haven't processed it yet
                                 if self._is_new_completed_run(run_id):
                                     logger.info(f"[AI3] Found completed GitHub Actions run: {run_id}, conclusion: {run_conclusion}")
                                     await self._analyze_workflow_run(run_id, run_conclusion, headers)
-                                break  # Обробляємо тільки останній завершений run
+                                break  # Process only the latest completed run
                     else:
                         logger.warning(f"[AI3] Failed to fetch GitHub Actions runs: Status {response.status}")
                     
             except Exception as e:
                 logger.error(f"[AI3] Error in GitHub Actions monitoring: {e}")
             
-            # Чекаємо перед наступною перевіркою
+            # Wait before the next check
             await asyncio.sleep(config.get("github_actions_check_interval", 60))
 
     async def _analyze_workflow_run(self, run_id, run_conclusion, headers):
-        """Аналізує результати виконання workflow (pytest + linters) та відправляє рекомендації."""
+        """Analyzes the results of the workflow run (pytest + linters) and sends recommendations."""
         github_repo = os.getenv("GITHUB_REPO_TO_MONITOR")
         if not github_repo:
             logger.warning("[AI3] Warning: GITHUB_REPO_TO_MONITOR not configured in .env. Cannot analyze workflow run.")
             return
 
-        failed_files = set() # Використовуємо set для уникнення дублікатів
+        failed_files = set() # Use set to avoid duplicates
         linting_errors_found = False
         pytest_errors_found = False
         job_logs = ""
 
         try:
             await self.create_session()
-            # 1. Отримуємо ID завдання (job) 'build-and-test'
+            # 1. Get the job ID for 'build-and-test'
             job_id = None
             async with self.session.get(
                 f"https://api.github.com/repos/{github_repo}/actions/runs/{run_id}/jobs",
@@ -903,26 +910,26 @@ class AI3:
                 if response.status == 200:
                     jobs_data = await response.json()
                     for job in jobs_data.get("jobs", []):
-                        if job.get("name") == "build-and-test": # Назва нашого завдання
+                        if job.get("name") == "build-and-test": # Our job name
                             job_id = job.get("id")
-                            # Перевіряємо загальний висновок завдання, якщо він 'failure'
+                            # Check the overall job conclusion, if it's 'failure'
                             if job.get("conclusion") == "failure":
-                                # Не обов'язково pytest, може бути помилка встановлення залежностей тощо.
-                                # Позначимо це як можливу помилку pytest для простоти, але логіка парсингу логів важливіша
+                                # Not necessarily pytest, could be dependency installation failure, etc.
+                                # Marking it as potential pytest error for simplicity, but log parsing logic is more important
                                 pytest_errors_found = True
                                 logger.warning(f"[AI3] Job 'build-and-test' (ID: {job_id}) failed overall.")
                             break
                 else:
                     logger.error(f"[AI3] Error fetching jobs for run {run_id}: {response.status}")
-                    return # Не можемо продовжити без ID завдання
+                    return # Cannot proceed without job ID
 
             if not job_id:
                 logger.warning(f"[AI3] Could not find job 'build-and-test' for run {run_id}.")
-                # Можливо, workflow ще не запустився або назва завдання інша
-                # Повертаємось, щоб спробувати пізніше
+                # Maybe the workflow hasn't started yet or the job name is different
+                # Return to try again later
                 return
 
-            # 2. Отримуємо повні логи для завдання
+            # 2. Get the full logs for the job
             async with self.session.get(
                 f"https://api.github.com/repos/{github_repo}/actions/jobs/{job_id}/logs",
                 headers=headers
@@ -932,34 +939,34 @@ class AI3:
                     logger.info(f"[AI3] Successfully fetched logs for job {job_id} (run {run_id}). Length: {len(job_logs)} chars.")
                 else:
                     logger.error(f"[AI3] Error fetching logs for job {job_id}: {log_response.status}. Status: {run_conclusion}")
-                    # Якщо логи недоступні, але загальний висновок 'failure', вважаємо, що є помилки
+                    # If logs are unavailable but overall conclusion is 'failure', assume there are errors
                     if run_conclusion == "failure":
-                         pytest_errors_found = True # Припускаємо помилку pytest/linting
+                         pytest_errors_found = True # Assume pytest/linting error
 
         except Exception as e:
             logger.error(f"[AI3] Error fetching job details or logs for run {run_id}: {e}")
-            # Якщо сталася помилка при отриманні деталей, але загальний висновок 'failure', вважаємо, що є помилки
+            # If there was an error fetching details but overall conclusion is 'failure', assume there are errors
             if run_conclusion == "failure":
-                 pytest_errors_found = True # Припускаємо помилку pytest/linting
+                 pytest_errors_found = True # Assume pytest/linting error
 
-        # 3. Парсинг логів (якщо вони є)
+        # 3. Log parsing (if available)
         if job_logs:
             log_lines = job_logs.splitlines()
 
-            # Патерни для пошуку помилок (можна вдосконалювати)
-            # Pytest: Шукаємо секцію FAILURES або errors
+            # Patterns to find errors (can be improved)
+            # Pytest: Look for FAILURES or errors section
             pytest_failure_pattern = re.compile(r"=+ FAILURES =+")
             pytest_error_pattern = re.compile(r"=+ ERRORS =+")
-            pytest_file_pattern = re.compile(r"____ (test_.*\.py) ____") # Знаходить файл тесту з помилкою
+            pytest_file_pattern = re.compile(r"____ (test_.*\.py) ____") # Finds test file with error
 
-            # HTMLHint: Шукає рядки, що починаються з шляху до файлу і містять 'error'
+            # HTMLHint: Look for lines starting with file path and containing 'error'
             htmlhint_error_pattern = re.compile(r"^(repo/project/.*\.html): line \d+, col \d+, (.*) \((.*)\)$", re.IGNORECASE)
 
-            # Stylelint: Шукає рядки з шляхом до файлу, номерами рядка/колонки та назвою правила
+            # Stylelint: Look for lines with file path, line/column numbers, and rule name
             # Fix: Corrected cyrillic 'д' to latin 'd' and removed unnecessary brackets around ✖️
             stylelint_error_pattern = re.compile(r"^(repo/project/.*\.css)\s+(\d+:\d+)\s+✖️\s+(.*)$")
 
-            # ESLint: Шукає рядки з шляхом до файлу, номерами рядка/колонки та 'Error'/'Warning'
+            # ESLint: Look for lines with file path, line/column numbers, and 'Error'/'Warning'
             eslint_error_pattern = re.compile(r"^(repo/project/.*\.js)\s+line (\d+), col (\d+),\s+(Error|Warning)\s+-(.*)$")
 
             in_pytest_failures_section = False
@@ -976,14 +983,14 @@ class AI3:
                      in_pytest_errors_section = True
                      logger.warning(f"[AI3] Pytest ERRORS section detected in logs for run {run_id}.")
                 elif line.strip().startswith("===") and (in_pytest_failures_section or in_pytest_errors_section):
-                    # Кінець секції помилок pytest
+                    # End of pytest errors section
                     in_pytest_failures_section = False
                     in_pytest_errors_section = False
                 elif in_pytest_failures_section or in_pytest_errors_section:
                     match = pytest_file_pattern.search(line)
                     if match:
-                        # Додаємо сам файл тесту, де сталася помилка
-                        failed_files.add(f"tests/{match.group(1)}") # Припускаємо, що тести лежать в tests/
+                        # Add the test file itself where the error occurred
+                        failed_files.add(f"tests/{match.group(1)}") # Assume tests are in tests/
 
                 # HTMLHint parsing
                 html_match = htmlhint_error_pattern.search(line)
@@ -1009,8 +1016,8 @@ class AI3:
                     failed_files.add(file_path)
                     logger.warning(f"[AI3] ESLint {eslint_match.group(4)} found in {file_path}: {eslint_match.group(5)}")
 
-        # 4. Визначаємо рекомендацію та контекст
-        # Рекомендація 'rework', якщо є помилки pytest АБО помилки лінтингу АБО загальний висновок 'failure'
+        # 4. Determine recommendation and context
+        # Recommendation 'rework' if there are pytest errors OR linting errors OR overall conclusion is 'failure'
         if pytest_errors_found or linting_errors_found or run_conclusion == "failure":
             recommendation = "rework"
             logger.warning(f"[AI3] Recommendation for run {run_id}: rework (Pytest errors: {pytest_errors_found}, Linting errors: {linting_errors_found}, Run conclusion: {run_conclusion})")
@@ -1020,16 +1027,16 @@ class AI3:
 
         context = {}
         if recommendation == "rework":
-            # Додаємо унікальні імена файлів до контексту
+            # Add unique file names to context
             context["failed_files"] = list(failed_files)
             context["run_url"] = f"https://github.com/{github_repo}/actions/runs/{run_id}"
-            context["job_logs_excerpt"] = job_logs[:2000] + "..." if job_logs else "Logs not available." # Додаємо уривок логів
+            context["job_logs_excerpt"] = job_logs[:2000] + "..." if job_logs else "Logs not available." # Add log excerpt
 
-        # 5. Відправляємо рекомендацію в MCP API
+        # 5. Send recommendation to MCP API
         await self._send_test_recommendation(recommendation, context)
 
     async def _send_test_recommendation(self, recommendation: str, context: dict):
-        """Відправляє рекомендацію щодо тестування в MCP API."""
+        """Sends a test recommendation to the MCP API."""
         mcp_api_url = self.config.get("mcp_api_url", DEFAULT_MCP_API_URL) # Use constant
         try:
             await self.create_session()
@@ -1046,7 +1053,7 @@ class AI3:
             logger.error(f"[AI3] Failed to send test recommendation to MCP API: {e}")
 
     async def monitor_idle_workers(self):
-        """Моніторить простоюючі AI2 воркери."""
+        """Monitors idle AI2 workers."""
         mcp_api_url = self.config.get("mcp_api_url", DEFAULT_MCP_API_URL) # Use constant
         check_interval = self.config.get("idle_worker_check_interval", 30)
         logger.info("[AI3] Starting idle worker monitoring.")
@@ -1063,7 +1070,7 @@ class AI3:
                                 await self._request_task_for_idle_worker(role, mcp_api_url)
                     else:
                         logger.warning(f"[AI3] Error checking worker status: {response.status}. Falling back to log analysis.")
-                        # Fallback: Аналіз логів MCP API на повідомлення про порожню чергу
+                        # Fallback: Analyze MCP API logs for empty queue messages
                         await self._check_logs_for_idle_workers()
 
             except aiohttp.ClientConnectorError as e:
@@ -1075,7 +1082,7 @@ class AI3:
             await asyncio.sleep(check_interval)
 
     async def _request_task_for_idle_worker(self, role: str, mcp_api_url: str):
-        """Запитує нову задачу для простоюючого воркера."""
+        """Requests a new task for an idle worker."""
         try:
             await self.create_session()
             async with self.session.post(f"{mcp_api_url}/request_task_for_idle_worker", json={"role": role}) as response:
@@ -1089,28 +1096,28 @@ class AI3:
             logger.error(f"[AI3] Failed to request task for idle worker '{role}': {e}")
 
     async def _check_logs_for_idle_workers(self):
-        """Резервний метод: аналізує лог MCP API на повідомлення про порожню чергу."""
+        """Fallback method: analyzes MCP API log for empty queue messages."""
         # log_file variable was unused, removed it.
         # log_file = self.config.get("mcp_log_file", "logs/mcp_api.log")
         try:
-            # Читаємо останні N рядків логу
-            # Реалізація читання логів може бути складною в асинхронному режимі,
-            # для простоти можна використовувати синхронне читання або спеціалізовані бібліотеки
-            # Тут просто приклад логіки
+            # Read the last N lines of the log
+            # Implementing log reading can be complex in async mode,
+            # for simplicity, you can use synchronous reading or specialized libraries
+            # Here is just an example of the logic
             # logger.debug("[AI3] Fallback: Checking MCP logs for idle workers.")
-            # ... логіка аналізу логів ...
-            pass # Поки що пропускаємо реалізацію fallback
+            # ... log analysis logic ...
+            pass # Skipping implementation for now
         except Exception as e:
             logger.error(f"[AI3] Error checking logs for idle workers: {e}")
 
 
     async def monitor_system_errors(self):
-        """Моніторить лог-файли системи на наявність помилок, що стосуються файлів у repo/,
-        та повідомляє AI1 про знайдені помилки.""" # Оновлено опис
+        """Monitors system log files for errors related to files in repo/,
+        and reports them to AI1.""" # Updated description
         log_files = self.config.get("error_log_files", ["logs/mcp_api.log", "logs/ai1.log", "logs/ai2.log", "logs/ai3.log"])
         check_interval = self.config.get("error_check_interval", 60)
         # --- CHANGE: Modify error pattern to require REPO_PREFIX ---
-        # Патерн шукає CRITICAL/ERROR + ключове слово помилки + шлях до файлу в repo/
+        # Pattern looks for CRITICAL/ERROR + error keyword + file path in repo/
         error_pattern = re.compile(r"(CRITICAL|ERROR).*(failed|exception|crash|timeout).*" + re.escape(REPO_PREFIX), re.IGNORECASE)
         # ----------------------------------------------------------
         # --- CHANGE: Refine exclusion patterns further ---
@@ -1126,8 +1133,8 @@ class AI3:
             re.compile(r"Updating status"), # Оновлення статусу
         ]
         # --- END CHANGE ---
-        processed_errors = set() # Зберігаємо хеші оброблених помилок
-        max_errors_per_cycle = self.config.get("max_errors_per_cycle", 2) # Обмеження кількості помилок за цикл
+        processed_errors = set() # Store hashes of processed errors
+        max_errors_per_cycle = self.config.get("max_errors_per_cycle", 2) # Limit number of errors per cycle
 
         async def check_executor_queue_size():
             # ... (implementation remains the same) ...
@@ -1147,7 +1154,7 @@ class AI3:
                 logger.error(f"[AI3] Error checking worker status: {e}")
                 return 1000, {}
 
-        logger.info("[AI3] Starting system error monitoring (repo/ files only, reporting to AI1).") # Оновлено лог
+        logger.info("[AI3] Starting system error monitoring (repo/ files only, reporting to AI1).") # Updated log
         while True:
             try:
                 executor_queue_size, all_queue_sizes = await check_executor_queue_size()
@@ -1179,7 +1186,7 @@ class AI3:
                                  # -------------------------------------------
                                      error_hash = hash(line)
                                      if error_hash not in processed_errors:
-                                         logger.info(f"[AI3] Detected repo-related critical error in {log_file}: {line.strip()}") # Оновлено лог
+                                         logger.info(f"[AI3] Detected repo-related critical error in {log_file}: {line.strip()}") # Updated log
                                          context_lines = lines[max(0, len(lines) - 100 + i - 2) : min(len(lines), len(lines) - 100 + i + 3)]
                                          error_context = "".join(context_lines)
                                          await self._report_system_error_to_ai1(log_file, line.strip(), error_context)
@@ -1191,7 +1198,7 @@ class AI3:
 
 
                 if errors_processed_this_cycle > 0:
-                    logger.info(f"[AI3] Reported {errors_processed_this_cycle} repo-related critical system errors to AI1 this cycle") # Оновлено лог
+                    logger.info(f"[AI3] Reported {errors_processed_this_cycle} repo-related critical system errors to AI1 this cycle") # Updated log
 
             except Exception as e:
                 logger.error(f"[AI3] Error monitoring system errors: {e}")
@@ -1199,7 +1206,7 @@ class AI3:
             await asyncio.sleep(check_interval)
 
     async def _report_system_error_to_ai1(self, log_file: str, error_line: str, context: str):
-        """Надсилає звіт про системну помилку до AI1 через MCP API."""
+        """Sends a system error report to AI1 via MCP API."""
         mcp_api_url = self.config.get("mcp_api_url", DEFAULT_MCP_API_URL)
         try:
             await self.create_session()
@@ -1230,8 +1237,8 @@ class AI3:
             return False
 
     async def send_queue_info_to_ai1(self, queue_sizes):
-        """Надсилає інформацію про розміри черг до AI1 для перерозподілу завдань."""
-        # Оскільки спілкування з AI1 відбувається через MCP API, використовуємо ендпоінт для комунікації
+        """Sends queue size information to AI1 for task redistribution."""
+        # Since communication with AI1 happens via MCP API, use the collaboration endpoint
         mcp_api_url = self.config.get("mcp_api_url", DEFAULT_MCP_API_URL)
         try:
             await self.create_session()
@@ -1245,7 +1252,7 @@ class AI3:
                 }
             }
             
-            # Відправляємо дані через ендпоінт ai_collaboration
+            # Send data via ai_collaboration endpoint
             logger.info(f"[AI3 -> AI1] Sending queue info to AI1: {queue_sizes}") # Simplified log
             async with self.session.post(
                 f"{mcp_api_url}/ai_collaboration", 
@@ -1263,9 +1270,9 @@ class AI3:
             return False
 
     async def run(self):
-        """Запускає всі фонові задачі AI3."""
+        """Starts all background tasks for AI3."""
         logger.info("[AI3] Starting AI3 background tasks...")
-        await self.create_session() # Створюємо сесію перед запуском задач
+        await self.create_session() # Create session before starting tasks
         tasks = [
             self.monitor_idle_workers(),
             self.monitor_system_errors(),
@@ -1276,7 +1283,7 @@ class AI3:
         except Exception as e:
              logger.critical(f"[AI3] An error occurred in AI3 main run loop: {e}")
         finally:
-             await self.close_session() # Закриваємо сесію при завершенні
+             await self.close_session() # Close session on completion
              logger.info("[AI3] AI3 background tasks stopped.")
 
 

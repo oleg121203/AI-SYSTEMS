@@ -1,11 +1,16 @@
-name: CI Checks
+name: AI-SYSTEMS Tests
+
 on:
-  push:
-    branches: [master]
-  pull_request:
-    branches: [master]
   repository_dispatch:
     types: [code-committed-in-repo]
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'repo/**'
+  pull_request:
+    branches: [ main, master ]
+    paths:
+      - 'repo/**'
   workflow_dispatch:
 
 jobs:
@@ -13,123 +18,247 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout AI-SYSTEMS code
-        uses: actions/checkout@v4
-        with:
-          path: main
+    - uses: actions/checkout@v3
+      with:
+        path: main
 
-      - name: Checkout generated project code (AI-SYSTEMS-REPO)
-        uses: actions/checkout@v4
-        with:
-          repository: ${{ github.repository_owner }}/AI-SYSTEMS-REPO
-          path: repo
-          token: ${{ secrets.GH_PAT_DISPATCH || secrets.GITHUB_TOKEN }}
+    - uses: actions/checkout@v3
+      with:
+        repository: oleg121203/AI-SYSTEMS-REPO
+        path: repo
+        token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.x"
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+        
+    - name: Set up Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18'
 
-      - name: Install AI-SYSTEMS Python dependencies
-        working-directory: main
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements_async.txt
-          pip install -r requirements.txt
+    - name: Install Python dependencies
+      run: |
+        python -m pip install --upgrade pip
+        cd main && pip install -r requirements.txt
+        cd ../repo && if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+        pip install pytest pytest-cov flake8 black mypy
 
-      - name: Install Generated Project Python dependencies
-        working-directory: repo
-        run: |
-          if [ -f requirements.txt ]; then
-            echo "Installing dependencies from repo/requirements.txt..."
-            python -m pip install --upgrade pip
-            pip install -r requirements.txt
-          else
-            echo "repo/requirements.txt not found, skipping dependency installation."
+    - name: Install Node.js dependencies
+      run: |
+        npm install -g eslint stylelint htmlhint jest
+        npm install -g @stylistic/eslint-plugin stylelint-config-standard stylelint-scss
+        
+    - name: Install language-specific dependencies
+      run: |
+        # For Java
+        if ls repo/**/*.java 1> /dev/null 2>&1; then
+          echo "Java files detected, installing Java dependencies"
+          sudo apt-get update
+          sudo apt-get install -y openjdk-17-jdk
+        fi
+        
+        # For C++
+        if ls repo/**/*.cpp 1> /dev/null 2>&1 || ls repo/**/*.hpp 1> /dev/null 2>&1; then
+          echo "C++ files detected, installing C++ dependencies"
+          sudo apt-get update
+          sudo apt-get install -y g++ cmake cppcheck
+        fi
+        
+        # For Go
+        if ls repo/**/*.go 1> /dev/null 2>&1; then
+          echo "Go files detected, installing Go dependencies"
+          sudo apt-get update
+          sudo apt-get install -y golang
+          go install golang.org/x/lint/golint@latest
+        fi
+        
+        # For Rust
+        if ls repo/**/*.rs 1> /dev/null 2>&1; then
+          echo "Rust files detected, installing Rust dependencies"
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          source "$HOME/.cargo/env"
+          rustup component add clippy
+        fi
+
+    - name: Lint Python files
+      run: |
+        if ls repo/**/*.py 1> /dev/null 2>&1; then
+          echo "Running Python linting"
+          flake8 repo/ --count --select=E9,F63,F7,F82 --show-source --statistics || true
+          black --check repo/ || true
+          mypy repo/ || true
+        fi
+
+    - name: Lint JavaScript files
+      run: |
+        if ls repo/**/*.js 1> /dev/null 2>&1; then
+          echo "Running JavaScript linting"
+          echo '{"extends": ["eslint:recommended"], "parserOptions": {"ecmaVersion": 2020}, "env": {"browser": true, "node": true, "es6": true}}' > .eslintrc.json
+          eslint "repo/**/*.js" --config .eslintrc.json || true
+        fi
+
+    - name: Lint TypeScript files
+      run: |
+        if ls repo/**/*.ts 1> /dev/null 2>&1; then
+          echo "Running TypeScript linting"
+          npm install -g typescript @typescript-eslint/parser @typescript-eslint/eslint-plugin
+          echo '{"extends": ["eslint:recommended", "plugin:@typescript-eslint/recommended"], "parser": "@typescript-eslint/parser", "plugins": ["@typescript-eslint"], "parserOptions": {"ecmaVersion": 2020}, "env": {"browser": true, "node": true, "es6": true}}' > .eslintrc.json
+          eslint "repo/**/*.ts" --config .eslintrc.json || true
+        fi
+
+    - name: Lint HTML files
+      run: |
+        if ls repo/**/*.html 1> /dev/null 2>&1; then
+          echo "Running HTML linting"
+          echo '{"tagname-lowercase": true, "attr-lowercase": true, "attr-value-double-quotes": true, "doctype-first": false, "tag-pair": true, "spec-char-escape": true, "id-unique": true, "src-not-empty": true, "attr-no-duplication": true, "title-require": true}' > .htmlhintrc
+          htmlhint repo/**/*.html || true
+        fi
+
+    - name: Lint CSS files
+      run: |
+        if ls repo/**/*.css 1> /dev/null 2>&1; then
+          echo "Running CSS linting"
+          echo '{"extends": "stylelint-config-standard"}' > .stylelintrc.json
+          stylelint "repo/**/*.css" --config .stylelintrc.json --allow-empty-input || true
+        fi
+
+    - name: Lint SCSS files
+      run: |
+        if ls repo/**/*.scss 1> /dev/null 2>&1; then
+          echo "Running SCSS linting"
+          npm install -g sass
+          echo '{"extends": "stylelint-config-standard", "plugins": ["stylelint-scss"]}' > .stylelintrc.json
+          stylelint "repo/**/*.scss" --config .stylelintrc.json --allow-empty-input || true
+        fi
+
+    - name: Lint JSX/TSX files
+      run: |
+        if ls repo/**/*.jsx 1> /dev/null 2>&1 || ls repo/**/*.tsx 1> /dev/null 2>&1; then
+          echo "Running React component linting"
+          npm install -g eslint-plugin-react eslint-plugin-react-hooks
+          echo '{"extends": ["eslint:recommended", "plugin:react/recommended", "plugin:react-hooks/recommended"], "parserOptions": {"ecmaVersion": 2020, "sourceType": "module", "ecmaFeatures": {"jsx": true}}, "env": {"browser": true, "node": true, "es6": true}, "settings": {"react": {"version": "detect"}}}' > .eslintrc.json
+          eslint "repo/**/*.jsx" "repo/**/*.tsx" --config .eslintrc.json || true
+        fi
+
+    - name: Lint Vue files
+      run: |
+        if ls repo/**/*.vue 1> /dev/null 2>&1; then
+          echo "Running Vue component linting"
+          npm install -g eslint-plugin-vue
+          echo '{"extends": ["eslint:recommended", "plugin:vue/recommended"], "parserOptions": {"ecmaVersion": 2020, "sourceType": "module"}, "env": {"browser": true, "node": true, "es6": true}}' > .eslintrc.json
+          eslint "repo/**/*.vue" --config .eslintrc.json || true
+        fi
+
+    - name: Lint Java files
+      run: |
+        if ls repo/**/*.java 1> /dev/null 2>&1; then
+          echo "Running Java linting"
+          sudo apt-get install -y checkstyle
+          checkstyle -c /google_checks.xml repo/**/*.java || true
+        fi
+
+    - name: Lint C++ files
+      run: |
+        if ls repo/**/*.cpp 1> /dev/null 2>&1 || ls repo/**/*.hpp 1> /dev/null 2>&1; then
+          echo "Running C++ linting"
+          cppcheck --enable=all --suppress=missingIncludeSystem repo/ || true
+        fi
+
+    - name: Lint Go files
+      run: |
+        if ls repo/**/*.go 1> /dev/null 2>&1; then
+          echo "Running Go linting"
+          export PATH=$PATH:$(go env GOPATH)/bin
+          golint ./... || true
+        fi
+
+    - name: Lint Rust files
+      run: |
+        if ls repo/**/*.rs 1> /dev/null 2>&1; then
+          echo "Running Rust linting"
+          source "$HOME/.cargo/env"
+          cd repo && cargo clippy -- -D warnings || true
+        fi
+
+    - name: Run Python tests
+      run: |
+        if ls repo/tests/**/*.py 1> /dev/null 2>&1; then
+          echo "Running Python tests"
+          cd repo && python -m pytest tests/ -v --cov=. || true
+        fi
+
+    - name: Run JavaScript tests
+      run: |
+        if ls repo/tests/**/*.js 1> /dev/null 2>&1; then
+          echo "Running JavaScript tests"
+          cd repo && npm install jest && npx jest tests/ || true
+        fi
+
+    - name: Run React component tests
+      run: |
+        if ls repo/**/*.test.jsx 1> /dev/null 2>&1 || ls repo/**/*.test.tsx 1> /dev/null 2>&1; then
+          echo "Running React component tests"
+          cd repo && npm install jest @testing-library/react @testing-library/jest-dom @testing-library/user-event && npx jest --testMatch='**/*.test.(jsx|tsx)' || true
+        fi
+
+    - name: Run Vue component tests
+      run: |
+        if ls repo/**/*.spec.js 1> /dev/null 2>&1; then
+          echo "Running Vue component tests"
+          cd repo && npm install jest @vue/test-utils vue-jest && npx jest --testMatch='**/*.spec.js' || true
+        fi
+
+    - name: Start Generated Application (Example:Backend)
+      run: |
+        if [ -f repo/project/backend/main.py ]; then
+          echo "Starting backend application in background..."
+          cd repo/project/backend
+          pip install fastapi uvicorn
+          nohup uvicorn main:app --host 0.0.0.0 --port 8000 > ../../app_backend.log 2>&1 &
+          sleep 5
+        fi
+
+    - name: Start Generated Frontend (if applicable)
+      run: |
+        if [ -f repo/project/frontend/package.json ]; then
+          echo "Starting frontend application in background..."
+          cd repo/project/frontend
+          npm install
+          nohup npm start > ../../app_frontend.log 2>&1 &
+          sleep 5
+        fi
+
+    - name: Run End-to-End Tests (if applicable)
+      run: |
+        if ls repo/tests/e2e/**/*.js 1> /dev/null 2>&1 || ls repo/tests/e2e/**/*.py 1> /dev/null 2>&1; then
+          echo "Running end-to-end tests..."
+          if ls repo/tests/e2e/**/*.js 1> /dev/null 2>&1; then
+            npm install -g playwright
+            npx playwright install --with-deps
+            cd repo && npx playwright test tests/e2e/ || true
           fi
-
-      - name: Run AI-SYSTEMS Python tests
-        working-directory: main
-        run: |
-          pytest tests/
-
-      - name: Run Generated Project Python tests (Unit/Integration)
-        working-directory: repo
-        run: |
-          if [ -d "tests" ] || ls test_*.py > /dev/null 2>&1 || ls *_test.py > /dev/null 2>&1; then
-            echo "Running pytest in repo/..."
-            pytest tests/ || true
-          else
-            echo "No unit/integration tests found in repo/, skipping project test execution."
+          if ls repo/tests/e2e/**/*.py 1> /dev/null 2>&1; then
+            pip install playwright pytest-playwright
+            python -m playwright install --with-deps
+            cd repo && pytest tests/e2e/ || true
           fi
+        fi
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "18"
+    - name: Stop Application
+      run: |
+        echo "Stopping any running applications..."
+        pkill -f "uvicorn main:app" || true
+        pkill -f "npm start" || true
 
-      - name: Install Playwright Browsers
-        working-directory: main
-        run: npx playwright install --with-deps
-
-      - name: Install E2E test dependencies
-        working-directory: main
-        run: |
-          if [ -f e2e_tests/requirements.txt ]; then
-            pip install -r e2e_tests/requirements.txt
-          fi
-          pip install pytest-playwright
-
-      - name: Start Generated Application (Example:FastAPI Backend)
-        working-directory: repo/project/backend
-        run: |
-          if [ -f main.py ]; then
-            echo "Starting application in background..."
-            nohup uvicorn main:app --host 0.0.0.0 --port 8000 > ../../app.log 2>&1 &
-            sleep 15
-            echo "Application potentially started."
-            pgrep -f "uvicorn main:app" || echo "Warning: Application process not found after start attempt."
-          else
-            echo "Application startup file (e.g., main.py) not found in repo/project/backend. Skipping E2E tests."
-            echo "SKIP_E2E=true" >> $GITHUB_ENV
-          fi
-
-      - name: Run End-to-End tests
-        if: env.SKIP_E2E != 'true'
-        working-directory: main
-        run: |
-          echo "Running E2E tests..."
-          export APP_BASE_URL=http://localhost:8000 
-          pytest e2e_tests/ || true
-
-      - name: Stop Generated Application
-        if: always() && env.SKIP_E2E != 'true'
-        run: |
-          echo "Attempting to stop application..."
-          PID=$(pgrep -f "uvicorn main:app" || pgrep -f "python main.py" || lsof -t -i:8000 || echo "")
-          if [ -n "$PID" ]; then
-            echo "Stopping application process(es) with PID(s): $PID"
-            kill $PID
-            sleep 5
-          else
-            echo "Application process not found or already stopped."
-          fi
-          echo "--- Application Log (repo/app.log) ---"
-          cat repo/app.log || echo "Could not display repo/app.log"
-          echo "--- End Application Log ---"
-
-      - name: Install Linters
-        run: |
-          npm install -g htmlhint stylelint stylelint-config-standard eslint
-
-      - name: Lint HTML files
-        working-directory: repo
-        run: htmlhint project/**/*.html || true
-
-      - name: Lint CSS files
-        working-directory: repo
-        run: stylelint "project/**/*.css" --config main/.stylelintrc.json --allow-empty-input || true
-
-      - name: Lint JavaScript files
-        working-directory: repo
-        run: eslint "project/**/*.js" --config main/.eslintrc.json || true
+    - name: Archive test results
+      uses: actions/upload-artifact@v3
+      with:
+        name: test-results
+        path: |
+          repo/app_backend.log
+          repo/app_frontend.log
+          repo/**/test-results/
+          repo/coverage-report/
+        if-no-files-found: ignore

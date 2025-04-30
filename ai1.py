@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional, Union
 
 import aiohttp
 
-# Используем функцию load_config из config.py
+# Use load_config function from config.py
 from config import load_config
 from providers import BaseProvider, ProviderFactory
 from utils import apply_request_delay, log_message  # Import apply_request_delay
@@ -20,57 +20,68 @@ MCP_API_URL = config.get("mcp_api", "http://localhost:7860")
 
 class AI1:
     """
-    AI1 - Координатор проекта
-    Формулирует задачи для AI2 на основе структуры проекта и следит за прогрессом
+    AI1 - Project Coordinator
+    Formulates tasks for AI2 based on project structure and tracks progress
     """
 
     def __init__(self, target: str):
         self.target = target
-        # Видаляємо ініціалізацію self.llm, оскільки вона не використовується
-        # ai1_config_base = config.get("ai_config", {})
-        # ai1_config = ai1_config_base.get("ai1", {})
-        # if not ai1_config:
-        #     log_message(
-        #         "[AI1] Warning: 'ai_config.ai1' section not found in configuration. Using defaults."
-        #     )
-        #     # ai1_config = {"provider": "openai"} # Стара логіка
+        # Restore LLM initialization
+        ai1_config_base = config.get("ai_config", {})
+        ai1_config = ai1_config_base.get("ai1", {})
+        if not ai1_config:
+            log_message(
+                "[AI1] Warning: 'ai_config.ai1' section not found in configuration. Using defaults."
+            )
+            ai1_config = {"providers": ["openai"]} # Default provider list
 
-        # # Нова логіка: читаємо список провайдерів, але не створюємо екземпляр, бо він не потрібен
-        # provider_names = ai1_config.get("providers", ["openai"]) # Отримуємо список
-        # if not provider_names:
-        #      log_message("[AI1] Warning: No providers specified for AI1 in config. Defaulting to ['openai']")
-        #      provider_names = ["openai"]
-        # log_message(f"[AI1] Configured providers (not initialized): {provider_names}")
+        # Read the list of providers
+        provider_names = ai1_config.get("providers", ["openai"])
+        if not provider_names:
+             log_message("[AI1] Warning: No providers specified for AI1 in config. Defaulting to ['openai']")
+             provider_names = ["openai"]
+        provider_name = provider_names[0] # Use the first provider from the list for AI1
+        log_message(f"[AI1] Attempting to initialize provider: {provider_name}")
 
-        # # Видалено створення екземпляра self.llm
-        # # try:
-        # #     # Передаем только имя провайдера, фабрика сама найдет конфиг
-        # #     self.llm: BaseProvider = ProviderFactory.create_provider(provider_name)
-        # #     log_message(f"[AI1] Provider '{provider_name}' created successfully.")
-        # # except ValueError as e:
-        # #     log_message(
-        # #         f"[AI1] CRITICAL ERROR: Failed to create provider '{provider_name}'. {e}. Exiting."
-        # #     )
-        # #     raise SystemExit(f"AI1 failed to initialize provider: {e}")
-        # # except Exception as e:
-        # #     log_message(
-        # #         f"[AI1] CRITICAL ERROR: Unexpected error creating provider '{provider_name}'. {e}. Exiting."
-        # #     )
-        # #     raise SystemExit(
-        # #         f"AI1 failed with unexpected error during provider init: {e}"
-        # #     )
+        # Load system prompt for LLM from configuration
+        self.system_prompt = config.get("ai1_prompt", "You are AI1, the project coordinator.") # Default prompt
+        log_message(f"[AI1] Loaded system prompt: {self.system_prompt[:100]}...")
+
+        # System instructions that will be added to the base prompt
+        self.system_instructions = " Use only Latin characters in your responses. Format your output as requested in specific prompts. Provide JSON when asked. Be precise and direct in your decisions."
+        
+        # Create LLM instance
+        try:
+            # Pass provider name and configuration for it
+            provider_config = config.get("providers", {}).get(provider_name, {})
+            full_ai1_config = {**provider_config, **ai1_config} # Merge general and specific configuration
+            self.llm: BaseProvider = ProviderFactory.create_provider(provider_name, full_ai1_config)
+            log_message(f"[AI1] Provider '{provider_name}' created successfully.")
+        except ValueError as e:
+            log_message(
+                f"[AI1] CRITICAL ERROR: Failed to create provider '{provider_name}'. {e}. LLM features disabled."
+            )
+            self.llm = None # Disable LLM if initialization failed
+        except Exception as e:
+            log_message(
+                f"[AI1] CRITICAL ERROR: Unexpected error creating provider '{provider_name}'. {e}. LLM features disabled."
+            )
+            self.llm = None # Disable LLM
+
+        # Save LLM configuration for future use
+        self.ai1_llm_config = ai1_config
 
         self.status = "initializing"
         self.project_structure: Optional[Dict] = None
         self.structure_fetch_attempted = False
-        self.files_to_fill = []  # Усі файли для заповнення (повний список)
-        self.pending_files_to_fill = []  # Файли, що очікують на створення завдань
-        self.files_to_test = []  # Усі файли для тестування (повний список)
-        self.pending_files_to_test = []  # Файли, що очікують на тестування
-        self.files_to_document = []  # Усі файли для документування (повний список)
-        self.pending_files_to_document = []  # Файли, що очікують на документування
+        self.files_to_fill = []  # All files to be filled (complete list)
+        self.pending_files_to_fill = []  # Files waiting to be tasked
+        self.files_to_test = []  # All files to be tested (complete list)
+        self.pending_files_to_test = []  # Files waiting to be tested
+        self.files_to_document = []  # All files to be documented (complete list)
+        self.pending_files_to_document = []  # Files waiting to be documented
 
-        # Максимальна кількість одночасних завдань з конфігурації (за замовчуванням 10)
+        # Maximum number of concurrent tasks from configuration (default 10)
         self.max_concurrent_tasks = config.get("ai1_max_concurrent_tasks", 10)
         log_message(f"[AI1] Maximum concurrent tasks set to: {self.max_concurrent_tasks}")
 
@@ -94,7 +105,7 @@ class AI1:
             log_message("[AI1] API session closed.")
 
     async def run(self):
-        """Основной цикл работы AI1"""
+        """Main work cycle of AI1"""
         log_message(f"[AI1] Started with target: {self.target}")
         self.status = "waiting_for_structure"
 
@@ -189,6 +200,12 @@ class AI1:
             ".go",
             ".rs",
             ".php",
+            ".html",
+            ".css",
+            ".scss",
+            ".jsx",
+            ".tsx",
+            ".vue"
         )
         self.files_to_test = [
             f for f in self.files_to_fill if f.lower().endswith(testable_extensions)
@@ -463,6 +480,96 @@ class AI1:
 
         tasks_to_send = []
         slots_filled_this_cycle = 0
+
+        # --- Застосування LLM для пріоритезації файлів ---
+        if self.llm and (self.pending_files_to_fill or self.pending_files_to_test or self.pending_files_to_document):
+            log_message("[AI1] Запит до LLM для пріоритезації файлів...")
+            try:
+                # Формуємо контекст для LLM
+                pending_summary = {
+                    "executor": len(self.pending_files_to_fill),
+                    "tester": len(self.pending_files_to_test),
+                    "documenter": len(self.pending_files_to_document),
+                }
+                
+                # Додаємо приклади файлів для кожної ролі (максимум по 5)
+                role_example_files = {
+                    "executor": self.pending_files_to_fill[:5] if self.pending_files_to_fill else [],
+                    "tester": self.pending_files_to_test[:5] if self.pending_files_to_test else [],
+                    "documenter": self.pending_files_to_document[:5] if self.pending_files_to_document else [],
+                }
+                
+                # Створюємо загальний аналіз стану
+                status_summary = {}
+                for file_path, statuses in self.task_status.items():
+                    for role, status in statuses.items():
+                        if status not in status_summary:
+                            status_summary[status] = 0
+                        status_summary[status] += 1
+                
+                # Формуємо промпт для LLM
+                llm_prompt = f"""{{
+    "system_prompt": "{self.system_prompt}{self.system_instructions}",
+    "context": {{
+        "project_target": "{self.target}",
+        "pending_files": {json.dumps(pending_summary)},
+        "example_files": {json.dumps(role_example_files)},
+        "project_status": {json.dumps(status_summary)},
+        "active_tasks": {len(self.active_tasks)}
+    }},
+    "request": "Given the current project state, provide guidance on which type of tasks (executor, tester, documenter) should be prioritized in this cycle. Consider dependencies (executor -> tester -> documenter), critical files, and balanced progress. Respond with a JSON structure like: {{\\"priorities\\": [\\"executor\\", \\"tester\\", \\"documenter\\"]}} listing roles in recommended priority order."
+}}"""
+
+                # Додаємо затримку перед запитом
+                await apply_request_delay("ai1")
+
+                # Викликаємо LLM
+                llm_response = await self.llm.generate(
+                    prompt=llm_prompt,
+                    temperature=self.ai1_llm_config.get("temperature", 0.3),
+                    max_tokens=self.ai1_llm_config.get("max_tokens", 150)
+                )
+
+                # Обробляємо відповідь LLM
+                if llm_response:
+                    try:
+                        # Шукаємо JSON у відповіді
+                        import re
+                        json_match = re.search(r'({.*})', llm_response)
+                        if json_match:
+                            llm_json = json.loads(json_match.group(1))
+                            prioritized_roles = llm_json.get("priorities", [])
+                            
+                            if prioritized_roles:
+                                log_message(f"[AI1] LLM рекомендує пріоритезацію: {prioritized_roles}")
+                                
+                                # Застосовуємо пріоритезацію, сортуючи файли за пріоритетом ролі
+                                if "executor" in prioritized_roles and self.pending_files_to_fill:
+                                    # Можна також пріоритезувати самі файли для executor
+                                    # Наприклад, за розширенням, розміром або шляхом
+                                    pass
+                                
+                                # Відсортуємо ролі для обробки відповідно до рекомендацій LLM
+                                roles_to_process = []
+                                for role in prioritized_roles:
+                                    if role == "executor" and self.pending_files_to_fill:
+                                        roles_to_process.append("executor")
+                                    elif role == "tester" and self.pending_files_to_test:
+                                        roles_to_process.append("tester")
+                                    elif role == "documenter" and self.pending_files_to_document:
+                                        roles_to_process.append("documenter")
+                                
+                                log_message(f"[AI1] Ролі для обробки після пріоритезації: {roles_to_process}")
+                            else:
+                                log_message("[AI1] LLM не надав рекомендацій щодо пріоритетів. Використовуємо стандартну послідовність.")
+                        else:
+                            log_message(f"[AI1] Не вдалося знайти JSON у відповіді LLM: {llm_response}")
+                    except json.JSONDecodeError as e:
+                        log_message(f"[AI1] Помилка розбору JSON з відповіді LLM: {e}")
+                    except Exception as e:
+                        log_message(f"[AI1] Помилка при обробці відповіді LLM для пріоритезації: {e}")
+            except Exception as e:
+                log_message(f"[AI1] Помилка при використанні LLM для пріоритезації: {e}")
 
         # --- Логіка додавання завдань (executor, tester, documenter) ---
         # Тепер використовуємо dynamic_max_concurrent замість self.max_concurrent_tasks
@@ -876,10 +983,85 @@ class AI1:
                         exceed_max_rework = True
                         # Можна позначити як "потрібна ручна перевірка"
                         self.task_status[file]["tester"] = "review_needed"
-            
+                        # Також позначимо executor, щоб він не намагався знову працювати над цим файлом
+                        if "executor" in self.task_status[file]:
+                            self.task_status[file]["executor"] = "review_needed"
+                        log_message(f"[AI1] Файл {file} позначено для ручної перевірки (перевищено ліміт доопрацювань).")
+                        # Видаляємо файл з черг, якщо він там є
+                        if file in self.pending_files_to_fill:
+                            self.pending_files_to_fill.remove(file)
+                        if file in self.pending_files_to_test:
+                            self.pending_files_to_test.remove(file)
+                        if file in self.pending_files_to_document:
+                            self.pending_files_to_document.remove(file)
+
             if exceed_max_rework:
-                # Якщо перевищено ліміт спроб, можемо змінити рішення або позначити для ручної перевірки
-                decision = "accept" # або "manual_review" чи інший статус
+                # Якщо хоча б один файл перевищив ліміт, змінюємо рішення на manual_review
+                # Це запобігає нескінченним циклам доопрацювання
+                decision = "manual_review"
+                log_message(f"[AI1] Змінено рішення на 'manual_review' через перевищення ліміту доопрацювань.")
+
+        # --- Інтеграція LLM для прийняття рішення ---
+        if self.llm:
+            log_message("[AI1] Запит до LLM для остаточного рішення щодо результатів тестів...")
+            try:
+                # Формуємо промпт для LLM
+                failed_files_str = ', '.join(context.get("failed_files", []))
+                run_url = context.get("run_url", "N/A")
+                # Визначаємо оригінальні файли для історії доопрацювань
+                original_failed_files = [self._get_original_file_from_test(f) for f in context.get("failed_files", [])]
+                original_failed_files = [f for f in original_failed_files if f] # Фільтруємо None
+
+                rework_attempts_info = "".join([f"  - {f}: {self.task_status[f].get('rework_attempts', 0)} attempts\n" for f in original_failed_files if f in self.task_status])
+
+                llm_prompt = f"""{{
+        "system_prompt": "{self.system_prompt}",
+        "context": {{
+            "project_target": "{self.target}",
+            "ai3_recommendation": "{recommendation}",
+            "failed_test_files": "{failed_files_str}",
+            "original_code_files_to_rework": "{', '.join(original_failed_files)}",
+            "github_actions_url": "{run_url}",
+            "rework_history": "{rework_attempts_info}"
+            # Можна додати уривки логів або коду, якщо потрібно
+        }},
+        "request": "You are AI1, the project coordinator. Given the test results, decide whether to 'accept' the code despite test failures, 'rework' (ask for fixes), or 'manual_review' (if multiple rework attempts failed). Return ONLY 'accept', 'rework', or 'manual_review' as a single word."
+    }}"""
+
+                # Додаємо затримку перед запитом
+                await apply_request_delay("ai1")
+
+                # Викликаємо LLM
+                llm_response = await self.llm.generate(
+                    prompt=llm_prompt,
+                    temperature=self.ai1_llm_config.get("temperature", 0.2),
+                    max_tokens=self.ai1_llm_config.get("max_tokens", 10)
+                )
+
+                # Обробляємо відповідь LLM
+                if llm_response:
+                    # Нормалізуємо відповідь: видаляємо зайві символи, лишаємо тільки текст рішення
+                    llm_decision = llm_response.strip().lower()
+                    
+                    # Шукаємо одне з очікуваних слів у відповіді
+                    for expected_decision in ["accept", "rework", "manual_review"]:
+                        if expected_decision in llm_decision:
+                            llm_decision = expected_decision
+                            break
+                    else:
+                        # Якщо жодне з очікуваних слів не знайдено, використовуємо логіку за замовчуванням
+                        log_message(f"[AI1] LLM повернув непідтримуване рішення: '{llm_decision}'. Використовуємо алгоритмічне рішення: '{decision}'")
+                        llm_decision = decision
+                    
+                    # Повертаємо рішення від LLM, якщо воно відрізняється від алгоритмічного
+                    if llm_decision != decision:
+                        log_message(f"[AI1] LLM змінив рішення з '{decision}' на '{llm_decision}'")
+                        decision = llm_decision
+                    else:
+                        log_message(f"[AI1] LLM підтвердив алгоритмічне рішення: '{decision}'")
+                    
+            except Exception as e:
+                log_message(f"[AI1] Помилка при використанні LLM для прийняття рішення: {e}. Використовуємо алгоритмічне рішення.")
         
         return decision
 
