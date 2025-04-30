@@ -462,6 +462,12 @@ class GroqProvider(BaseProvider):
         super().__init__(config)
         self.name = "groq"
         self._client = None
+        # Додамо словник для оптимізації використання ресурсів
+        self._model_tiers = {
+            "lightweight": ["llama3-8b-8192", "gemma-7b-it"],  # Легкі моделі
+            "balanced": ["mixtral-8x7b-32768"],  # Балансні моделі
+            "powerful": ["llama3-70b-8192", "llama-3.3-70b-versatile"]  # Потужні моделі
+        }
 
     def setup(self) -> None:
         if not groq or not AsyncGroq: # Check both groq and AsyncGroq
@@ -525,6 +531,99 @@ class GroqProvider(BaseProvider):
                 raise ValueError(f"Failed to initialize Groq client: {e}")
         return self._client
 
+    def select_optimal_model(self, prompt: str, requested_model: Optional[str] = None) -> str:
+        """Обирає оптимальну модель в залежності від складності запиту та вказаної моделі.
+        
+        Args:
+            prompt: Текст запиту
+            requested_model: Модель, що була запрошена (може бути None)
+            
+        Returns:
+            str: Ім'я моделі для використання
+        """
+        # Якщо вказана конкретна модель, використовуємо її
+        if requested_model:
+            return requested_model
+            
+        # Отримуємо модель за замовчуванням з конфігурації
+        default_model = self.get_default_model()
+        if default_model:
+            return default_model
+            
+        # Оцінюємо складність запиту на основі довжини
+        prompt_length = len(prompt)
+        
+        if prompt_length < 500:
+            # Для коротких запитів використовуємо легку модель
+            return self._model_tiers["lightweight"][0]
+        elif prompt_length < 2000:
+            # Для середніх запитів використовуємо балансну модель
+            return self._model_tiers["balanced"][0]
+        else:
+            # Для складних запитів використовуємо потужну модель
+            return self._model_tiers["powerful"][0]
+    
+    def split_complex_prompt(self, prompt: str, max_length: int = 2000) -> List[str]:
+        """Розбиває складний запит на менші частини для оптимізації використання ресурсів.
+        
+        Args:
+            prompt: Вхідний запит
+            max_length: Максимальна довжина кожної частини
+            
+        Returns:
+            List[str]: Список частин запиту
+        """
+        # Якщо запит короткий, повертаємо його як є
+        if len(prompt) <= max_length:
+            return [prompt]
+            
+        # Спроба розділити за абзацами
+        paragraphs = prompt.split('\n\n')
+        
+        # Збираємо частини, не перевищуючи максимальну довжину
+        parts = []
+        current_part = ""
+        
+        for paragraph in paragraphs:
+            if len(current_part) + len(paragraph) + 2 <= max_length:
+                if current_part:
+                    current_part += "\n\n" + paragraph
+                else:
+                    current_part = paragraph
+            else:
+                if current_part:
+                    parts.append(current_part)
+                    current_part = paragraph
+                else:
+                    # Якщо параграф довший за max_length, розбиваємо за реченнями
+                    sentences = re.split(r'(?<=[.!?])\s+', paragraph)
+                    current_sentence_group = ""
+                    
+                    for sentence in sentences:
+                        if len(current_sentence_group) + len(sentence) + 1 <= max_length:
+                            if current_sentence_group:
+                                current_sentence_group += " " + sentence
+                            else:
+                                current_sentence_group = sentence
+                        else:
+                            if current_sentence_group:
+                                parts.append(current_sentence_group)
+                                current_sentence_group = sentence
+                            else:
+                                # Якщо речення задовге, розбиваємо його просто на частини
+                                sentence_parts = [sentence[i:i+max_length] 
+                                                  for i in range(0, len(sentence), max_length)]
+                                parts.extend(sentence_parts)
+                    
+                    if current_sentence_group:
+                        parts.append(current_sentence_group)
+        
+        # Додаємо останню частину, якщо вона є
+        if current_part:
+            parts.append(current_part)
+            
+        return parts
+
     async def generate(
         self,
         prompt: str,
@@ -536,14 +635,66 @@ class GroqProvider(BaseProvider):
         if not self.groq or not self.api_key: # Check self.groq
             return "Ошибка генерации: провайдер Groq не настроен."
 
-        model_to_use = model or self.get_default_model() or "llama3-70b-8192"
-        max_tokens_to_use = max_tokens or self.config.get("max_tokens") or 8192
+        # Використовуємо вибір оптимальної моделі
+        model_to_use = self.select_optimal_model(prompt, model)
+        max_tokens_to_use = max_tokens or self.config.get("max_tokens") or 4096
         temperature_to_use = (
             temperature
             if temperature is not None
             else self.config.get("temperature", 0.7)
         )
 
+        # Додамо тут флаг для прискорення роботи
+        enable_optimization = self.config.get("enable_optimization", True)
+        
+        # Якщо запит занадто складний і увімкнена оптимізація, розбиваємо його
+        if enable_optimization and len(prompt) > 2000:
+            parts = self.split_complex_prompt(prompt)
+            
+            # Якщо запит був розбитий на частини
+            if len(parts) > 1:
+                logger.info(f"Prompt split into {len(parts)} parts for optimization")
+                responses = []
+                
+                # Обробляємо кожну частину
+                for i, part in enumerate(parts):
+                    messages = []
+                    
+                    # Для першої частини додаємо системний промпт, якщо він є
+                    if i == 0 and system_prompt:
+                        messages.append({"role": "system", "content": system_prompt})
+                    
+                    # Для всіх частин додаємо контекст
+                    if i > 0:
+                        part_prompt = f"Це частина {i+1} з {len(parts)} запиту. " + part
+                    else:
+                        part_prompt = part
+                        
+                    messages.append({"role": "user", "content": part_prompt})
+                    
+                    try:
+                        client = self.get_client()
+                        response = await client.chat.completions.create(
+                            model=model_to_use,
+                            messages=messages,
+                            max_tokens=max_tokens_to_use,
+                            temperature=temperature_to_use,
+                        )
+                        if response.choices and response.choices[0].message:
+                            responses.append(response.choices[0].message.content or "")
+                        else:
+                            logger.warning(
+                                f"Ответ от Groq для части {i+1} не содержит ожидаемых данных"
+                            )
+                            responses.append("")
+                    except Exception as e:
+                        logger.error(f"Ошибка при обработке части {i+1}: {e}")
+                        responses.append(f"[Ошибка при обработке части {i+1}]")
+                
+                # Обʼєднуємо результати
+                return "\n\n".join(responses)
+        
+        # Стандартний шлях - обробка запиту без розбиття
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
@@ -577,11 +728,13 @@ class GroqProvider(BaseProvider):
             return f"Ошибка генерации: {str(e)}"
 
     def get_available_models(self) -> List[str]:
+        # Додаємо модель llama-3.3-70b-versatile із прикладу запиту
         known = [
             "llama3-70b-8192",
             "llama3-8b-8192",
             "mixtral-8x7b-32768",
             "gemma-7b-it",
+            "llama-3.3-70b-versatile"
         ]
         default_model = self.get_default_model()
         if default_model and default_model not in known:
