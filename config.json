@@ -93,11 +93,11 @@
         },
         "ai3": {
             "providers": [
-                "gemini",
+                "ollama",
                 "together",
                 "openrouter-qwen"
             ],
-            "model": "gemini-1.5-flash",
+            "model": "qwen2.5:1.5b",
             "max_tokens": 2048,
             "temperature": 0.7
         }

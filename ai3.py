@@ -170,6 +170,10 @@ Do not include any explanatory text before or after the JSON block. Ensure the J
                 if response_text:
                     logger.info(f"[AI3] Successfully generated structure with provider: {provider_name}")
                     break
+            except Exception as e:
+                # Логування помилки і спроба використати інший провайдер
+                logger.error(f"Failed with provider {provider_name}: {str(e)}")
+                # Спробувати інший провайдер або повідомити про помилку
             finally:
                 if hasattr(provider, "close_session") and callable(provider.close_session):
                     await provider.close_session()
