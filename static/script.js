@@ -1643,6 +1643,18 @@ document.addEventListener("DOMContentLoaded", () => {
   // Initial call to updateStats uses the default actualTotalTasks = 0
   updateStats({}, {});
   console.log("Initialization complete.");
+
+  // Ініціалізація слайдера навантаження
+  const loadSlider = document.getElementById("ai1-buffer-slider");
+  if (loadSlider) {
+    // Оновлюємо опис при завантаженні сторінки
+    updateLoadDescription(loadSlider.value);
+
+    // Додаємо обробник події зміни слайдера
+    loadSlider.addEventListener("input", function () {
+      updateLoadDescription(this.value);
+    });
+  }
 });
 
 // --- Helper function to calculate status distribution ---
@@ -1670,4 +1682,103 @@ function calculateStatusDistribution(statuses) {
     { pending: 0, processing: 0, completed: 0, failed: 0, other: 0 }
   );
   return statusCounts;
+}
+
+// --- Функції для слайдера навантаження системи ---
+const loadLevelDescriptions = [
+  {
+    level: 1,
+    title: "Мінімальне навантаження",
+    description:
+      "Найповільніша генерація, максимальна економія ресурсів, мінімальне навантаження на MCP.",
+    bufferValue: 5,
+  },
+  {
+    level: 2,
+    title: "Низьке навантаження",
+    description:
+      "Повільна генерація, економне використання ресурсів, низьке навантаження на MCP.",
+    bufferValue: 10,
+  },
+  {
+    level: 3,
+    title: "Середнє навантаження",
+    description: "Збалансована швидкість генерації та використання ресурсів.",
+    bufferValue: 15,
+  },
+  {
+    level: 4,
+    title: "Високе навантаження",
+    description:
+      "Швидка генерація, висока продуктивність, значне навантаження на MCP.",
+    bufferValue: 20,
+  },
+  {
+    level: 5,
+    title: "Максимальне навантаження",
+    description:
+      "Найшвидша генерація, максимальна продуктивність, високе навантаження на MCP.",
+    bufferValue: 25,
+  },
+];
+
+function updateLoadDescription(levelValue) {
+  const level = parseInt(levelValue);
+  const descriptionData = loadLevelDescriptions[level - 1];
+  const descriptionText = document.getElementById("load-description-text");
+  const slider = document.getElementById("ai1-buffer-slider");
+
+  if (descriptionText && descriptionData) {
+    descriptionText.innerHTML = `<strong>Рівень ${level} (${descriptionData.title}):</strong> ${descriptionData.description}`;
+  }
+
+  // --- NEW: Update slider background gradient ---
+  if (slider) {
+    const percentage = ((level - 1) / (slider.max - slider.min)) * 100;
+    // Define colors for the gradient stops (match CSS variables if possible)
+    const colors = [
+      "var(--success-color)", // Level 1
+      "var(--tertiary-color)", // Level 2
+      "var(--warning-color)", // Level 3
+      "var(--primary-color)", // Level 4
+      "var(--error-color)", // Level 5
+    ];
+    // Get the color corresponding to the current level
+    const currentLevelColor = colors[level - 1];
+    // Create a gradient that fills up to the current percentage with the level's color
+    // and uses the default track background for the rest
+    const trackBackground = getComputedStyle(document.documentElement)
+      .getPropertyValue("--input-border")
+      .trim();
+    slider.style.background = `linear-gradient(to right, ${currentLevelColor} ${percentage}%, ${trackBackground} ${percentage}%)`;
+  }
+  // --- END NEW ---
+}
+
+function saveLoadLevel() {
+  const slider = document.getElementById("ai1-buffer-slider");
+  if (!slider) {
+    showNotification("Помилка: елемент слайдера не знайдено", "error");
+    return;
+  }
+
+  const level = parseInt(slider.value);
+  const bufferValue = loadLevelDescriptions[level - 1].bufferValue;
+
+  console.log(
+    `Зберігаємо рівень навантаження: ${level} (buffer=${bufferValue})`
+  );
+
+  // Використаємо існуючу функцію saveConfigItem, але з обчисленим значенням буфера
+  const data = { ai1_desired_active_buffer: bufferValue };
+
+  // Запит на оновлення налаштування
+  try {
+    sendRequest("/update_config_item", "POST", data).then(() => {
+      showNotification(`Рівень навантаження змінено на: ${level}`, "success");
+    });
+  } catch (error) {
+    console.error(`Помилка збереження рівня навантаження:`, error);
+    showNotification(`Помилка збереження рівня навантаження`, "error");
+  }
 }

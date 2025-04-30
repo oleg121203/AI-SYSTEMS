@@ -95,21 +95,36 @@
           <p>Completed: <span id="completed-tasks">0</span></p>
           <p>Efficiency: <span id="efficiency">0%</span></p>
         </div>
-        <!-- Поле для налаштування буфера -->
-        <div class="config-item">
-          <label for="ai1-buffer">Desired Active Buffer:</label>
-          <input
-            type="number"
-            id="ai1-buffer"
-            name="ai1_desired_active_buffer"
-            min="0"
-            value="{{ config.get('ai1_desired_active_buffer', 10) }}"
-          />
-          <button
-            onclick="saveConfigItem('ai1_desired_active_buffer', 'ai1-buffer')"
-          >
-            Save Buffer
-          </button>
+        <!-- Поле для налаштування навантаження системи -->
+        <div class="config-item load-control">
+          <h3>
+            <i class="fas fa-tachometer-alt"></i> Рівень навантаження системи
+          </h3>
+          <div class="load-slider-container">
+            <div class="load-level-labels">
+              <span class="load-label">Мінімальне</span>
+              <span class="load-label">Низьке</span>
+              <span class="load-label">Середнє</span>
+              <span class="load-label">Високе</span>
+              <span class="load-label">Максимальне</span>
+            </div>
+            <input
+              type="range"
+              id="ai1-buffer-slider"
+              name="ai1_desired_active_buffer"
+              min="1"
+              max="5"
+              value="{{ (config.get('ai1_desired_active_buffer', 10) / 5)|int }}"
+              class="load-slider"
+            />
+            <div class="load-description">
+              <p id="load-description-text">
+                <strong>Рівень 4 (Високе навантаження):</strong> Швидка
+                генерація, висока продуктивність, значне навантаження на MCP.
+              </p>
+            </div>
+          </div>
+          <button onclick="saveLoadLevel()">Зберегти налаштування</button>
         </div>
         <div class="charts">
           <div class="chart-item">

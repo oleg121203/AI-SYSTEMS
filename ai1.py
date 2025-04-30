@@ -243,8 +243,16 @@ class AI1:
                 elif value is None or isinstance(
                     value, str
                 ):  # Treat null or string value as a file placeholder
-                    # Normalize path separators for consistency
-                    files.append(os.path.normpath(new_path).replace(os.sep, "/"))
+                    # Нормалізуємо шлях і зберігаємо форвард-слеші для узгодженості з ai3.py
+                    normalized_path = os.path.normpath(new_path).replace(os.sep, "/")
+                    
+                    # ВАЖЛИВО: Переконуємося, що не додаємо ім'я проекту на початку шляху
+                    # Це ключовий фікс, що забезпечує узгодженість з ai3.py
+                    if self.target and normalized_path.startswith(self.target + "/"):
+                        normalized_path = normalized_path[len(self.target) + 1:]
+                        log_message(f"[AI1] Видалено ім'я проекту з шляху: {new_path} -> {normalized_path}")
+                    
+                    files.append(normalized_path)
         return files
 
     def initialize_task_status(self):
