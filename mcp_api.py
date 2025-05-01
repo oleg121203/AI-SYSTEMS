@@ -347,24 +347,28 @@ async def periodic_chart_updates():
 
 
 async def _determine_adjusted_path(repo_path: Path, file_rel_path: str, repo_dir: str) -> str:
-    """Determines the adjusted relative path within the repo, handling the 'project' subdirectory."""
+    """Determines the adjusted relative path within the repo, respecting the structure from AI3."""
     project_subdir = "project"
-    potential_project_root = repo_path / project_subdir
     adjusted_rel_path = file_rel_path
 
-    if potential_project_root.is_dir():
+    # Перевіряємо, чи структура від AI3 містить папку 'project'
+    global current_structure
+    has_project_dir = "project" in current_structure
+
+    potential_project_root = repo_path / project_subdir
+    if potential_project_root.is_dir() and has_project_dir:
         if not file_rel_path.startswith(project_subdir + "/") and file_rel_path != project_subdir:
             adjusted_rel_path = os.path.join(project_subdir, file_rel_path)
-            logger.info(f"[API-Write] Prepending '{project_subdir}/' to path '{file_rel_path}' as '{repo_dir}/{project_subdir}/' exists. New path: '{adjusted_rel_path}'")
+            logger.info(f"[API-Write] Prepending '{project_subdir}/' to path '{file_rel_path}' as '{repo_dir}/{project_subdir}/' exists and structure includes 'project'. New path: '{adjusted_rel_path}'")
     else:
         if file_rel_path.startswith(project_subdir + "/"):
             original_path = file_rel_path
             adjusted_rel_path = file_rel_path[len(project_subdir) + 1:]
-            logger.warning(f"[API-Write] '{repo_dir}/{project_subdir}/' does not exist, but path '{original_path}' starts with '{project_subdir}/'. Removing prefix. New path: '{adjusted_rel_path}'")
+            logger.warning(f"[API-Write] Removing '{project_subdir}/' from path '{original_path}' as structure does not include 'project'. New path: '{adjusted_rel_path}'")
         elif file_rel_path == project_subdir:
             original_path = file_rel_path
             adjusted_rel_path = "."
-            logger.warning(f"[API-Write] '{repo_dir}/{project_subdir}/' does not exist, but path is '{original_path}'. Interpreting as root '{adjusted_rel_path}'.")
+            logger.warning(f"[API-Write] Path is '{original_path}', but structure does not include 'project'. Interpreting as root '{adjusted_rel_path}'.")
 
     if not adjusted_rel_path and file_rel_path:
         adjusted_rel_path = "."

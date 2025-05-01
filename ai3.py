@@ -340,6 +340,16 @@ async def create_files_from_structure(structure_obj: dict, repo: Repo):
                         logger.info(
                             f"[AI3] Created parent directory: {os.path.relpath(parent_dir, base_path)}"
                         )
+                    
+                    # Перевіряємо, чи шлях не містить 'project/' без явної вказівки в структурі
+                    if "project/" in new_rel_path and "project" not in structure_obj:
+                        logger.warning(f"[AI3] Path '{new_rel_path}' contains 'project/', but structure does not. Adjusting to remove 'project/'.")
+                        new_rel_path = new_rel_path.replace("project/", "", 1)
+                        full_path = os.path.join(base_path, new_rel_path)
+                        # Переконуємося, що батьківська директорія існує після зміни шляху
+                        parent_dir = os.path.dirname(full_path)
+                        if not os.path.exists(parent_dir):
+                            os.makedirs(parent_dir)
 
                     if not os.path.exists(full_path):
                         initial_content = (
@@ -469,6 +479,12 @@ class AI3:
             self.repo.git.add(GITIGNORE_FILENAME)
             self.repo.git.commit('-m', 'Initial commit (gitignore)')
             logger.info("[AI3-Git] Added and committed .gitignore file")
+            
+            # Перевіряємо, чи не залишилася папка 'project/'
+            project_path = os.path.join(self.repo_dir, "project")
+            if os.path.exists(project_path):
+                logger.warning(f"[AI3-Git] Found unexpected 'project/' directory at {project_path}. Removing it.")
+                shutil.rmtree(project_path)
             
             await send_ai3_report("repo_cleared")
             return True
