@@ -135,56 +135,42 @@ class AI1:
             await self.close_session()  # Ensure session is closed on exit
 
     async def ensure_structure_received(self, timeout=300):
-        """Пытается получить структуру проекта от API с повторными попытками."""
+        """Attempts to retrieve the project structure from the API with retries."""
         if self.project_structure:
             return True
 
         log_message("[AI1] Attempting to fetch project structure...")
         start_time = asyncio.get_event_loop().time()
+        session = await self._get_api_session()
+        api_url = f"{MCP_API_URL}/structure"
 
         while asyncio.get_event_loop().time() - start_time < timeout:
             try:
-                api_url = f"{MCP_API_URL}/structure"
-                session = await self._get_api_session()
                 async with session.get(api_url, timeout=30) as response:
                     if response.status == 200:
                         structure_data = await response.json()
-                        if (
-                            structure_data
-                            and isinstance(structure_data.get("structure"), dict)
-                            and structure_data["structure"]
-                        ):  # Check if structure is not empty
+                        if structure_data and isinstance(structure_data.get("structure"), dict) and structure_data["structure"]:
                             self.project_structure = structure_data["structure"]
                             log_message("[AI1] Structure received successfully.")
                             self.process_structure(self.project_structure)
                             return True
                         else:
-                            log_message(
-                                f"[AI1] Received invalid or empty structure data: {structure_data}. Retrying..."
-                            )
+                            log_message(f"[AI1] Received invalid or empty structure data: {structure_data}. Retrying...")
                     elif response.status == 404:
-                        log_message(
-                            "[AI1] Structure not yet available from API (404). Retrying..."
-                        )
+                        log_message("[AI1] Structure not yet available from API (404). Retrying...")
                     else:
-                        log_message(
-                            f"[AI1] Failed to fetch structure. Status: {response.status}, Body: {await response.text()}. Retrying..."
-                        )
+                        log_message(f"[AI1] Failed to fetch structure. Status: {response.status}, Body: {await response.text()}. Retrying...")
 
             except asyncio.TimeoutError:
                 log_message("[AI1] Timeout while fetching structure. Retrying...")
             except aiohttp.ClientError as e:
                 log_message(f"[AI1] Error fetching structure: {str(e)}. Retrying...")
             except Exception as e:
-                log_message(
-                    f"[AI1] Unexpected error fetching structure: {str(e)}. Retrying..."
-                )
+                log_message(f"[AI1] Unexpected error fetching structure: {str(e)}. Retrying...")
 
-            await asyncio.sleep(5)  # Wait before retrying
+            await asyncio.sleep(5)
 
-        log_message(
-            f"[AI1] Failed to obtain project structure after {timeout} seconds."
-        )
+        log_message(f"[AI1] Failed to obtain project structure after {timeout} seconds.")
         return False
 
     def process_structure(self, structure_data):
@@ -224,35 +210,27 @@ class AI1:
         )
 
     def _extract_files(self, node, current_path="") -> List[str]:
-        """Рекурсивно извлекает все файлы из JSON-структуры."""
+        """Recursively extracts all files from the JSON structure."""
         files = []
-        if isinstance(node, dict):
-            for key, value in node.items():
-                # Sanitize key to prevent path traversal issues, though API should also validate
-                sanitized_key = key.replace("..", "_").strip()
-                if not sanitized_key:
-                    continue  # Skip empty keys
+        if not isinstance(node, dict):
+            return files
 
-                new_path = (
-                    os.path.join(current_path, sanitized_key)
-                    if current_path
-                    else sanitized_key
-                )
-                if isinstance(value, dict):
-                    files.extend(self._extract_files(value, new_path))
-                elif value is None or isinstance(
-                    value, str
-                ):  # Treat null or string value as a file placeholder
-                    # Нормалізуємо шлях і зберігаємо форвард-слеші для узгодженості з ai3.py
-                    normalized_path = os.path.normpath(new_path).replace(os.sep, "/")
-                    
-                    # ВАЖЛИВО: Переконуємося, що не додаємо ім'я проекту на початку шляху
-                    # Це ключовий фікс, що забезпечує узгодженість з ai3.py
-                    if self.target and normalized_path.startswith(self.target + "/"):
-                        normalized_path = normalized_path[len(self.target) + 1:]
-                        log_message(f"[AI1] Видалено ім'я проекту з шляху: {new_path} -> {normalized_path}")
-                    
-                    files.append(normalized_path)
+        for key, value in node.items():
+            sanitized_key = key.replace("..", "_").strip()
+            if not sanitized_key:
+                continue
+
+            new_path = os.path.join(current_path, sanitized_key) if current_path else sanitized_key
+
+            if isinstance(value, dict):
+                files.extend(self._extract_files(value, new_path))
+            elif value is None or isinstance(value, str):
+                normalized_path = os.path.normpath(new_path).replace(os.sep, "/")
+                # Remove project name prefix if present
+                if self.target and normalized_path.startswith(self.target + "/"):
+                    normalized_path = normalized_path[len(self.target) + 1:]
+                    # log_message(f"[AI1] Removed project name prefix: {new_path} -> {normalized_path}") # Keep logs less noisy
+                files.append(normalized_path)
         return files
 
     def initialize_task_status(self):
@@ -373,8 +351,11 @@ class AI1:
             log_message("[AI1] No statuses received from API to update local state.")
             return
 
-        # Iterate through active tasks (filename::role::subtask_id)
         tasks_to_remove = set()
+        final_states = [
+            "accepted", "skipped", "failed_by_ai2", "error_processing", "review_needed", "failed_tests"
+        ]
+
         for task_key in list(self.active_tasks):  # Iterate over a copy
             try:
                 filename, role, subtask_id = task_key.split("::")
@@ -382,22 +363,11 @@ class AI1:
 
                 if api_status:
                     local_status = self.task_status.get(filename, {}).get(role)
-                    # Define final states
-                    final_states = [
-                        "accepted",
-                        "skipped",
-                        "failed_by_ai2",
-                        "error_processing",
-                        "review_needed",
-                    ]
                     if api_status != local_status:
                         log_message(
                             f"[AI1] Updating status for {filename} ({role}) from '{local_status}' to '{api_status}' (Subtask: {subtask_id})"
                         )
-                        if (
-                            filename in self.task_status
-                            and role in self.task_status[filename]
-                        ):
+                        if filename in self.task_status and role in self.task_status[filename]:
                             self.task_status[filename][role] = api_status
                             updated_count += 1
                         else:
@@ -405,20 +375,17 @@ class AI1:
                                 f"[AI1] Warning: Cannot update status for non-existent local task {filename} ({role})"
                             )
 
-                    # Remove from active tasks if it reached a final state
                     if api_status in final_states:
                         tasks_to_remove.add(task_key)
                 else:
-                    # Subtask ID from active_tasks not found in API response - might be an issue
                     log_message(
                         f"[AI1] Warning: Active subtask {subtask_id} ({filename}::{role}) not found in API status response."
                     )
-                    # Decide whether to remove it or keep checking
-                    # tasks_to_remove.add(task_key) # Option: remove if not found after a while
+                    # Consider adding logic to remove stale tasks after a certain time/retries
 
             except ValueError:
                 log_message(f"[AI1] Error parsing active task key: {task_key}")
-                tasks_to_remove.add(task_key)  # Remove malformed key
+                tasks_to_remove.add(task_key)
             except Exception as e:
                 log_message(
                     f"[AI1] Error processing active task {task_key} during status update: {e}"
@@ -429,373 +396,308 @@ class AI1:
             f"[AI1] Local task statuses updated ({updated_count} changes). Active tasks remaining: {len(self.active_tasks)}"
         )
 
-    async def manage_tasks(self):
-        """Основна логіка управління задачами: підтримує буфер активних завдань."""
-        log_message("[AI1] Starting task management cycle...")
-
-        # Оновлюємо локальні статуси з API
-        await self.update_local_task_statuses()
-
-        # 1. Розраховуємо кількість завершених завдань
+    async def _calculate_task_counts(self) -> tuple[int, int]:
+        """Calculates the count of final and active tasks."""
         tasks_done_count = 0
-        # Статуси, що вважаються завершеними (успішно чи ні)
+        active_task_count = 0
         final_statuses = [
-            "accepted",
-            "skipped",
-            "failed_by_ai2",
-            "error_processing",
-            "review_needed", # Можливо, вважати завершеним для цього розрахунку
-            "failed_tests", # Якщо не передбачено rework
-            "failed_to_send", # Якщо не вдалося надіслати
-            # Додайте інші статуси, якщо потрібно
+            "accepted", "skipped", "failed_by_ai2", "error_processing", "review_needed", "failed_tests", "failed_to_send"
         ]
+        active_statuses = ["sending", "sent", "processing", "code_received", "tested"]
+        current_active_tasks_details = []
+
         for file_path, statuses in self.task_status.items():
             for role, status in statuses.items():
                 if status in final_statuses:
                     tasks_done_count += 1
-        log_message(f"[AI1] Calculated completed/final tasks: {tasks_done_count}")
-
-        # 2. Розраховуємо кількість поточних активних завдань (надіслані, обробляються)
-        active_task_count = 0
-        # Статуси, які вважаються активними (займають слот обробки)
-        active_statuses = ["sending", "sent", "processing", "code_received", "tested"] # Додайте/видаліть за потребою
-        current_active_tasks_details = []
-        for file_path, roles_statuses in self.task_status.items():
-            for role, status in roles_statuses.items():
-                if status in active_statuses:
+                elif status in active_statuses:
                     active_task_count += 1
                     current_active_tasks_details.append(f"{file_path} ({role}): {status}")
 
+        log_message(f"[AI1] Calculated completed/final tasks: {tasks_done_count}")
         log_message(f"[AI1] Calculated active (in-progress) tasks: {active_task_count}")
         if current_active_tasks_details:
-             log_message(f"[AI1] Active tasks list: {'; '.join(current_active_tasks_details)}")
+            log_message(f"[AI1] Active tasks list: {'; '.join(current_active_tasks_details)}")
 
-        # 3. Визначаємо динамічний ліміт для нових завдань
-        # Читаємо бажаний буфер з конфігурації, з значенням за замовчуванням 10
+        return tasks_done_count, active_task_count
+
+    async def _get_prioritized_roles(self) -> List[str]:
+        """Uses LLM to get prioritized roles for task scheduling."""
+        if not self.llm or not (self.pending_files_to_fill or self.pending_files_to_test or self.pending_files_to_document):
+            return ["executor", "tester", "documenter"] # Default order
+
+        log_message("[AI1] Requesting LLM for task prioritization...")
+        try:
+            pending_summary = {
+                "executor": len(self.pending_files_to_fill),
+                "tester": len(self.pending_files_to_test),
+                "documenter": len(self.pending_files_to_document),
+            }
+            role_example_files = {
+                "executor": self.pending_files_to_fill[:5],
+                "tester": self.pending_files_to_test[:5],
+                "documenter": self.pending_files_to_document[:5],
+            }
+            status_summary = {}
+            for statuses in self.task_status.values():
+                for status in statuses.values():
+                    status_summary[status] = status_summary.get(status, 0) + 1
+
+            llm_prompt = f"""{{
+"system_prompt": "{self.system_prompt}{self.system_instructions}",
+"context": {{
+    "project_target": "{self.target}",
+    "pending_files": {json.dumps(pending_summary)},
+    "example_files": {json.dumps(role_example_files)},
+    "project_status": {json.dumps(status_summary)},
+    "active_tasks": {len(self.active_tasks)}
+}},
+"request": "Given the current project state, provide guidance on which type of tasks (executor, tester, documenter) should be prioritized in this cycle. Consider dependencies (executor -> tester -> documenter), critical files, and balanced progress. Respond with a JSON structure like: {{ \\"priorities\\": [\\"executor\\", \\"tester\\", \\"documenter\\"] }} listing roles in recommended priority order."
+}}"""
+            await apply_request_delay("ai1")
+            llm_response = await self.llm.generate(
+                prompt=llm_prompt,
+                temperature=self.ai1_llm_config.get("temperature", 0.3),
+                max_tokens=self.ai1_llm_config.get("max_tokens", 150)
+            )
+
+            if llm_response:
+                import re
+                json_match = re.search(r'({.*})', llm_response, re.DOTALL) # Added DOTALL
+                if json_match:
+                    llm_json = json.loads(json_match.group(1))
+                    prioritized_roles = llm_json.get("priorities", [])
+                    if isinstance(prioritized_roles, list) and all(isinstance(r, str) for r in prioritized_roles):
+                         log_message(f"[AI1] LLM recommended prioritization: {prioritized_roles}")
+                         # Ensure all roles are present, append missing ones in default order
+                         base_roles = ["executor", "tester", "documenter"]
+                         final_roles = prioritized_roles + [r for r in base_roles if r not in prioritized_roles]
+                         return final_roles
+                    else:
+                         log_message(f"[AI1] LLM returned invalid priorities format: {prioritized_roles}. Using default.")
+                else:
+                    log_message(f"[AI1] Could not find JSON in LLM response: {llm_response}. Using default.")
+            else:
+                 log_message("[AI1] Empty response from LLM for prioritization. Using default.")
+
+        except json.JSONDecodeError as e:
+            log_message(f"[AI1] JSON decode error from LLM prioritization response: {e}")
+        except Exception as e:
+            log_message(f"[AI1] Error using LLM for prioritization: {e}")
+
+        return ["executor", "tester", "documenter"] # Default order on error
+
+    async def _queue_tasks_for_role(self, role: str, pending_files: List[str], tasks_to_send: List[Dict], current_active_count: int, slots_filled_this_cycle: int, dynamic_max_concurrent: int) -> int:
+        """Queues tasks for a specific role if slots are available."""
+        processed_files = []
+        executor_done_statuses = [
+            "code_received", "tested", "accepted", "completed_by_ai2", "review_needed", "failed_tests"
+        ]
+
+        for file_path in list(pending_files): # Iterate over a copy
+            if current_active_count + slots_filled_this_cycle >= dynamic_max_concurrent:
+                log_message(f"[AI1] {role.capitalize()} task for {file_path} skipped: dynamic concurrent task limit ({dynamic_max_concurrent}) reached.")
+                break # Stop queuing for this role if limit reached
+
+            if file_path not in self.task_status:
+                log_message(f"[AI1] Warning: File {file_path} not found in task_status for role {role}. Skipping.")
+                processed_files.append(file_path) # Remove from pending if invalid
+                continue
+
+            file_statuses = self.task_status[file_path]
+
+            # Check dependencies and current status
+            can_queue = False
+            if role == "executor" and file_statuses.get("executor") == "pending":
+                can_queue = True
+            elif role == "tester" and file_statuses.get("tester") == "pending" and file_statuses.get("executor") in executor_done_statuses:
+                 can_queue = True
+            elif role == "documenter" and file_statuses.get("documenter") == "pending" and file_statuses.get("executor") in executor_done_statuses: # Assuming doc depends on executor completion
+                 can_queue = True
+
+            if can_queue:
+                code_content = None
+                if role != "executor": # Tester and Documenter need code content
+                    code_content = await self.get_file_content(file_path)
+                    if code_content is None:
+                        log_message(f"[AI1] Failed to fetch content for {file_path} for {role} task. Setting status to fetch_failed.")
+                        file_statuses[role] = "fetch_failed"
+                        processed_files.append(file_path) # Remove from pending
+                        continue # Skip queuing this file
+
+                task_text = ""
+                if role == "executor":
+                    task_text = f"Implement the required functionality in file: {file_path} based on the overall project goal: {self.target}"
+                elif role == "tester":
+                    task_text = f"Generate unit tests for the code in file: {file_path}"
+                elif role == "documenter":
+                    task_text = f"Generate documentation (e.g., docstrings, comments, README section) for the code in file: {file_path}"
+
+                tasks_to_send.append({
+                    "task_text": task_text,
+                    "role": role,
+                    "filename": file_path,
+                    "code": code_content,
+                })
+                slots_filled_this_cycle += 1
+                processed_files.append(file_path)
+                log_message(f"[AI1] Queued {role} task for {file_path}. Cycle queue size: {len(tasks_to_send)}. Total active aim: {current_active_count + slots_filled_this_cycle}")
+
+        # Remove processed files from the original pending list
+        for file_path in processed_files:
+            if file_path in pending_files:
+                pending_files.remove(file_path)
+
+        return slots_filled_this_cycle
+
+
+    async def _send_queued_tasks(self, tasks_to_send: List[Dict]):
+        """Sends the queued tasks to the API and updates statuses."""
+        if not tasks_to_send:
+            log_message("[AI1] No new tasks to send in this cycle.")
+            return
+
+        log_message(f"[AI1] Attempting to send {len(tasks_to_send)} new subtasks...")
+        tasks_being_sent_keys = []
+        for task_data in tasks_to_send:
+            file_path = task_data["filename"]
+            role = task_data["role"]
+            if self.task_status.get(file_path, {}).get(role) == "pending":
+                self.task_status[file_path][role] = "sending"
+                tasks_being_sent_keys.append((file_path, role))
+            else:
+                log_message(f"[AI1] Warning: Task {file_path} ({role}) status changed from 'pending' before sending. Skipping status update to 'sending'.")
+
+        results = await asyncio.gather(
+            *[self.create_subtask(**task_data) for task_data in tasks_to_send],
+            return_exceptions=True,
+        )
+
+        for i, result in enumerate(results):
+            task_data = tasks_to_send[i]
+            file_path = task_data["filename"]
+            role = task_data["role"]
+            original_key = next(((fp, r) for fp, r in tasks_being_sent_keys if fp == file_path and r == role), None)
+            subtask_id = result if isinstance(result, str) else None
+
+            if isinstance(result, Exception) or result is False:
+                error_msg = result if isinstance(result, Exception) else "API returned failure"
+                log_message(f"[AI1] Failed to send subtask for {file_path} ({role}): {error_msg}")
+                if original_key and self.task_status.get(file_path, {}).get(role) == "sending":
+                    self.task_status[file_path][role] = "failed_to_send"
+                    # Re-add to pending list
+                    if role == "executor" and file_path not in self.pending_files_to_fill: self.pending_files_to_fill.append(file_path)
+                    elif role == "tester" and file_path not in self.pending_files_to_test: self.pending_files_to_test.append(file_path)
+                    elif role == "documenter" and file_path not in self.pending_files_to_document: self.pending_files_to_document.append(file_path)
+                # Remove potential active task entry (though unlikely for failed_to_send)
+                task_key_to_remove = f"{file_path}::{role}::{subtask_id or 'unknown'}"
+                self.active_tasks.discard(task_key_to_remove)
+
+            elif subtask_id:
+                log_message(f"[AI1] Subtask {subtask_id} sent successfully for {file_path} ({role}).")
+                if original_key and self.task_status.get(file_path, {}).get(role) == "sending":
+                    self.task_status[file_path][role] = "sent"
+                    task_key = f"{file_path}::{role}::{subtask_id}"
+                    self.active_tasks.add(task_key)
+                else:
+                    log_message(f"[AI1] Warning: Subtask {subtask_id} sent, but local status for {file_path} ({role}) was not 'sending'. Current: {self.task_status.get(file_path, {}).get(role)}")
+
+            else:
+                log_message(f"[AI1] Unexpected result after sending subtask for {file_path} ({role}): {result}")
+                if original_key and self.task_status.get(file_path, {}).get(role) == "sending":
+                    self.task_status[file_path][role] = "error_processing"
+                task_key_to_remove = f"{file_path}::{role}::{subtask_id or 'unknown'}"
+                self.active_tasks.discard(task_key_to_remove)
+
+
+    async def _retry_failed_fetches(self):
+        """Resets 'fetch_failed' statuses to 'pending' for retry."""
+        for file_path, statuses in self.task_status.items():
+            if statuses.get("tester") == "fetch_failed":
+                log_message(f"[AI1] Retrying fetch for tester task: {file_path}")
+                statuses["tester"] = "pending"
+                if file_path not in self.pending_files_to_test and file_path in self.files_to_test:
+                    self.pending_files_to_test.append(file_path)
+
+            if statuses.get("documenter") == "fetch_failed":
+                log_message(f"[AI1] Retrying fetch for documenter task: {file_path}")
+                statuses["documenter"] = "pending"
+                if file_path not in self.pending_files_to_document:
+                    self.pending_files_to_document.append(file_path)
+
+    async def _log_progress_and_sleep(self, tasks_done_count: int, active_task_count: int):
+        """Logs progress and determines sleep interval."""
+        total_expected_tasks = sum(len(statuses) for statuses in self.task_status.values())
+        if total_expected_tasks > 0:
+            progress_percent = (tasks_done_count / total_expected_tasks) * 100
+            log_message(f"[AI1] Progress: {progress_percent:.2f}% ({tasks_done_count}/{total_expected_tasks} tasks in final state)")
+        else:
+            log_message("[AI1] Progress: No tasks initialized yet.")
+
+        sleep_interval = config.get("ai1_idle_sleep_interval", 15) # Default idle
+        if active_task_count > 0:
+            sleep_interval = config.get("ai1_active_sleep_interval", 5)
+        elif any(status == "pending" for roles in self.task_status.values() for status in roles.values()):
+            sleep_interval = config.get("ai1_pending_sleep_interval", 10)
+
+        await asyncio.sleep(sleep_interval)
+
+
+    async def manage_tasks(self):
+        """Main task management logic: maintains a buffer of active tasks."""
+        log_message("[AI1] Starting task management cycle...")
+
+        await self.update_local_task_statuses()
+
+        tasks_done_count, active_task_count = await self._calculate_task_counts()
+
+        # Determine dynamic concurrency limit
         desired_active_buffer = config.get("ai1_desired_active_buffer", 10)
-        # Переконуємося, що значення є цілим числом
         try:
             desired_active_buffer = int(desired_active_buffer)
-            if desired_active_buffer < 0:
-                log_message(f"[AI1] Warning: Invalid negative ai1_desired_active_buffer ({desired_active_buffer}) found in config. Using default 10.")
-                desired_active_buffer = 10
+            if desired_active_buffer < 0: desired_active_buffer = 10
         except (ValueError, TypeError):
-            log_message(f"[AI1] Warning: Invalid non-integer ai1_desired_active_buffer ('{desired_active_buffer}') found in config. Using default 10.")
+            log_message(f"[AI1] Warning: Invalid ai1_desired_active_buffer '{desired_active_buffer}'. Using 10.")
             desired_active_buffer = 10
-
         dynamic_max_concurrent = min(tasks_done_count + desired_active_buffer, self.max_concurrent_tasks)
         log_message(f"[AI1] Target concurrent tasks: {dynamic_max_concurrent} (Completed: {tasks_done_count} + Buffer: {desired_active_buffer}, Capped by Max: {self.max_concurrent_tasks})")
 
         tasks_to_send = []
         slots_filled_this_cycle = 0
 
-        # --- Застосування LLM для пріоритезації файлів ---
-        if self.llm and (self.pending_files_to_fill or self.pending_files_to_test or self.pending_files_to_document):
-            log_message("[AI1] Запит до LLM для пріоритезації файлів...")
-            try:
-                # Формуємо контекст для LLM
-                pending_summary = {
-                    "executor": len(self.pending_files_to_fill),
-                    "tester": len(self.pending_files_to_test),
-                    "documenter": len(self.pending_files_to_document),
-                }
-                
-                # Додаємо приклади файлів для кожної ролі (максимум по 5)
-                role_example_files = {
-                    "executor": self.pending_files_to_fill[:5] if self.pending_files_to_fill else [],
-                    "tester": self.pending_files_to_test[:5] if self.pending_files_to_test else [],
-                    "documenter": self.pending_files_to_document[:5] if self.pending_files_to_document else [],
-                }
-                
-                # Створюємо загальний аналіз стану
-                status_summary = {}
-                for file_path, statuses in self.task_status.items():
-                    for role, status in statuses.items():
-                        if status not in status_summary:
-                            status_summary[status] = 0
-                        status_summary[status] += 1
-                
-                # Формуємо промпт для LLM
-                llm_prompt = f"""{{
-    "system_prompt": "{self.system_prompt}{self.system_instructions}",
-    "context": {{
-        "project_target": "{self.target}",
-        "pending_files": {json.dumps(pending_summary)},
-        "example_files": {json.dumps(role_example_files)},
-        "project_status": {json.dumps(status_summary)},
-        "active_tasks": {len(self.active_tasks)}
-    }},
-    "request": "Given the current project state, provide guidance on which type of tasks (executor, tester, documenter) should be prioritized in this cycle. Consider dependencies (executor -> tester -> documenter), critical files, and balanced progress. Respond with a JSON structure like: {{\\"priorities\\": [\\"executor\\", \\"tester\\", \\"documenter\\"]}} listing roles in recommended priority order."
-}}"""
+        # Get prioritized roles (potentially from LLM)
+        prioritized_roles = await self._get_prioritized_roles()
+        log_message(f"[AI1] Processing roles in order: {prioritized_roles}")
 
-                # Додаємо затримку перед запитом
-                await apply_request_delay("ai1")
+        # Queue tasks based on priority
+        role_to_pending_list = {
+            "executor": self.pending_files_to_fill,
+            "tester": self.pending_files_to_test,
+            "documenter": self.pending_files_to_document
+        }
 
-                # Викликаємо LLM
-                llm_response = await self.llm.generate(
-                    prompt=llm_prompt,
-                    temperature=self.ai1_llm_config.get("temperature", 0.3),
-                    max_tokens=self.ai1_llm_config.get("max_tokens", 150)
-                )
+        for role in prioritized_roles:
+            if role in role_to_pending_list:
+                 pending_list = role_to_pending_list[role]
+                 slots_filled_this_cycle = await self._queue_tasks_for_role(
+                     role, pending_list, tasks_to_send, active_task_count, slots_filled_this_cycle, dynamic_max_concurrent
+                 )
+                 # If we hit the limit while processing a role, stop queuing for subsequent roles in this cycle
+                 if active_task_count + slots_filled_this_cycle >= dynamic_max_concurrent:
+                     log_message(f"[AI1] Dynamic concurrent limit ({dynamic_max_concurrent}) reached during {role} queuing. Stopping for this cycle.")
+                     break
 
-                # Обробляємо відповідь LLM
-                if llm_response:
-                    try:
-                        # Шукаємо JSON у відповіді
-                        import re
-                        json_match = re.search(r'({.*})', llm_response)
-                        if json_match:
-                            llm_json = json.loads(json_match.group(1))
-                            prioritized_roles = llm_json.get("priorities", [])
-                            
-                            if prioritized_roles:
-                                log_message(f"[AI1] LLM рекомендує пріоритезацію: {prioritized_roles}")
-                                
-                                # Застосовуємо пріоритезацію, сортуючи файли за пріоритетом ролі
-                                if "executor" in prioritized_roles and self.pending_files_to_fill:
-                                    # Можна також пріоритезувати самі файли для executor
-                                    # Наприклад, за розширенням, розміром або шляхом
-                                    pass
-                                
-                                # Відсортуємо ролі для обробки відповідно до рекомендацій LLM
-                                roles_to_process = []
-                                for role in prioritized_roles:
-                                    if role == "executor" and self.pending_files_to_fill:
-                                        roles_to_process.append("executor")
-                                    elif role == "tester" and self.pending_files_to_test:
-                                        roles_to_process.append("tester")
-                                    elif role == "documenter" and self.pending_files_to_document:
-                                        roles_to_process.append("documenter")
-                                
-                                log_message(f"[AI1] Ролі для обробки після пріоритезації: {roles_to_process}")
-                            else:
-                                log_message("[AI1] LLM не надав рекомендацій щодо пріоритетів. Використовуємо стандартну послідовність.")
-                        else:
-                            log_message(f"[AI1] Не вдалося знайти JSON у відповіді LLM: {llm_response}")
-                    except json.JSONDecodeError as e:
-                        log_message(f"[AI1] Помилка розбору JSON з відповіді LLM: {e}")
-                    except Exception as e:
-                        log_message(f"[AI1] Помилка при обробці відповіді LLM для пріоритезації: {e}")
-            except Exception as e:
-                log_message(f"[AI1] Помилка при використанні LLM для пріоритезації: {e}")
+        # Send queued tasks
+        await self._send_queued_tasks(tasks_to_send)
 
-        # --- Логіка додавання завдань (executor, tester, documenter) ---
-        # Тепер використовуємо dynamic_max_concurrent замість self.max_concurrent_tasks
+        # Retry failed fetches
+        await self._retry_failed_fetches()
 
-        # Приклад для executor:
-        processed_executor_files = []
-        # Використовуємо копію списку для безпечного видалення під час ітерації
-        for file_path in list(self.pending_files_to_fill):
-            # Перевіряємо динамічний ліміт ПЕРЕД додаванням
-            if active_task_count + slots_filled_this_cycle < dynamic_max_concurrent:
-                if "executor" in self.task_status.get(file_path, {}) and self.task_status[file_path]["executor"] == "pending":
-                    tasks_to_send.append({
-                        "task_text": f"Implement the required functionality in file: {file_path} based on the overall project goal: {self.target}",
-                        "role": "executor",
-                        "filename": file_path,
-                        "code": None,
-                    })
-                    # Статус зміниться на 'sending' перед надсиланням
-                    slots_filled_this_cycle += 1
-                    processed_executor_files.append(file_path) # Позначити для видалення з pending
-                    log_message(f"[AI1] Queued executor task for {file_path}. Current cycle queue size: {len(tasks_to_send)}. Aiming for total active: {active_task_count + slots_filled_this_cycle}")
-            else:
-                log_message(f"[AI1] Executor task for {file_path} skipped: dynamic concurrent task limit ({dynamic_max_concurrent}) reached or would be exceeded.")
-                break # Зупиняємо додавання executor завдань, якщо ліміт досягнуто
+        # Log progress and sleep
+        # Recalculate active_task_count after sending tasks might be more accurate for sleep interval decision
+        _, current_active_count = await self._calculate_task_counts()
+        await self._log_progress_and_sleep(tasks_done_count, current_active_count)
 
-        # Видаляємо оброблені файли з черги executor
-        for file_path in processed_executor_files:
-             if file_path in self.pending_files_to_fill:
-                 self.pending_files_to_fill.remove(file_path)
-
-
-        # Приклад для tester:
-        executor_done_statuses = [
-            "code_received", "tested", "accepted", "completed_by_ai2", "review_needed", "failed_tests" # Статуси, після яких можна тестувати
-        ]
-        processed_test_files = []
-        for file_path in list(self.pending_files_to_test):
-             # Перевіряємо динамічний ліміт
-            if active_task_count + slots_filled_this_cycle < dynamic_max_concurrent:
-                if (file_path in self.task_status and
-                    "executor" in self.task_status[file_path] and
-                    self.task_status[file_path]["executor"] in executor_done_statuses):
-
-                    if "tester" in self.task_status[file_path] and self.task_status[file_path]["tester"] == "pending":
-                        code_content = await self.get_file_content(file_path)
-                        if code_content is not None:
-                            tasks_to_send.append({
-                                "task_text": f"Generate unit tests for the code in file: {file_path}",
-                                "role": "tester",
-                                "filename": file_path,
-                                "code": code_content,
-                            })
-                            slots_filled_this_cycle += 1
-                            processed_test_files.append(file_path)
-                            log_message(f"[AI1] Queued tester task for {file_path}. Current cycle queue size: {len(tasks_to_send)}. Aiming for total active: {active_task_count + slots_filled_this_cycle}")
-                        else:
-                            log_message(f"[AI1] Failed to fetch content for {file_path} to create tester task. Setting status to fetch_failed.")
-                            self.task_status[file_path]["tester"] = "fetch_failed"
-                            processed_test_files.append(file_path) # Видалити з pending, бо є проблема
-                # else: Немає завершеного executor або статус tester не pending
-            else:
-                log_message(f"[AI1] Tester task for {file_path} skipped: dynamic concurrent task limit ({dynamic_max_concurrent}) reached or would be exceeded.")
-                break # Зупиняємо додавання tester завдань
-
-        # Видаляємо оброблені файли з черги тестування
-        for file_path in processed_test_files:
-            if file_path in self.pending_files_to_test:
-                self.pending_files_to_test.remove(file_path)
-
-
-        # Приклад для documenter:
-        processed_doc_files = []
-        for file_path in list(self.pending_files_to_document):
-             # Перевіряємо динамічний ліміт
-            if active_task_count + slots_filled_this_cycle < dynamic_max_concurrent:
-                if (file_path in self.task_status and
-                    "executor" in self.task_status[file_path] and
-                    self.task_status[file_path]["executor"] in executor_done_statuses): # Можливо, інша умова для documenter?
-
-                    if "documenter" in self.task_status[file_path] and self.task_status[file_path]["documenter"] == "pending":
-                        code_content = await self.get_file_content(file_path)
-                        if code_content is not None:
-                            tasks_to_send.append({
-                                "task_text": f"Generate documentation (e.g., docstrings, comments, README section) for the code in file: {file_path}",
-                                "role": "documenter",
-                                "filename": file_path,
-                                "code": code_content,
-                            })
-                            slots_filled_this_cycle += 1
-                            processed_doc_files.append(file_path)
-                            log_message(f"[AI1] Queued documenter task for {file_path}. Current cycle queue size: {len(tasks_to_send)}. Aiming for total active: {active_task_count + slots_filled_this_cycle}")
-                        else:
-                            log_message(f"[AI1] Failed to fetch content for {file_path} to create documenter task. Setting status to fetch_failed.")
-                            self.task_status[file_path]["documenter"] = "fetch_failed"
-                            processed_doc_files.append(file_path) # Видалити з pending
-                # else: Немає завершеного executor або статус documenter не pending
-            else:
-                log_message(f"[AI1] Documenter task for {file_path} skipped: dynamic concurrent task limit ({dynamic_max_concurrent}) reached or would be exceeded.")
-                break # Зупиняємо додавання documenter завдань
-
-        # Видаляємо оброблені файли з черги документування
-        for file_path in processed_doc_files:
-            if file_path in self.pending_files_to_document:
-                self.pending_files_to_document.remove(file_path)
-
-        # --- Надсилання завдань та обробка результатів ---
-        if tasks_to_send:
-            log_message(f"[AI1] Attempting to send {len(tasks_to_send)} new subtasks...")
-            # Тимчасово оновлюємо статус на 'sending' для тих, що надсилаємо
-            tasks_being_sent_keys = []
-            for task_data in tasks_to_send:
-                file_path = task_data["filename"]
-                role = task_data["role"]
-                # Переконуємося, що статус все ще 'pending' перед зміною на 'sending'
-                if self.task_status.get(file_path, {}).get(role) == "pending":
-                    self.task_status[file_path][role] = "sending"
-                    tasks_being_sent_keys.append((file_path, role))
-                else:
-                    log_message(f"[AI1] Warning: Task {file_path} ({role}) status changed from 'pending' before sending. Skipping status update to 'sending'.")
-
-
-            results = await asyncio.gather(
-                *[self.create_subtask(**task_data) for task_data in tasks_to_send],
-                return_exceptions=True,
-            )
-
-            # Обробляємо результати (оновлюємо статус на основі відповіді API)
-            for i, result in enumerate(results):
-                task_data = tasks_to_send[i]
-                file_path = task_data["filename"]
-                role = task_data["role"]
-                # Знаходимо відповідний ключ, якщо він був доданий
-                original_key = next(((fp, r) for fp, r in tasks_being_sent_keys if fp == file_path and r == role), None)
-
-                subtask_id = result if isinstance(result, str) else None
-
-                if isinstance(result, Exception) or result is False:
-                    error_msg = result if isinstance(result, Exception) else "API returned failure"
-                    log_message(f"[AI1] Failed to send subtask for {file_path} ({role}): {error_msg}")
-                    # Перевіряємо, чи ми змінювали статус на 'sending'
-                    if original_key and self.task_status.get(file_path, {}).get(role) == "sending":
-                        self.task_status[file_path][role] = "failed_to_send" # Або повернути в 'pending'?
-                        # Повертаємо файл у відповідну чергу pending, якщо потрібно
-                        if role == "executor" and file_path not in self.pending_files_to_fill:
-                             self.pending_files_to_fill.append(file_path)
-                        elif role == "tester" and file_path not in self.pending_files_to_test:
-                             self.pending_files_to_test.append(file_path)
-                        elif role == "documenter" and file_path not in self.pending_files_to_document:
-                             self.pending_files_to_document.append(file_path)
-                    # Видаляємо з active_tasks, якщо він там був (хоча не мав би бути для failed_to_send)
-                    if original_key:
-                        task_key_to_remove = f"{file_path}::{role}::{subtask_id if subtask_id else 'unknown'}" # subtask_id може бути None тут
-                        self.active_tasks.discard(task_key_to_remove)
-
-                elif subtask_id:
-                    log_message(f"[AI1] Subtask {subtask_id} sent successfully for {file_path} ({role}).")
-                    # Перевіряємо, чи ми змінювали статус на 'sending'
-                    if original_key and self.task_status.get(file_path, {}).get(role) == "sending":
-                        self.task_status[file_path][role] = "sent"
-                        # Додаємо до активних завдань
-                        task_key = f"{file_path}::{role}::{subtask_id}"
-                        self.active_tasks.add(task_key)
-                    else:
-                         log_message(f"[AI1] Warning: Subtask {subtask_id} sent, but local status for {file_path} ({role}) was not 'sending'. Current status: {self.task_status.get(file_path, {}).get(role)}")
-
-                else:
-                     # Незрозумілий результат (не Exception, не False, не subtask_id)
-                     log_message(f"[AI1] Unexpected result after sending subtask for {file_path} ({role}): {result}")
-                     if original_key and self.task_status.get(file_path, {}).get(role) == "sending":
-                         self.task_status[file_path][role] = "error_processing" # Або інший статус помилки
-                     # Видаляємо з active_tasks, якщо він там був
-                     if original_key:
-                         task_key_to_remove = f"{file_path}::{role}::{subtask_id if subtask_id else 'unknown'}"
-                         self.active_tasks.discard(task_key_to_remove)
-
-        else:
-            log_message("[AI1] No new tasks to queue or send in this cycle.")
-
-        # Обробляємо "fetch_failed" статуси (переносимо їх назад в pending для повторної спроби)
-        for file_path, statuses in self.task_status.items():
-             if "tester" in statuses and statuses["tester"] == "fetch_failed":
-                 log_message(f"[AI1] Retrying fetch for tester task: {file_path}")
-                 statuses["tester"] = "pending"
-                 if file_path not in self.pending_files_to_test and file_path in self.files_to_test:
-                     self.pending_files_to_test.append(file_path)
-
-             if "documenter" in statuses and statuses["documenter"] == "fetch_failed":
-                 log_message(f"[AI1] Retrying fetch for documenter task: {file_path}")
-                 statuses["documenter"] = "pending"
-                 if file_path not in self.pending_files_to_document:
-                     self.pending_files_to_document.append(file_path)
-
-
-        # Перевіряємо прогрес (використовуємо tasks_done_count, розрахований раніше)
-        total_expected_tasks = sum(len(statuses) for statuses in self.task_status.values()) # Загальна кількість статусів
-        if total_expected_tasks > 0:
-             progress_percent = (tasks_done_count / total_expected_tasks) * 100
-             log_message(f"[AI1] Progress: {progress_percent:.2f}% ({tasks_done_count}/{total_expected_tasks} tasks in final state)")
-        else:
-             log_message("[AI1] Progress: No tasks initialized yet.")
-
-
-        # Оптимізуємо величину затримки між циклами
-        # Використовуємо active_task_count, розрахований на початку функції
-        if active_task_count > 0:
-            await asyncio.sleep(config.get("ai1_active_sleep_interval", 5)) # Менша затримка, якщо є активні завдання
-        else:
-            # Якщо немає активних завдань, перевіряємо, чи є завдання в очікуванні
-            has_pending = any(
-                status == "pending"
-                for roles_statuses in self.task_status.values()
-                for status in roles_statuses.values()
-            )
-            if has_pending:
-                 await asyncio.sleep(config.get("ai1_pending_sleep_interval", 10)) # Середня затримка, якщо є що надсилати
-            else:
-                 # Якщо немає ні активних, ні очікуючих (можливо, все завершено або чекаємо на зовнішні події)
-                 await asyncio.sleep(config.get("ai1_idle_sleep_interval", 15)) # Більша затримка
 
     async def create_subtask(
         self, task_text: str, role: str, filename: str, code: Optional[str] = None, is_rework: bool = False
@@ -862,239 +764,266 @@ class AI1:
             return e  # Return exception
 
     async def handle_test_result(self, test_recommendation: dict):
-        """Обробляє рекомендації щодо результатів тестування від AI3."""
+        """Handles test result recommendations from AI3."""
         recommendation = test_recommendation.get("recommendation")
         context = test_recommendation.get("context", {})
-        
+
         if not recommendation:
-            log_message("[AI1] Отримано порожню рекомендацію від AI3. Ігнорую.")
+            log_message("[AI1] Received empty recommendation from AI3. Ignoring.")
             return False
-        
-        log_message(f"[AI1] Отримано рекомендацію від AI3: {recommendation}")
-        
+
+        log_message(f"[AI1] Received recommendation from AI3: {recommendation}")
+
         decision = await self.decide_on_test_results(recommendation, context)
-        log_message(f"[AI1] Прийнято рішення щодо результатів тестів: {decision}")
-        
+        log_message(f"[AI1] Final decision on test results: {decision}")
+
         if decision == "accept":
-            # Позначаємо відповідні файли як прийняті
-            if "failed_files" in context:
-                for file in context["failed_files"]:
-                    # Знаходимо оригінальний файл на основі тестового
-                    original_file = self._get_original_file_from_test(file)
-                    if original_file and original_file in self.task_status:
-                        self.task_status[original_file]["tester"] = "accepted"
-                        log_message(f"[AI1] Файл {original_file} позначено як прийнятий (тестування пройдено)")
-            else:
-                # Якщо немає failed_files, то всі тести пройдені успішно
-                # Можемо оновити статус для всіх файлів, які були в статусі "tested"
-                for file_path, statuses in self.task_status.items():
-                    if statuses.get("tester") == "tested":
-                        statuses["tester"] = "accepted"
-                        log_message(f"[AI1] Файл {file_path} позначено як прийнятий (тестування пройдено)")
-            
+            # Mark relevant files as accepted
+            files_to_accept = set()
+            if "failed_files" in context: # Ironically, accept might come even with failed files if LLM overrides
+                 for test_file in context["failed_files"]:
+                     original_file = self._get_original_file_from_test(test_file)
+                     if original_file: files_to_accept.add(original_file)
+            else: # If no failed_files, accept all that were 'tested'
+                 for file_path, statuses in self.task_status.items():
+                     if statuses.get("tester") == "tested":
+                         files_to_accept.add(file_path)
+
+            for file_path in files_to_accept:
+                 if file_path in self.task_status and self.task_status[file_path].get("tester") != "accepted":
+                     self.task_status[file_path]["tester"] = "accepted"
+                     log_message(f"[AI1] File {file_path} marked as accepted (testing).")
             return True
-            
+
         elif decision == "rework":
-            # Створюємо нові завдання для файлів, які не пройшли тести
             failed_files = context.get("failed_files", [])
             run_url = context.get("run_url", "")
-            
+
             if not failed_files:
-                log_message("[AI1] Рекомендація на доопрацювання, але не вказано файли для виправлення.")
+                log_message("[AI1] Rework recommended, but no failed files specified.")
                 return False
-            
+
+            rework_tasks_created = 0
             for test_file in failed_files:
                 original_file = self._get_original_file_from_test(test_file)
-                if not original_file:
-                    log_message(f"[AI1] Не вдалося визначити оригінальний файл для тесту {test_file}")
+                if not original_file or original_file not in self.task_status:
+                    log_message(f"[AI1] Cannot determine or find original file for test {test_file}. Skipping rework.")
                     continue
-                    
-                if original_file in self.task_status:
-                    # Позначаємо файл як такий, що потребує доопрацювання
-                    self.task_status[original_file]["tester"] = "failed_tests"
-                    
-                    # Отримуємо вміст тестового файлу, щоб дізнатися про помилки
-                    test_content = await self.get_file_content(test_file)
-                    original_content = await self.get_file_content(original_file)
-                    
-                    if not test_content or not original_content:
-                        log_message(f"[AI1] Не вдалося отримати вміст файлів для створення завдання на доопрацювання: {original_file}")
-                        continue
-                    
-                    # Створюємо завдання на доопрацювання для executor
-                    task_text = (
-                        f"Код у файлі {original_file} не пройшов тести. "
-                        f"Необхідно виправити код згідно з вимогами у тестах.\n\n"
-                        f"Помилки з тесту {test_file}:\n{test_content}\n\n"
-                        f"Посилання на GitHub Actions: {run_url}\n"
-                        f"Будь ласка, виправте код для проходження тестів."
-                    )
-                    
-                    # Додаємо файл назад до pending_files_to_fill для повторної обробки
-                    if original_file not in self.pending_files_to_fill:
-                        self.pending_files_to_fill.append(original_file)
-                    
-                    # Змінюємо статус executor на "needs_rework" та створюємо нову підзадачу
-                    self.task_status[original_file]["executor"] = "needs_rework"
-                    
-                    # Створюємо нову підзадачу для виправлення помилок
-                    subtask_result = await self.create_subtask(
-                        task_text=task_text,
-                        role="executor",
-                        filename=original_file,
-                        code=original_content,
-                        is_rework=True
-                    )
-                    
-                    if subtask_result:
-                        log_message(f"[AI1] Створено завдання на доопрацювання для {original_file}: {subtask_result}")
-                    else:
-                        log_message(f"[AI1] Не вдалося створити завдання на доопрацювання для {original_file}")
-            
-            return True
-        
+
+                # Check if already marked for manual review (due to exceeding limits)
+                if self.task_status[original_file].get("tester") == "review_needed" or self.task_status[original_file].get("executor") == "review_needed":
+                     log_message(f"[AI1] Skipping rework for {original_file} as it's marked for manual review.")
+                     continue
+
+                self.task_status[original_file]["tester"] = "failed_tests" # Mark tester status
+
+                test_content = await self.get_file_content(test_file) # Get test file content for context
+                original_content = await self.get_file_content(original_file)
+
+                if not original_content: # Original content is crucial
+                    log_message(f"[AI1] Failed to get original content for {original_file}. Cannot create rework task.")
+                    continue
+
+                # Construct rework task text
+                task_text = (
+                    f"Code in {original_file} failed tests. Fix the code based on test results.\n\n"
+                    f"Test file: {test_file}\n"
+                    f"GitHub Actions run: {run_url}\n\n"
+                )
+                if test_content: # Add test content if available
+                     task_text += f"Test file content snippet (may contain errors):\n```\n{test_content[:1000]}...\n```\n" # Limit length
+                task_text += "Please fix the code in the original file to pass the tests."
+
+
+                # Reset executor status and queue for rework
+                self.task_status[original_file]["executor"] = "needs_rework" # Specific status for rework
+                if original_file not in self.pending_files_to_fill:
+                    self.pending_files_to_fill.append(original_file) # Add back to pending executor queue
+
+                subtask_result = await self.create_subtask(
+                    task_text=task_text,
+                    role="executor",
+                    filename=original_file,
+                    code=original_content, # Provide original code for context
+                    is_rework=True
+                )
+
+                if isinstance(subtask_result, str): # Check if it's a subtask ID
+                    log_message(f"[AI1] Rework task created for {original_file}: {subtask_result}")
+                    rework_tasks_created += 1
+                else:
+                    log_message(f"[AI1] Failed to create rework task for {original_file}. Error: {subtask_result}")
+                    # Consider reverting status if task creation failed?
+                    self.task_status[original_file]["executor"] = "failed_to_send_rework" # Or similar error status
+
+            return rework_tasks_created > 0 # Return True if at least one rework task was created
+
+        elif decision == "manual_review":
+             failed_files = context.get("failed_files", [])
+             log_message(f"[AI1] Decision is manual_review. Marking relevant files: {failed_files}")
+             for test_file in failed_files:
+                 original_file = self._get_original_file_from_test(test_file)
+                 if original_file and original_file in self.task_status:
+                     if self.task_status[original_file].get("tester") != "review_needed":
+                         self.task_status[original_file]["tester"] = "review_needed"
+                         log_message(f"[AI1] Marked {original_file} (tester) for manual review.")
+                     if self.task_status[original_file].get("executor") != "review_needed":
+                         self.task_status[original_file]["executor"] = "review_needed"
+                         log_message(f"[AI1] Marked {original_file} (executor) for manual review.")
+                     # Remove from pending queues if present
+                     if original_file in self.pending_files_to_fill: self.pending_files_to_fill.remove(original_file)
+                     if original_file in self.pending_files_to_test: self.pending_files_to_test.remove(original_file)
+                     if original_file in self.pending_files_to_document: self.pending_files_to_document.remove(original_file)
+             return True # Indicate the decision was processed
+
         else:
-            log_message(f"[AI1] Невідоме рішення для рекомендації щодо тестів: {decision}")
+            log_message(f"[AI1] Unknown decision from decide_on_test_results: {decision}")
             return False
 
     async def decide_on_test_results(self, recommendation: str, context: dict) -> str:
-        """Приймає остаточне рішення щодо результатів тестування."""
-        # За замовчуванням довіряємо рекомендації AI3
-        decision = recommendation
-        
-        # Якщо потрібна більш складна логіка прийняття рішення, вона може бути тут
-        # Наприклад, можемо аналізувати типи помилок у тестах, історію попередніх рішень тощо
-        
-        log_message(f"[AI1] Аналіз рекомендації '{recommendation}' та контексту: {context}")
-        
-        # Приклад додаткової логіки:
-        if recommendation == "rework" and context.get("failed_files"):
-            # Перевіряємо, чи не є це повторним доопрацюванням тих самих файлів
-            failed_files = [self._get_original_file_from_test(f) for f in context.get("failed_files", [])]
-            
-            # Фільтруємо None значення
-            failed_files = [f for f in failed_files if f]
-            
-            # Перевіряємо, чи не перевищено ліміт спроб доопрацювання
-            exceed_max_rework = False
-            for file in failed_files:
-                if file in self.task_status:
-                    # Відстежуємо кількість раз, коли файл був на доопрацюванні
-                    if "rework_attempts" not in self.task_status[file]:
-                        self.task_status[file]["rework_attempts"] = 1
-                    else:
-                        self.task_status[file]["rework_attempts"] += 1
-                    
-                    max_rework_attempts = config.get("ai1_max_rework_attempts", 3)
-                    if self.task_status[file].get("rework_attempts", 0) > max_rework_attempts:
-                        log_message(f"[AI1] Файл {file} перевищив максимальну кількість спроб доопрацювання ({max_rework_attempts})")
-                        exceed_max_rework = True
-                        # Можна позначити як "потрібна ручна перевірка"
-                        self.task_status[file]["tester"] = "review_needed"
-                        # Також позначимо executor, щоб він не намагався знову працювати над цим файлом
-                        if "executor" in self.task_status[file]:
-                            self.task_status[file]["executor"] = "review_needed"
-                        log_message(f"[AI1] Файл {file} позначено для ручної перевірки (перевищено ліміт доопрацювань).")
-                        # Видаляємо файл з черг, якщо він там є
-                        if file in self.pending_files_to_fill:
-                            self.pending_files_to_fill.remove(file)
-                        if file in self.pending_files_to_test:
-                            self.pending_files_to_test.remove(file)
-                        if file in self.pending_files_to_document:
-                            self.pending_files_to_document.remove(file)
+        """Makes the final decision on test results, potentially using LLM."""
+        decision = recommendation # Default to AI3's recommendation
+        max_rework_attempts = config.get("ai1_max_rework_attempts", 3)
+        exceeded_rework_limit = False
 
-            if exceed_max_rework:
-                # Якщо хоча б один файл перевищив ліміт, змінюємо рішення на manual_review
-                # Це запобігає нескінченним циклам доопрацювання
-                decision = "manual_review"
-                log_message(f"[AI1] Змінено рішення на 'manual_review' через перевищення ліміту доопрацювань.")
+        log_message(f"[AI1] Analyzing recommendation '{recommendation}' with context: {context}")
 
-        # --- Інтеграція LLM для прийняття рішення ---
+        # Check rework limits if recommendation is 'rework'
+        if recommendation == "rework":
+            original_failed_files = [self._get_original_file_from_test(f) for f in context.get("failed_files", [])]
+            original_failed_files = [f for f in original_failed_files if f and f in self.task_status] # Filter None and files not in status
+
+            for file_path in original_failed_files:
+                # Increment rework attempt counter
+                rework_attempts = self.task_status[file_path].get("rework_attempts", 0) + 1
+                self.task_status[file_path]["rework_attempts"] = rework_attempts
+
+                if rework_attempts > max_rework_attempts:
+                    log_message(f"[AI1] File {file_path} exceeded max rework attempts ({max_rework_attempts}).")
+                    exceeded_rework_limit = True
+                    # Mark for manual review immediately
+                    self.task_status[file_path]["tester"] = "review_needed"
+                    if "executor" in self.task_status[file_path]:
+                         self.task_status[file_path]["executor"] = "review_needed"
+                    # Remove from pending queues
+                    if file_path in self.pending_files_to_fill: self.pending_files_to_fill.remove(file_path)
+                    if file_path in self.pending_files_to_test: self.pending_files_to_test.remove(file_path)
+                    if file_path in self.pending_files_to_document: self.pending_files_to_document.remove(file_path)
+
+
+            if exceeded_rework_limit:
+                decision = "manual_review" # Override decision if limit exceeded
+                log_message("[AI1] Changed decision to 'manual_review' due to exceeding rework limits.")
+
+
+        # --- LLM Decision Override ---
         if self.llm:
-            log_message("[AI1] Запит до LLM для остаточного рішення щодо результатів тестів...")
+            log_message("[AI1] Querying LLM for final decision on test results...")
             try:
-                # Формуємо промпт для LLM
+                # Prepare context for LLM
                 failed_files_str = ', '.join(context.get("failed_files", []))
                 run_url = context.get("run_url", "N/A")
-                # Визначаємо оригінальні файли для історії доопрацювань
-                original_failed_files = [self._get_original_file_from_test(f) for f in context.get("failed_files", [])]
-                original_failed_files = [f for f in original_failed_files if f] # Фільтруємо None
+                original_files_context = [self._get_original_file_from_test(f) for f in context.get("failed_files", [])]
+                original_files_context = [f for f in original_files_context if f] # Filter None
 
-                rework_attempts_info = "".join([f"  - {f}: {self.task_status[f].get('rework_attempts', 0)} attempts\n" for f in original_failed_files if f in self.task_status])
+                rework_history_info = "".join([f"  - {f}: {self.task_status[f].get('rework_attempts', 0)} attempts\\n" for f in original_files_context if f in self.task_status])
 
                 llm_prompt = f"""{{
-        "system_prompt": "{self.system_prompt}",
-        "context": {{
-            "project_target": "{self.target}",
-            "ai3_recommendation": "{recommendation}",
-            "failed_test_files": "{failed_files_str}",
-            "original_code_files_to_rework": "{', '.join(original_failed_files)}",
-            "github_actions_url": "{run_url}",
-            "rework_history": "{rework_attempts_info}"
-            # Можна додати уривки логів або коду, якщо потрібно
-        }},
-        "request": "You are AI1, the project coordinator. Given the test results, decide whether to 'accept' the code despite test failures, 'rework' (ask for fixes), or 'manual_review' (if multiple rework attempts failed). Return ONLY 'accept', 'rework', or 'manual_review' as a single word."
-    }}"""
+    "system_prompt": "{self.system_prompt}{self.system_instructions}",
+    "context": {{
+        "project_target": "{self.target}",
+        "ai3_recommendation": "{recommendation}",
+        "algorithmic_decision_before_llm": "{decision}", # Inform LLM about the current algorithmic decision
+        "failed_test_files": "{failed_files_str}",
+        "original_code_files_potentially_needing_rework": "{', '.join(original_files_context)}",
+        "github_actions_url": "{run_url}",
+        "rework_history": "{rework_history_info.strip()}",
+        "max_rework_attempts_allowed": {max_rework_attempts}
+        # Consider adding log snippets or error summaries if available in context
+    }},
+    "request": "You are AI1, the project coordinator. Based on the test results and context (especially rework history and limits), make the final decision: 'accept' (accept code, potentially even with minor failures if justified), 'rework' (send back for fixes if attempts remain), or 'manual_review' (if rework limit exceeded or issues are complex). Respond ONLY with the single word: 'accept', 'rework', or 'manual_review'."
+}}"""
 
-                # Додаємо затримку перед запитом
                 await apply_request_delay("ai1")
-
-                # Викликаємо LLM
                 llm_response = await self.llm.generate(
                     prompt=llm_prompt,
                     temperature=self.ai1_llm_config.get("temperature", 0.2),
-                    max_tokens=self.ai1_llm_config.get("max_tokens", 10)
+                    max_tokens=self.ai1_llm_config.get("max_tokens", 15) # Increased slightly for safety
                 )
 
-                # Обробляємо відповідь LLM
                 if llm_response:
-                    # Нормалізуємо відповідь: видаляємо зайві символи, лишаємо тільки текст рішення
-                    llm_decision = llm_response.strip().lower()
-                    
-                    # Шукаємо одне з очікуваних слів у відповіді
-                    for expected_decision in ["accept", "rework", "manual_review"]:
-                        if expected_decision in llm_decision:
-                            llm_decision = expected_decision
-                            break
+                    llm_decision_raw = llm_response.strip().lower()
+                    llm_final_decision = None
+                    # Find the first valid decision word in the response
+                    for valid_decision in ["accept", "rework", "manual_review"]:
+                        if valid_decision in llm_decision_raw:
+                             llm_final_decision = valid_decision
+                             break
+
+                    if llm_final_decision and llm_final_decision != decision:
+                        log_message(f"[AI1] LLM overrides decision from '{decision}' to '{llm_final_decision}'.")
+                        decision = llm_final_decision
+                    elif llm_final_decision:
+                         log_message(f"[AI1] LLM confirms decision: '{decision}'.")
                     else:
-                        # Якщо жодне з очікуваних слів не знайдено, використовуємо логіку за замовчуванням
-                        log_message(f"[AI1] LLM повернув непідтримуване рішення: '{llm_decision}'. Використовуємо алгоритмічне рішення: '{decision}'")
-                        llm_decision = decision
-                    
-                    # Повертаємо рішення від LLM, якщо воно відрізняється від алгоритмічного
-                    if llm_decision != decision:
-                        log_message(f"[AI1] LLM змінив рішення з '{decision}' на '{llm_decision}'")
-                        decision = llm_decision
-                    else:
-                        log_message(f"[AI1] LLM підтвердив алгоритмічне рішення: '{decision}'")
-                    
+                        log_message(f"[AI1] LLM response '{llm_decision_raw}' did not contain a valid decision word. Using algorithmic decision: '{decision}'.")
+                else:
+                     log_message("[AI1] Empty response from LLM for decision making. Using algorithmic decision.")
+
             except Exception as e:
-                log_message(f"[AI1] Помилка при використанні LLM для прийняття рішення: {e}. Використовуємо алгоритмічне рішення.")
-        
+                log_message(f"[AI1] Error using LLM for decision making: {e}. Using algorithmic decision: '{decision}'.")
+
         return decision
 
-    def _get_original_file_from_test(self, test_file: str) -> str:
-        """Визначає оригінальний файл на основі тестового файлу."""
-        # Простий алгоритм: видаляємо 'test_' з назви файлу або замінюємо '_test' на ''
+    def _get_original_file_from_test(self, test_file: str) -> Optional[str]: # Updated return type hint
+        """Determines the original file based on the test file name."""
+        # Simple algorithm: remove 'test_' prefix or '_test' suffix
+        dir_name = os.path.dirname(test_file)
         base_name = os.path.basename(test_file)
-        
+        original_name = None
+
         if base_name.startswith("test_"):
-            original_name = base_name[5:]  # Видаляємо "test_"
+            original_name = base_name[5:]
         elif "_test." in base_name:
             original_name = base_name.replace("_test.", ".")
-        elif base_name.endswith("_test.py") or base_name.endswith("_test.js"):
-            original_name = base_name[:-8] + base_name[-3:]  # Видаляємо "_test" перед розширенням
-        else:
-            log_message(f"[AI1] Не вдалося визначити оригінальний файл для тесту {test_file}")
+        # Add more specific patterns if needed, e.g., for different languages/frameworks
+        elif base_name.endswith("_test.py"): original_name = base_name[:-8] + ".py"
+        elif base_name.endswith("_test.js"): original_name = base_name[:-8] + ".js"
+        # Add other extensions as needed...
+
+        if not original_name:
+            log_message(f"[AI1] Could not determine original filename pattern for test: {test_file}")
             return None
-        
-        # Підбираємо шлях до оригінального файлу
+
+        # Search for the original file in the known file list (self.files_to_fill)
+        # This is more reliable than guessing paths
+        possible_matches = []
         for file_path in self.files_to_fill:
-            if file_path.endswith(original_name) or os.path.basename(file_path) == original_name:
-                return file_path
-        
-        # Якщо оригінальний файл не знайдено, повертаємо None
-        return None
+             # Check if the end of the path matches the expected original name and directory structure
+             expected_suffix = os.path.join(dir_name, original_name).replace(os.sep, "/")
+             # Normalize file_path for comparison
+             normalized_file_path = file_path.replace(os.sep, "/")
+
+             # Prioritize exact match or suffix match
+             if normalized_file_path == expected_suffix:
+                 return file_path # Exact match found
+             if normalized_file_path.endswith("/" + original_name) and os.path.basename(file_path) == original_name:
+                 possible_matches.append(file_path)
+
+        if len(possible_matches) == 1:
+             return possible_matches[0]
+        elif len(possible_matches) > 1:
+             log_message(f"[AI1] Ambiguous original file match for {test_file}. Found: {possible_matches}. Returning first match.")
+             return possible_matches[0] # Or handle ambiguity differently
+        else:
+             # Fallback: Check if any file just ends with the original name (less precise)
+             for file_path in self.files_to_fill:
+                 if os.path.basename(file_path) == original_name:
+                     log_message(f"[AI1] Found potential original file by basename match for {test_file}: {file_path}")
+                     return file_path
+
+        log_message(f"[AI1] Original file not found in known structure for test: {test_file} (expected name: {original_name})")
+        return None # Return None if no match found
 
     def check_completion(self) -> bool:
         """Проверяет, все ли задачи выполнены (статус 'accepted' или 'skipped')."""
