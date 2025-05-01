@@ -396,7 +396,8 @@ async def create_files_from_structure(structure_obj: dict, repo: Repo):
 class AI3:
     def __init__(self, config):
         self.config = config
-        self.repo_dir = config.get("repo_dir", DEFAULT_REPO_DIR) # Use constant
+        self.repo_dir = config.get("repo_dir", DEFAULT_REPO_DIR)
+        logger.info(f"[AI3] Repository directory set to: {self.repo_dir}")
         self.repo = self._init_or_open_repo(self.repo_dir)
         self.session = None
         self.target = config.get("target")
@@ -446,78 +447,33 @@ class AI3:
     async def clear_and_init_repo(self):
         """Clears the existing repository and initializes a new one."""
         try:
-            # Check if the repository exists
             if os.path.exists(self.repo_dir):
-                # Remove the repository
                 logger.info(f"[AI3-Git] Removing existing repository directory: {self.repo_dir}")
                 shutil.rmtree(self.repo_dir)
                 logger.info(f"[AI3-Git] Removed existing repository: {self.repo_dir}")
 
-            # Create the repository directory and initialize Git
             logger.info(f"[AI3-Git] Creating new repository directory: {self.repo_dir}")
             os.makedirs(self.repo_dir, exist_ok=True)
             
-            # Option 1: Use GitPython (recommended)
-            try:
-                self.repo = Repo.init(self.repo_dir)
-                logger.info(f"[AI3-Git] Successfully initialized new repository at: {self.repo_dir}")
-                
-                # Add .gitignore
-                gitignore_path = os.path.join(self.repo_dir, GITIGNORE_FILENAME) # Use constant
-                with open(gitignore_path, "w", encoding="utf-8") as f:
-                    f.write("**/__pycache__\n")
-                    f.write("*.pyc\n")
-                    f.write(".DS_Store\n")
-                logger.info(f"[AI3-Git] Created .gitignore in {self.repo_dir}")
-                
-                # Configure Git user
-                with self.repo.config_writer() as git_config:
-                    git_config.set_value('user', 'email', 'ai3@example.com')
-                    git_config.set_value('user', 'name', 'AI3 System')
-                
-                # Add and commit gitignore
-                self.repo.git.add(gitignore_path)
-                self.repo.git.commit('-m', 'Initial commit (gitignore)')
-                logger.info("[AI3-Git] Added and committed .gitignore file")
-                
-            except Exception as git_err:
-                logger.error(f"[AI3-Git] Error using GitPython: {git_err}")
-                logger.info("[AI3-Git] Falling back to subprocess method")
-                
-                # Option 2: Use subprocess as a fallback
-                init_result = subprocess.run(
-                    ["git", "init"],
-                    cwd=self.repo_dir,
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                )
-                logger.info(f"[AI3-Git] Initialized Git repository via subprocess: {init_result.stdout}")
-                
-                # Create .gitignore
-                gitignore_path = os.path.join(self.repo_dir, GITIGNORE_FILENAME) # Use constant
-                with open(gitignore_path, "w", encoding="utf-8") as f:
-                    f.write("**/__pycache__\n")
-                    f.write("*.pyc\n")
-                    f.write(".DS_Store\n")
-                
-                # Configure Git user
-                subprocess.run(["git", "config", "user.email", "ai3@example.com"], cwd=self.repo_dir, check=False)
-                subprocess.run(["git", "config", "user.name", "AI3 System"], cwd=self.repo_dir, check=False)
-                
-                # Add and commit
-                subprocess.run(["git", "add", GITIGNORE_FILENAME], cwd=self.repo_dir, check=True) # Use constant
-                subprocess.run(["git", "commit", "-m", "Initial commit (gitignore)"], cwd=self.repo_dir, check=True)
-                
-                # Reassign the repo object for further use
-                self.repo = Repo(self.repo_dir)
+            self.repo = Repo.init(self.repo_dir)
+            logger.info(f"[AI3-Git] Successfully initialized new repository at: {self.repo_dir}")
             
-            logger.info("[AI3-Git] Repository successfully cleared and initialized.")
+            gitignore_path = os.path.join(self.repo_dir, GITIGNORE_FILENAME)
+            with open(gitignore_path, "w", encoding="utf-8") as f:
+                f.write("**/__pycache__\n*.pyc\n.DS_Store\n")
+            logger.info(f"[AI3-Git] Created .gitignore at {gitignore_path}")
+            
+            # Перевіряємо файли в директорії перед додаванням
+            logger.debug(f"Files in repo before git add: {os.listdir(self.repo_dir)}")
+            
+            self.repo.git.add(GITIGNORE_FILENAME)
+            self.repo.git.commit('-m', 'Initial commit (gitignore)')
+            logger.info("[AI3-Git] Added and committed .gitignore file")
+            
             await send_ai3_report("repo_cleared")
             return True
-
         except Exception as e:
-            logger.error(f"[AI3-Git] Unexpected error clearing and initializing repository: {e}")
+            logger.error(f"[AI3-Git] Error clearing and initializing repository: {e}")
             await send_ai3_report("repo_clear_failed", {"error": str(e)})
             return False
 
