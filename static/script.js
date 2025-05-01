@@ -108,6 +108,13 @@ function routeMessageByType(data) {
         console.log("Processing status_update (AI status only)");
         updateAllButtonStates(data.ai_status);
       }
+
+      // If status_update also contains subtask status updates, process them
+      if (data.subtasks) {
+        console.log("Processing status_update (includes subtask updates)");
+        Object.assign(subtask_status, data.subtasks);
+        updateQueueItemStatuses(data.subtasks);
+      }
       break;
     case "log_update":
       handleLogUpdate(data.log_line);
@@ -199,6 +206,10 @@ function handleLogUpdate(logLine) {
 function handleSubtaskUpdate(subtasksData) {
   console.log("Processing subtasks-only update:", subtasksData);
   Object.assign(subtask_status, subtasksData); // Merge updates
+
+  // Update queue item statuses immediately with the new data
+  updateQueueItemStatuses(subtasksData);
+
   updateStats(subtask_status, null); // Pass null for queues
   updateCharts({
     task_status_distribution: calculateStatusDistribution(subtask_status),
@@ -226,8 +237,14 @@ function handleSpecificUpdate(data) {
       updateQueues(data.queues);
       needsChartUpdate = true;
     }
+
     if (data.subtasks) {
+      // Update global status object
       Object.assign(subtask_status, data.subtasks);
+
+      // Dynamically update queue items with new statuses
+      updateQueueItemStatuses(data.subtasks);
+
       updateStats(subtask_status, data.queues);
       needsChartUpdate = true;
     }
@@ -355,6 +372,9 @@ function updateFullUI(data) {
 
     Object.assign(subtask_status, data.subtasks); // Merge all statuses
 
+    // Dynamically update queue items with new statuses
+    updateQueueItemStatuses(data.subtasks);
+
     const globalStatusCountAfter = Object.keys(subtask_status).length;
     console.log(
       `[Stats Update] Global count after merge: ${globalStatusCountAfter}`
@@ -438,96 +458,161 @@ function updateStatsLegacy(data) {
     statElements.efficiency.textContent = data.efficiency;
 }
 
+// --- Helper function to create a task list item ---
+function createTaskListItem(task) {
+  const status = task.status || subtask_status[task.id] || "pending";
+  const li = document.createElement("li");
+  li.setAttribute("data-task-id", task.id);
+  li.setAttribute("data-status", status);
+  li.classList.add("queue-item");
+
+  // Summary Row
+  const summaryDiv = document.createElement("div");
+  summaryDiv.className = "task-summary";
+
+  const statusIcon = document.createElement("span");
+  statusIcon.className = "status-icon";
+  try {
+    statusIcon.innerHTML = getStatusIcon(status);
+  } catch (e) {
+    console.error(`Error getting status icon for status '${status}':`, e);
+    statusIcon.innerHTML = '<i class="fas fa-question-circle"></i>';
+  }
+
+  const taskFilename = document.createElement("span");
+  taskFilename.className = "task-filename";
+  taskFilename.textContent = task.filename || `Task ${task.id.substring(0, 8)}`;
+
+  const taskIdSpan = document.createElement("span");
+  taskIdSpan.className = "task-id";
+  taskIdSpan.textContent = `(ID: ${task.id.substring(0, 8)})`;
+
+  summaryDiv.appendChild(statusIcon);
+  summaryDiv.appendChild(taskFilename);
+  summaryDiv.appendChild(taskIdSpan);
+  li.appendChild(summaryDiv);
+
+  // Details Div (Hidden)
+  const detailsDiv = document.createElement("div");
+  detailsDiv.className = "task-details";
+  detailsDiv.textContent = task.text;
+  li.appendChild(detailsDiv);
+
+  // Click Listener
+  li.addEventListener("click", () => li.classList.toggle("expanded"));
+
+  return li;
+}
+
 function updateQueues(queuesData) {
-  let queuesChanged = false; // Flag to check if queue data actually changed
-  let totalInQueues = 0; // Keep track of total tasks in queues from this update
+  let anyQueueChanged = false; // Flag to check if any queue visually changed
 
   console.log(
     "[Queue Update] Received queue data:",
     JSON.stringify(queuesData)
-  ); // Log received data
+  );
 
   ["executor", "tester", "documenter"].forEach((role) => {
     const ul = queueLists[role];
     const countSpan = queueCounts[role];
     if (!ul || !countSpan) {
       console.warn(`[Queue Update] UI elements for role '${role}' not found.`);
-      return; // Skip if elements not found
+      return;
     }
 
-    const tasks = queuesData?.[role] || []; // Use data from argument, default to empty array
-    totalInQueues += tasks.length; // Add to total count
+    const incomingTasks = queuesData?.[role] || [];
+    const incomingTaskIds = new Set(incomingTasks.map((task) => task.id));
+    const currentListItems = ul.querySelectorAll("li[data-task-id]");
+    const currentTaskIds = new Set();
+    let listChanged = false;
 
-    // Always update the count span directly from the received data
-    countSpan.textContent = tasks.length;
-    console.log(`[Queue Update] Role '${role}': Count set to ${tasks.length}`);
+    // --- Update existing items and identify current IDs ---
+    currentListItems.forEach((li) => {
+      const taskId = li.getAttribute("data-task-id");
+      currentTaskIds.add(taskId);
 
-    // --- SIMPLIFIED UPDATE: Clear and redraw ---
-    ul.innerHTML = ""; // Clear the entire list
-    queuesChanged = true; // Assume change if we redraw
+      // Check if this task is still in the incoming data
+      if (!incomingTaskIds.has(taskId)) {
+        // Task removed
+        li.remove();
+        listChanged = true;
+        console.log(
+          `[Queue Update] Task ${taskId} removed from ${role} queue.`
+        );
+      } else {
+        // Task still exists, check if status needs update
+        const incomingTask = incomingTasks.find((t) => t.id === taskId);
+        const newStatus =
+          incomingTask?.status || subtask_status[taskId] || "pending";
+        const currentStatus = li.getAttribute("data-status");
 
-    tasks.forEach((task) => {
-      if (!task?.id || !task?.text) {
-        console.warn("[Queue Update] Skipping invalid task object:", task);
-        return;
+        if (newStatus !== currentStatus) {
+          li.setAttribute("data-status", newStatus);
+          const statusIcon = li.querySelector(".status-icon");
+          if (statusIcon) {
+            try {
+              statusIcon.innerHTML = getStatusIcon(newStatus);
+            } catch (e) {
+              console.error(
+                `Error getting status icon for status '${newStatus}':`,
+                e
+              );
+              statusIcon.innerHTML = '<i class="fas fa-question-circle"></i>';
+            }
+          }
+          listChanged = true;
+          console.log(
+            `[Queue Update] Task ${taskId} status updated to ${newStatus} in ${role} queue.`
+          );
+        }
+        // Update filename/text if necessary (optional)
+        const taskFilenameSpan = li.querySelector(".task-filename");
+        const newFilename =
+          incomingTask?.filename || `Task ${taskId.substring(0, 8)}`;
+        if (taskFilenameSpan && taskFilenameSpan.textContent !== newFilename) {
+          taskFilenameSpan.textContent = newFilename;
+          listChanged = true; // Consider filename change as a visual change
+        }
+        const detailsDiv = li.querySelector(".task-details");
+        const newText = incomingTask?.text || "";
+        if (detailsDiv && detailsDiv.textContent !== newText) {
+          detailsDiv.textContent = newText;
+          // listChanged = true; // Details change might not require chart update
+        }
       }
-      const status = task.status || subtask_status[task.id] || "pending";
-
-      const li = document.createElement("li");
-      li.setAttribute("data-task-id", task.id);
-      li.setAttribute("data-status", status);
-      li.classList.add("queue-item"); // Add class for potential styling
-
-      // --- Summary Row ---
-      const summaryDiv = document.createElement("div");
-      summaryDiv.className = "task-summary";
-
-      const statusIcon = document.createElement("span");
-      statusIcon.className = "status-icon";
-      // Ensure getStatusIcon exists and handles potential errors
-      try {
-        statusIcon.innerHTML = getStatusIcon(status);
-      } catch (e) {
-        console.error(`Error getting status icon for status '${status}':`, e);
-        statusIcon.innerHTML = '<i class="fas fa-question-circle"></i>'; // Fallback icon
-      }
-
-      const taskFilename = document.createElement("span");
-      taskFilename.className = "task-filename";
-      taskFilename.textContent =
-        task.filename || `Task ${task.id.substring(0, 8)}`;
-
-      const taskIdSpan = document.createElement("span");
-      taskIdSpan.className = "task-id";
-      taskIdSpan.textContent = `(ID: ${task.id.substring(0, 8)})`;
-
-      summaryDiv.appendChild(statusIcon);
-      summaryDiv.appendChild(taskFilename);
-      summaryDiv.appendChild(taskIdSpan);
-      li.appendChild(summaryDiv);
-
-      // --- Details Div (Hidden) ---
-      const detailsDiv = document.createElement("div");
-      detailsDiv.className = "task-details";
-      detailsDiv.textContent = task.text;
-      li.appendChild(detailsDiv);
-
-      // --- Click Listener ---
-      li.addEventListener("click", () => li.classList.toggle("expanded"));
-
-      ul.appendChild(li); // Append the new item
-      // console.log(`[Queue Update] Task ${task.id} added to ${role} queue (redraw).`); // Optional log
     });
-    // --- END SIMPLIFIED UPDATE ---
+
+    // --- Add new items ---
+    incomingTasks.forEach((task) => {
+      if (!currentTaskIds.has(task.id)) {
+        const newLi = createTaskListItem(task);
+        ul.appendChild(newLi);
+        listChanged = true;
+        console.log(`[Queue Update] Task ${task.id} added to ${role} queue.`);
+      }
+    });
+
+    // Update count
+    const newCount = incomingTasks.length;
+    if (parseInt(countSpan.textContent || "0", 10) !== newCount) {
+      countSpan.textContent = newCount;
+      // Count change implies list changed visually
+      listChanged = true;
+    }
+    console.log(`[Queue Update] Role '${role}': Count set to ${newCount}`);
+
+    if (listChanged) {
+      anyQueueChanged = true;
+    }
   }); // End forEach role
 
   // Update stats using the new function, passing current queue data and global subtask status
   updateStats(subtask_status, queuesData);
 
-  // Update the task distribution chart if it exists and queues changed
-  if (taskChart && queuesChanged) {
+  // Update the task distribution chart if it exists and any queue visually changed
+  if (taskChart && anyQueueChanged) {
     console.log(
-      "[Queue Update] Updating taskChart data due to queue changes (redraw):",
+      "[Queue Update] Updating taskChart data due to queue changes:",
       queuesData
     );
     taskChart.data.datasets[0].data = [
@@ -540,7 +625,7 @@ function updateQueues(queuesData) {
     taskChart.options.scales.x.ticks.color = getChartFontColor();
     taskChart.options.plugins.legend.labels.color = getChartFontColor();
     taskChart.update(); // Explicitly update the chart visualization
-  } else if (taskChart && !queuesChanged) {
+  } else if (taskChart && !anyQueueChanged) {
     console.log("[Queue Update] No visual changes detected for taskChart.");
   }
 }
@@ -569,9 +654,12 @@ function getStatusIcon(status) {
 
 function initializeCharts() {
   initializeTaskChart();
-  initializeProgressChart();
-  initializeGitChart();
+  // --- REORDERED: Status Pie Chart is now second ---
   initializeStatusPieChart();
+  // --- REORDERED: Progress Chart is now third ---
+  initializeProgressChart();
+  // --- REORDERED: Git Chart is now last ---
+  initializeGitChart();
 }
 
 function updateCharts(data) {
@@ -585,11 +673,14 @@ function updateCharts(data) {
   let chartsUpdated = false;
 
   if (updateTaskChartData(data.queues)) chartsUpdated = true;
-  if (updateProgressChartData(data.progress_data, data.git_activity))
-    chartsUpdated = true;
-  if (updateGitChartData(data.git_activity)) chartsUpdated = true;
+  // --- REORDERED: Update Status Pie Chart second ---
   if (updateStatusPieChartData(data.task_status_distribution))
     chartsUpdated = true;
+  // --- REORDERED: Update Progress Chart third ---
+  if (updateProgressChartData(data.progress_data, data.git_activity))
+    chartsUpdated = true;
+  // --- REORDERED: Update Git Chart last ---
+  if (updateGitChartData(data.git_activity)) chartsUpdated = true;
 
   if (chartsUpdated) {
     updateAllChartThemes(); // Apply theme colors
@@ -688,6 +779,7 @@ function updateTaskChartData(queuesData) {
     JSON.stringify(taskChart.data.datasets[0].data) !== JSON.stringify(newData)
   ) {
     taskChart.data.datasets[0].data = newData;
+    taskChart.update(); // Update chart after changing data
     console.log("[Chart Update] Task Distribution data changed.");
     return true;
   }
@@ -710,21 +802,28 @@ function initializeProgressChart() {
           {
             label: "Completed Tasks",
             data: [],
-            borderColor: "rgb(54, 162, 235)",
+            borderColor: "rgb(54, 162, 235)", // Blue
             tension: 0.1,
             yAxisID: "yCount",
           },
           {
             label: "Successful Tests",
             data: [],
-            borderColor: "rgb(255, 99, 132)",
+            borderColor: "rgb(75, 192, 192)", // Green
             tension: 0.1,
             yAxisID: "yCount",
           },
           {
             label: "Git Actions",
             data: [],
-            borderColor: "rgb(255, 205, 86)",
+            borderColor: "rgb(255, 205, 86)", // Yellow
+            tension: 0.1,
+            yAxisID: "yCount",
+          },
+          {
+            label: "Rejected Files",
+            data: [],
+            borderColor: "rgb(255, 99, 132)", // Red
             tension: 0.1,
             yAxisID: "yCount",
           },
@@ -737,7 +836,7 @@ function initializeProgressChart() {
             ...baseOptions.scales.x,
             ticks: {
               ...baseOptions.scales.x.ticks,
-              display: false,
+              display: false, // Keep labels hidden for cleaner look
               maxRotation: 0,
               minRotation: 0,
               autoSkip: true,
@@ -755,13 +854,19 @@ function initializeProgressChart() {
             },
             ticks: { color: baseOptions.scales.y.ticks.color, stepSize: 1 },
             grid: {
-              drawOnChartArea: false,
+              drawOnChartArea: true, // Draw grid lines for this axis
               color: baseOptions.scales.y.grid.color,
             },
           },
         },
         plugins: {
           ...baseOptions.plugins,
+          // --- MODIFIED: Legend position to top ---
+          legend: {
+            ...baseOptions.plugins.legend,
+            position: "top",
+          },
+          // --- END MODIFIED ---
           title: {
             ...baseOptions.plugins.title,
             text: "Project Progress Over Time",
@@ -780,7 +885,7 @@ function initializeProgressChart() {
 }
 
 function updateProgressChartData(progressData, gitActivityData) {
-  // --- ADD LOGGING ---
+  // ... (existing logging and checks) ...
   console.log(
     "[Progress Chart] Received progressData:",
     JSON.stringify(progressData)
@@ -789,17 +894,14 @@ function updateProgressChartData(progressData, gitActivityData) {
     "[Progress Chart] Received gitActivityData:",
     JSON.stringify(gitActivityData)
   );
-  // --- END LOGGING ---
 
   if (!progressChart || !progressData?.timestamp) {
-    // Optional chaining
     console.log(
       "[Progress Chart] Skipping update: Chart not ready or no timestamp in progressData."
     );
     return false;
   }
 
-  // ... (rest of the function remains the same)
   const labels = progressChart.data.labels;
   const datasets = progressChart.data.datasets;
   const completedTasksDataset = datasets.find(
@@ -807,14 +909,21 @@ function updateProgressChartData(progressData, gitActivityData) {
   );
   const successfulTestsDataset = datasets.find(
     (ds) => ds.label === "Successful Tests"
-  ); // Find the dataset
+  );
   const gitActionsDataset = datasets.find((ds) => ds.label === "Git Actions");
+  // --- ADDED: Find Rejected Files Dataset ---
+  const rejectedFilesDataset = datasets.find(
+    (ds) => ds.label === "Rejected Files"
+  );
+  // --- END ADDED ---
 
-  // --- ADD CHECK FOR successfulTestsDataset and progressData.successful_tests ---
-  if (!successfulTestsDataset) {
-    console.error("[Progress Chart] 'Successful Tests' dataset not found!");
-    return false; // Cannot update if dataset doesn't exist
+  if (!successfulTestsDataset || !rejectedFilesDataset) {
+    // Check both datasets
+    console.error("[Progress Chart] Required dataset(s) not found!");
+    return false;
   }
+
+  // ... (existing checks for successful_tests) ...
   if (
     progressData.successful_tests === undefined ||
     progressData.successful_tests === null
@@ -822,19 +931,21 @@ function updateProgressChartData(progressData, gitActivityData) {
     console.warn(
       "[Progress Chart] 'successful_tests' key missing or null in progressData. Using previous value or 0."
     );
-    // Decide on fallback: use 0 or last known value? Using last known value might be less jarring.
-    // If using last known:
-    // progressData.successful_tests = successfulTestsDataset.data.length > 0 ? successfulTestsDataset.data[successfulTestsDataset.data.length - 1] : 0;
-    // If using 0:
-    // progressData.successful_tests = 0;
-    // Let's log a warning and proceed, maybe the backend will send it later.
   }
-  // --- END CHECK ---
+  // --- ADDED: Check for rejected_files ---
+  if (
+    progressData.rejected_files === undefined ||
+    progressData.rejected_files === null
+  ) {
+    console.warn(
+      "[Progress Chart] 'rejected_files' key missing or null in progressData. Using 0."
+    );
+  }
+  // --- END ADDED ---
 
-  // Use latest Git Action count from git_activity if available, else from progress_data
+  // ... (existing git action count logic) ...
   let latestGitActionCount = progressData.git_actions;
   if (gitActivityData?.values?.length > 0) {
-    // Optional chaining
     latestGitActionCount =
       gitActivityData.values[gitActivityData.values.length - 1];
     console.log(
@@ -848,10 +959,9 @@ function updateProgressChartData(progressData, gitActivityData) {
 
   // Add new data
   labels.push(progressData.timestamp); // Store full timestamp for tooltip
-  completedTasksDataset?.data.push(progressData.completed_tasks); // Optional chaining
+  completedTasksDataset?.data.push(progressData.completed_tasks ?? 0); // Use nullish coalescing for safety
 
-  // --- PUSH successful_tests data ---
-  // Use previous value or 0 if undefined/null, log warning above
+  // Push successful_tests data
   const lastSuccessfulTestValue =
     successfulTestsDataset.data.length > 0
       ? successfulTestsDataset.data[successfulTestsDataset.data.length - 1]
@@ -862,19 +972,24 @@ function updateProgressChartData(progressData, gitActivityData) {
   console.log(
     `[Progress Chart] Pushing successful_tests value: ${currentSuccessfulTestValue} (received: ${progressData.successful_tests})`
   );
-  // --- END PUSH ---
 
+  gitActionsDataset?.data.push(latestGitActionCount ?? 0); // Use nullish coalescing
+
+  // --- ADDED: Push rejected_files data ---
+  const currentRejectedFilesValue = progressData.rejected_files ?? 0; // Default to 0 if missing
+  rejectedFilesDataset.data.push(currentRejectedFilesValue);
   console.log(
-    `[Chart Update] Pushing git_actions value: ${latestGitActionCount}`
+    `[Progress Chart] Pushing rejected_files value: ${currentRejectedFilesValue} (received: ${progressData.rejected_files})`
   );
-  gitActionsDataset?.data.push(latestGitActionCount); // Optional chaining
+  // --- END ADDED ---
 
   // Limit data points
   if (labels.length > MAX_PROGRESS_POINTS) {
     labels.shift();
     completedTasksDataset?.data.shift();
-    successfulTestsDataset?.data.shift(); // Shift this dataset too
+    successfulTestsDataset?.data.shift();
     gitActionsDataset?.data.shift();
+    rejectedFilesDataset?.data.shift(); // Shift this dataset too
   }
 
   // Update x-axis labels (displaying only HH:MM)
@@ -901,8 +1016,10 @@ function initializeGitChart() {
           {
             label: "Commits Over Time",
             data: [],
+            // --- MODIFIED: Colors on one line ---
             backgroundColor: "rgba(255, 159, 64, 0.2)",
             borderColor: "rgba(255, 159, 64, 1)",
+            // --- END MODIFIED ---
             borderWidth: 2,
             tension: 0.4,
             fill: true,
@@ -1021,9 +1138,11 @@ function updateStatusPieChartData(statusDistributionData) {
 // --- Chart Theme Update ---
 function updateAllChartThemes() {
   const newChartColor = getChartFontColor();
-  [taskChart, progressChart, gitChart, statusPieChart].forEach((chart) => {
+  // --- REORDERED: Match new initialization order ---
+  [taskChart, statusPieChart, progressChart, gitChart].forEach((chart) => {
     updateChartTheme(chart, newChartColor);
   });
+  // --- END REORDERED ---
 }
 
 function updateChartTheme(chart, chartColor) {
@@ -1941,4 +2060,62 @@ function setupLogPanelBehavior() {
   } else {
     console.error("Log panel container not found for setting up behavior.");
   }
+}
+
+// --- New function to update queue item statuses dynamically ---
+function updateQueueItemStatuses(updatedStatuses) {
+  // Skip if no statuses were provided or if queueLists is not initialized
+  if (
+    !updatedStatuses ||
+    Object.keys(updatedStatuses).length === 0 ||
+    !queueLists
+  ) {
+    return false;
+  }
+
+  let anyStatusChanged = false;
+
+  // Check all queue lists for matching task IDs
+  ["executor", "tester", "documenter"].forEach((role) => {
+    const ul = queueLists[role];
+    if (!ul) return;
+
+    // Get all task items in this queue
+    const taskItems = ul.querySelectorAll("li[data-task-id]");
+    if (!taskItems.length) return;
+
+    // Iterate through each task item
+    taskItems.forEach((li) => {
+      const taskId = li.getAttribute("data-task-id");
+      // Check if this task has an updated status
+      if (taskId && updatedStatuses[taskId] !== undefined) {
+        const newStatus = updatedStatuses[taskId];
+        const currentStatus = li.getAttribute("data-status");
+
+        // Only update if status has changed
+        if (newStatus !== currentStatus) {
+          li.setAttribute("data-status", newStatus);
+
+          // Update the status icon
+          const statusIcon = li.querySelector(".status-icon");
+          if (statusIcon) {
+            try {
+              statusIcon.innerHTML = getStatusIcon(newStatus);
+              anyStatusChanged = true;
+              console.log(
+                `[Queue Dynamic Update] Task ${taskId} in ${role} queue updated to status: ${newStatus}`
+              );
+            } catch (e) {
+              console.error(
+                `Error updating status icon for task ${taskId} to ${newStatus}:`,
+                e
+              );
+            }
+          }
+        }
+      }
+    });
+  });
+
+  return anyStatusChanged;
 }

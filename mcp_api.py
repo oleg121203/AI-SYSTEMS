@@ -627,6 +627,7 @@ def get_progress_stats():
     stats["tasks_total"] = len(subtask_status) # Загальна кількість відомих завдань
 
     # Temporary sets to track files based on subtask_status
+    # --- CHANGE: Implement logic for tested/accepted files --- 
     temp_accepted_files = set()
     temp_rejected_files = set()
     # We might need the original `tasks` dict if file info isn't in subtask_status
@@ -636,30 +637,43 @@ def get_progress_stats():
     for task_id, status in subtask_status.items():
         # --- CHANGE: Align completed statuses with frontend text statistic --- 
         # Рахуємо завершені завдання (тільки статуси, що використовуються в текстовій статистиці)
-        if status in ["accepted", "completed", "code_received"]:
+        # More comprehensive list of completed/successful states
+        if status in ["accepted", "completed", "code_received", "tested", "documented", "skipped"]:
         # --- END CHANGE ---
              stats["tasks_completed"] += 1
 
-        # --- Placeholder logic for file counts based on subtask_status --- 
-        # This requires knowing if file info is associated with subtask_status entries
-        # or if we need to cross-reference with the `tasks` dictionary.
-        # Example (assuming file info IS available or cross-referenced):
-        # task_data = tasks.get(task_id) # Get original task data if needed
-        # if task_data and task_data.get("file"):
-        #     file_path = task_data["file"]
-        #     if status == "accepted":
-        #         temp_accepted_files.add(file_path)
-        #         if file_path in temp_rejected_files:
-        #             temp_rejected_files.remove(file_path)
-        #     elif status == "needs_rework":
-        #         if file_path not in temp_accepted_files:
-        #             temp_rejected_files.add(file_path)
-        # --- End Placeholder ---
+        # --- CHANGE: Implement logic for tested/accepted files --- 
+        # Count files that have passed testing or been accepted
+        # Assuming 'tested' and 'accepted' are relevant statuses after testing
+        if status in ["tested", "accepted"]:
+            # We need the filename associated with the task_id.
+            # This requires either storing filename in subtask_status value (not ideal)
+            # or looking up the original task data. Let's assume we need to look up.
+            # This part is still a placeholder as the original `tasks` dict might not be populated
+            # or accessible here easily. For now, just increment a counter based on status.
+            stats["files_tested_accepted"] += 1 # Increment counter directly based on status
+            # TODO: Refine this logic if filename uniqueness is needed and `tasks` dict is available.
+            # task_data = tasks.get(task_id) # Get original task data if needed
+            # if task_data and task_data.get("filename"):
+            #     file_path = task_data["filename"]
+            #     temp_accepted_files.add(file_path)
+            #     if file_path in temp_rejected_files:
+            #         temp_rejected_files.remove(file_path)
+
+        # Count files needing rework
+        elif status == "needs_rework":
+            stats["files_rejected"] += 1 # Increment counter directly
+            # task_data = tasks.get(task_id)
+            # if task_data and task_data.get("filename"):
+            #     file_path = task_data["filename"]
+            #     if file_path not in temp_accepted_files: # Only count if not already accepted
+            #         temp_rejected_files.add(file_path)
+        # --- END CHANGE ---
 
     # --- Update file counts based on placeholder logic (needs refinement) ---
     # stats["files_created"] = len(created_files) # Needs logic based on subtask_status/tasks
-    stats["files_tested_accepted"] = len(temp_accepted_files)
-    stats["files_rejected"] = len(temp_rejected_files)
+    # stats["files_tested_accepted"] = len(temp_accepted_files) # Now using direct count
+    # stats["files_rejected"] = len(temp_rejected_files) # Now using direct count
     # --- END CHANGE ---
 
     return stats
@@ -681,6 +695,9 @@ def get_progress_chart_data():
     completed_tasks_count = stats.get("tasks_completed", 0)
     successful_tests_count = stats.get("files_tested_accepted", 0)
     files_created_count = stats.get("files_created", 0)
+    # --- ADDED: Get rejected files count --- 
+    rejected_files_count = stats.get("files_rejected", 0)
+    # --- END ADDED ---
     total_tasks = stats.get("tasks_total", 0) or 1  # Уникаємо ділення на нуль
     
     # Розраховуємо відсоток прогресу
@@ -697,7 +714,10 @@ def get_progress_chart_data():
         "completed_tasks": completed_tasks_count,
         "successful_tests": successful_tests_count,
         "git_actions": current_git_actions,
-        "progress_percentage": weighted_progress
+        "progress_percentage": weighted_progress,
+        # --- ADDED: Include rejected files count --- 
+        "rejected_files": rejected_files_count
+        # --- END ADDED ---
     }
 
 def calculate_weighted_progress(completed_tasks, successful_tests, files_created, total_tasks):
