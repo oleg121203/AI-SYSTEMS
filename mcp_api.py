@@ -197,6 +197,34 @@ tasks = {}
 
 
 # --- Helper Functions ---
+
+async def run_restart_script(action: str):
+    """Runs the new_restart.sh script with the specified action."""
+    command = f"bash ./new_restart.sh {action}"
+    logger.info(f"Executing command: {command}")
+    try:
+        process = await asyncio.create_subprocess_shell(
+            command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await process.communicate()
+
+        if stdout:
+            logger.info(f"[{command} stdout]\n{stdout.decode()}")
+        if stderr:
+            logger.error(f"[{command} stderr]\n{stderr.decode()}")
+
+        if process.returncode == 0:
+            logger.info(f"Command '{command}' executed successfully.")
+            return True
+        else:
+            logger.error(f"Command '{command}' failed with return code {process.returncode}.")
+            return False
+    except Exception as e:
+        logger.error(f"Failed to execute command '{command}': {e}")
+        return False
+
 def is_safe_path(basedir, path_str):
     """Check if the path_str is safely within the basedir."""
     try:
@@ -615,7 +643,9 @@ def get_progress_chart_data():
     stats = get_progress_stats()
     
     # Поточна кількість git дій (останнє значення з історії)
+    # --- FIX: Handle empty processed_history --- 
     current_git_actions = processed_history[-1] if processed_history else 0
+    # --- END FIX ---
     
     # Отримуємо значення для графіка
     completed_tasks_count = stats.get("tasks_completed", 0)
@@ -1236,45 +1266,60 @@ async def stop_ai3():
 
 
 @app.post("/start_all")
-async def start_all():
+async def start_all(background_tasks: BackgroundTasks):
+    # Update status optimistically first
     ai_status["ai1"] = True
     ai_status["ai2"] = True
     ai_status["ai3"] = True
-    await broadcast_full_status()  # Update UI after AI status change
+    await broadcast_full_status() # Update UI immediately
+
+    # Run the restart script in the background
+    background_tasks.add_task(run_restart_script, "restart")
+
     return JSONResponse(
-        {"status": "All AI systems started (Placeholder)", "ai_status": ai_status}
+        {"status": "Restart process initiated.", "ai_status": ai_status}
     )
 
 
 @app.post("/stop_all")
-async def stop_all():
+async def stop_all(background_tasks: BackgroundTasks):
+    # Update status optimistically first
     ai_status["ai1"] = False
     ai_status["ai2"] = False
     ai_status["ai3"] = False
-    await broadcast_full_status()  # Update UI after AI status change
+    await broadcast_full_status() # Update UI immediately
+
+    # Run the stop script in the background
+    background_tasks.add_task(run_restart_script, "stop")
+
     return JSONResponse(
-        {"status": "All AI systems stopped (Placeholder)", "ai_status": ai_status}
+        {"status": "Stop process initiated.", "ai_status": ai_status}
     )
 
 
 @app.post("/clear")
-async def clear_state():
-    """Clears logs, queues, and resets state."""
+async def clear_state(background_tasks: BackgroundTasks):
+    """Clears logs, queues, resets state, and restarts services."""
     global subtask_status, report_metrics, current_structure, ai3_report, processed_history, collaboration_requests
     global executor_queue, tester_queue, documenter_queue
 
     logger.warning("Clearing application state: logs, queues, status...")
 
     # Clear queues
+    # ... (queue clearing logic remains the same)
     while not executor_queue.empty():
-        await executor_queue.get()
+        try: executor_queue.get_nowait() # Use non-blocking get
+        except asyncio.QueueEmpty: break
     while not tester_queue.empty():
-        await tester_queue.get()
+        try: tester_queue.get_nowait()
+        except asyncio.QueueEmpty: break
     while not documenter_queue.empty():
-        await documenter_queue.get()
+        try: documenter_queue.get_nowait()
+        except asyncio.QueueEmpty: break
     logger.info("Cleared task queues.")
 
     # Reset state variables
+    # ... (state reset logic remains the same)
     subtask_status = {}
     report_metrics = {}
     ai3_report = {"status": "pending"}
@@ -1282,7 +1327,7 @@ async def clear_state():
     collaboration_requests = []
     logger.info("Reset internal state variables.")
 
-    # Clear log file
+    # Clear log file (keep this synchronous for simplicity before restart)
     try:
         with open(log_file_path, "w") as f:
             f.write("")
@@ -1290,7 +1335,16 @@ async def clear_state():
     except Exception as e:
         logger.error(f"Failed to clear log file {log_file_path}: {e}")
 
-    return {"status": "state cleared"}
+    # Update status optimistically before restarting
+    ai_status["ai1"] = True
+    ai_status["ai2"] = True
+    ai_status["ai3"] = True
+    await broadcast_full_status() # Update UI immediately
+
+    # Schedule the restart script to run after the response is sent
+    background_tasks.add_task(run_restart_script, "restart")
+
+    return {"status": "State cleared and restart initiated."}
 
 
 @app.post("/clear_repo")
