@@ -68,6 +68,40 @@ function routeMessageByType(data) {
     case "full_status_update":
       console.log("Processing full_status_update");
       updateFullUI(data);
+      // Переконайтеся, що full_status_update також оновлює ці значення
+      if (data.actual_total_tasks !== undefined) {
+        const totalTasksElem = document.getElementById("total-tasks");
+        if (totalTasksElem)
+          totalTasksElem.textContent = data.actual_total_tasks;
+      }
+      // Потрібно отримати completed_tasks звідкись у full_status_update
+      // Наприклад, з task_status_distribution або progress_data
+      let completedCount = 0;
+      if (
+        data.task_status_distribution &&
+        data.task_status_distribution.completed !== undefined
+      ) {
+        // Якщо використовуємо task_status_distribution.completed
+        completedCount = data.task_status_distribution.completed;
+      } else if (
+        data.progress_data &&
+        data.progress_data.completed_tasks !== undefined
+      ) {
+        // Якщо використовуємо progress_data.completed_tasks
+        completedCount = data.progress_data.completed_tasks;
+      }
+      const completedTasksElem = document.getElementById("completed-tasks");
+      if (completedTasksElem) completedTasksElem.textContent = completedCount;
+
+      const efficiencyElem = document.getElementById("efficiency");
+      const totalTasks =
+        data.actual_total_tasks !== undefined ? data.actual_total_tasks : 0;
+      if (efficiencyElem && totalTasks > 0) {
+        const efficiency = ((completedCount / totalTasks) * 100).toFixed(1);
+        efficiencyElem.textContent = `${efficiency}%`;
+      } else if (efficiencyElem) {
+        efficiencyElem.textContent = "0.0%";
+      }
       break;
     case "status_update":
       if (data.ai_status) {
@@ -93,6 +127,28 @@ function routeMessageByType(data) {
       break;
     case "ping":
       console.log("Ping received");
+      break;
+    case "monitoring_update":
+      // Оновлюємо елементи статистики
+      const totalTasksElement = document.getElementById("total-tasks");
+      const completedTasksElement = document.getElementById("completed-tasks");
+      const efficiencyElement = document.getElementById("efficiency");
+
+      if (totalTasksElement) {
+        totalTasksElement.textContent = data.total_tasks;
+      }
+      if (completedTasksElement) {
+        completedTasksElement.textContent = data.completed_tasks;
+      }
+      if (efficiencyElement && data.total_tasks > 0) {
+        const efficiency = (
+          (data.completed_tasks / data.total_tasks) *
+          100
+        ).toFixed(1);
+        efficiencyElement.textContent = `${efficiency}%`;
+      } else if (efficiencyElement) {
+        efficiencyElement.textContent = "0.0%"; // Або 'N/A'
+      }
       break;
     default:
       console.warn("Received unhandled message type:", data.type, data);

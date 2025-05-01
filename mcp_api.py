@@ -6,7 +6,7 @@ import subprocess
 from collections import deque, Counter
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Union
+from typing import Dict, List, Optional, Set, Union, Any # Add Any here
 from uuid import uuid4
 
 import aiofiles
@@ -199,6 +199,8 @@ tasks = {}
 
 # --- Helper Functions ---
 
+# Removed count_files_in_structure function as it's no longer the basis for actual_total_tasks
+
 async def run_restart_script(action: str):
     """Runs the new_restart.sh script with the specified action."""
     command = f"bash ./new_restart.sh {action}"
@@ -357,6 +359,26 @@ async def broadcast_chart_updates():
     
     # Надсилаємо оновлення всім підключеним клієнтам
     await broadcast_specific_update(update_data)
+
+# --- ADDED: Function to broadcast monitoring stats ---
+async def broadcast_monitoring_stats():
+    """Calculates and broadcasts core monitoring stats (Total, Completed)."""
+    if active_connections:
+        try:
+            stats = get_progress_stats() # Get stats including completed count
+            actual_total_tasks = len(subtask_status) # Total known subtasks
+            completed_tasks = stats.get("tasks_completed", 0)
+
+            update_data = {
+                "type": "monitoring_update",
+                "total_tasks": actual_total_tasks,
+                "completed_tasks": completed_tasks
+            }
+            await broadcast_specific_update(update_data)
+            logger.debug(f"Broadcasted monitoring update: Total={actual_total_tasks}, Completed={completed_tasks}")
+        except Exception as e:
+            logger.error(f"Error broadcasting monitoring stats: {e}", exc_info=True)
+# --- END ADDED ---
 
 # Змінна для збереження завдання періодичного оновлення
 chart_update_task = None
@@ -864,6 +886,9 @@ async def receive_subtask(data: dict):
          "tester": [t for t in tester_queue._queue],
          "documenter": [t for t in documenter_queue._queue],
     }})
+    # --- ADDED: Broadcast monitoring stats update ---
+    await broadcast_monitoring_stats()
+    # --- END ADDED ---
     return {"status": "subtask received", "id": subtask_id}
 
 
@@ -893,6 +918,9 @@ async def get_task_for_role(role: str):
                 role: [t for t in queue._queue]  # Отправляем обновленную очередь
             }
         })
+        # --- ADDED: Broadcast monitoring stats update (status changed) ---
+        await broadcast_monitoring_stats()
+        # --- END ADDED ---
         return {"subtask": subtask}
     except asyncio.QueueEmpty:
         logger.debug(f"No tasks available for role: {role}")
@@ -920,8 +948,9 @@ async def receive_structure(data: dict):
     logger.info(
         f"Project structure updated by AI3. Root keys: {list(current_structure.keys())}"
     )
-    # Broadcast structure update
+    # Broadcast structure update AND full status to ensure actual_total_tasks is updated
     await broadcast_specific_update({"structure": current_structure})
+    await broadcast_full_status() # <<< ADDED CALL
     return {"status": "structure received"}
 
 
@@ -953,8 +982,9 @@ async def receive_report(
 
         # Обновляем статус подзадачи
         if report.subtask_id:
+            new_status = None
             if report.type == "code":
-                subtask_status[report.subtask_id] = "code_received"
+                new_status = "code_received"
                 if report.file and report.content:
                     background_tasks.add_task(
                         write_and_commit_code,
@@ -963,7 +993,7 @@ async def receive_report(
                         report.subtask_id,
                     )
             elif report.type == "test_result":
-                subtask_status[report.subtask_id] = "tested"
+                new_status = "tested"
                 # Обрабатываем метрики тестирования
                 if report.metrics:
                     report_metrics[report.subtask_id] = process_test_results(
@@ -974,12 +1004,41 @@ async def receive_report(
                 # await create_follow_up_tasks(report.subtask_id)
                 # --- END TODO ---
             elif report.type == "status_update":
-                subtask_status[report.subtask_id] = report.message or "updated"
+                new_status = report.message or "updated"
                 if hasattr(report, "status") and report.status:
-                    subtask_status[report.subtask_id] = report.status
+                    new_status = report.status # Use specific status if provided
+
+            if new_status:
+                 subtask_status[report.subtask_id] = new_status
+                 # --- ADDED: Broadcast monitoring stats update (status changed) ---
+                 await broadcast_monitoring_stats()
+                 # --- END ADDED ---
+
             # Broadcast status update after processing
             if report.subtask_id:
-                await broadcast_specific_update({"subtasks": {report.subtask_id: subtask_status.get(report.subtask_id)}})
+                current_status = subtask_status.get(report.subtask_id)
+                update_payload = {"subtasks": {report.subtask_id: current_status}}
+
+                # If the task reached a final state, also send queue updates
+                final_states = ["accepted", "completed", "code_received", "tested", "documented", "skipped", "failed", "error", "needs_rework", "failed_by_ai2", "error_processing", "failed_tests", "failed_to_send"] # Define comprehensive final states
+                if current_status in final_states:
+                    logger.info(f"Task {report.subtask_id} reached final state '{current_status}'. Broadcasting queue update.")
+                    update_payload["queues"] = {
+                        "executor": [
+                            {"id": t["id"], "filename": t.get("filename", "N/A"), "text": t["text"], "status": subtask_status.get(t["id"], "unknown")}
+                            for t in list(executor_queue._queue)
+                        ],
+                        "tester": [
+                             {"id": t["id"], "filename": t.get("filename", "N/A"), "text": t["text"], "status": subtask_status.get(t["id"], "unknown")}
+                            for t in list(tester_queue._queue)
+                        ],
+                        "documenter": [
+                             {"id": t["id"], "filename": t.get("filename", "N/A"), "text": t["text"], "status": subtask_status.get(t["id"], "unknown")}
+                            for t in list(documenter_queue._queue)
+                        ],
+                    }
+
+                await broadcast_specific_update(update_payload)
                 # --- CHANGE: Trigger chart update after status change ---
                 background_tasks.add_task(broadcast_chart_updates)
                 # --- END CHANGE ---
@@ -1351,6 +1410,9 @@ async def clear_state(): # Removed background_tasks as we await commands now
     processed_tasks_count = 0 # Reset counter
     collaboration_requests = []
     logger.info("Internal MCP state cleared.")
+    # --- ADDED: Broadcast monitoring stats update (state cleared) ---
+    await broadcast_monitoring_stats()
+    # --- END ADDED ---
 
     # 3. Clear repo, logs, cache using shell commands
     async def run_shell_command(command, description, working_dir=None):
@@ -1487,6 +1549,10 @@ async def broadcast_full_status():
             "values": history_list
         }
 
+        # Calculate actual total tasks as the number of known subtasks
+        actual_total_tasks = len(subtask_status)
+        logger.debug(f"[Broadcast] Calculated actual_total_tasks (known subtasks): {actual_total_tasks}")
+
         state_data = {
             "type": "full_status_update",
             "ai_status": ai_status,
@@ -1525,13 +1591,8 @@ async def broadcast_full_status():
             # "processed_history": history_list, # Keep original if needed elsewhere, but add formatted one
             "git_activity": git_activity_data, # Add formatted data for the chart
             "progress_data": progress_chart_data, # Add progress chart data
-            "collaboration_requests": collaboration_requests,
-            "status_counts": status_counts, # Include aggregated counts
-            "config": { # Send relevant config parts
-                 "ai1_max_concurrent_tasks": config.get("ai1_max_concurrent_tasks"),
-                 "ai1_desired_active_buffer": config.get("ai1_desired_active_buffer"),
-                 # Add other config values if needed by the UI
-            }
+            "task_status_distribution": status_counts, # Include aggregated counts
+            "actual_total_tasks": actual_total_tasks, # Add the calculated total tasks
         }
         message = json.dumps(state_data)
         disconnected_clients = set()
@@ -1577,6 +1638,10 @@ async def send_full_status_update(websocket: WebSocket):
             "values": history_list
         }
 
+        # Calculate actual total tasks as the number of known subtasks
+        actual_total_tasks = len(subtask_status)
+        logger.debug(f"[Send] Calculated actual_total_tasks (known subtasks): {actual_total_tasks}")
+
         state_data = {
             "type": "full_status_update",
             "ai_status": ai_status,
@@ -1612,28 +1677,25 @@ async def send_full_status_update(websocket: WebSocket):
             "subtasks": subtask_status,
             "structure": current_structure,
             "ai3_report": ai3_report,
-            "git_activity": git_activity_data, # Add formatted data for the chart
-            "progress_data": progress_chart_data, # Add progress chart data
-            "collaboration_requests": collaboration_requests,
-            "task_status_distribution": status_counts, # Include aggregated counts
-            "config": { # Send relevant config parts
-                 "ai1_max_concurrent_tasks": config.get("ai1_max_concurrent_tasks"),
-                 "ai1_desired_active_buffer": config.get("ai1_desired_active_buffer"),
-                 # Add other config values if needed by the UI
-            }
+            "git_activity": git_activity_data,
+            "progress_data": progress_chart_data,
+            "task_status_distribution": status_counts,
+            "actual_total_tasks": actual_total_tasks, # Use the count of known subtasks
         }
-        
+
         # Відправляємо дані клієнту
         await websocket.send_json(state_data)
         logger.info(f"Sent full status update to client {websocket.client}")
-        
+
+    # ... (exception handling remains the same) ...
     except WebSocketDisconnect:
         logger.warning(f"Client {websocket.client} disconnected during full status update.")
         if websocket in active_connections:
             active_connections.remove(websocket)
     except Exception as e:
         logger.error(f"Error sending full status to client {websocket.client}: {e}")
-        # Не видаляємо з'єднання при помилці відправки - це може спричинити втрату клієнтів через тимчасові помилки
+
+# ... rest of the file ...
 
 
 @app.websocket("/ws")
