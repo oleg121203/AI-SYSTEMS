@@ -4,6 +4,7 @@ import git
 import json
 import logging
 import os
+import re # Import re
 import time
 from typing import Any, Dict, List, Optional, Union
 
@@ -11,6 +12,7 @@ import aiohttp
 
 # Use load_config function from config.py
 from config import load_config
+# Fix import statement - use ProviderFactory.create_provider instead of separate create_provider
 from providers import BaseProvider, ProviderFactory
 from utils import apply_request_delay, log_message  # Import apply_request_delay
 
@@ -71,7 +73,7 @@ class AI2:
             ]
 
         # System instructions to append to base prompts
-        self.system_instructions = " Respond ONLY with the raw file content. Do NOT use markdown code blocks (```). Use only Latin characters in your response."
+        self.system_instructions = " Respond ONLY with the raw file content. Do NOT use markdown code blocks (```) unless the target file is a markdown file (e.g., .md). Use only Latin characters in your response." # Modified instruction
 
         # Updated: Use the new provider configuration structure
         self.providers = self.ai_config.get("providers", {}).get(self.role, [])
@@ -184,6 +186,7 @@ class AI2:
         model: Optional[str] = None,
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
+        is_markdown: bool = False # Add flag for markdown output
     ) -> str:
         """Attempts to generate a response using the primary role provider and tries all available providers in a loop."""
         provider_config = self.providers_config.get(self.role, {})
@@ -254,6 +257,13 @@ class AI2:
                         f"Provider '{current_provider_name}' failed: {result}"
                     )
                 
+                # --- Post-processing: Remove markdown code blocks if not expected ---
+                if not is_markdown and isinstance(result, str):
+                     # Remove ```markdown ... ``` or ``` ... ``` blocks
+                     result = re.sub(r'^```(?:markdown)?\s*?\n', '', result, flags=re.MULTILINE)
+                     result = re.sub(r'\n```\s*$', '', result, flags=re.MULTILINE)
+                     result = result.strip() # Remove leading/trailing whitespace
+
                 # Close session after successful use
                 if (
                     current_provider
@@ -320,15 +330,50 @@ class AI2:
         return test_content
 
     async def generate_docs(self, code: str, filename: str) -> str:
-        """Generate documentation for the code."""
-        logger.info(f"Generating documentation for file: {filename}")
-        # Combine base prompt with system instructions
-        base_prompt = self.base_prompts[2].format(filename=filename)
-        system_prompt = base_prompt + self.system_instructions.replace("file content", "documentation text") # Adjust instruction slightly
-        user_prompt = f"Code for file '{filename}':\n```\n{code}\n```\n\nPlease generate documentation (e.g., docstrings, comments) for this code."
+        """Generate documentation for the code OR refine idea.md."""
+        is_markdown_file = filename.lower().endswith(".md")
+
+        if filename == "idea.md":
+            logger.info(f"Refining project description in: {filename}")
+            # Specific prompts for refining idea.md
+            system_prompt = "You are a project planner and technical writer. Refine the provided project description (idea.md)."
+            user_prompt = f"""Refine and add detail to the following project description, which is currently in the file '{filename}'.
+Focus on:
+1.  Clarifying the core features and functionality.
+2.  Defining the target audience.
+3.  Outlining potential technical considerations or architecture choices.
+4.  Ensuring the description is well-structured, clear, and comprehensive using Markdown formatting.
+5.  Do NOT use placeholder text like "[Specify X]" or "[Details needed]". Fill in reasonable details based on the context.
+
+Current content of '{filename}':
+```markdown
+{code}
+```
+
+Respond ONLY with the refined and detailed Markdown content for the file. Do not include explanations or apologies."""
+            # Set is_markdown=True for _generate_with_fallback
+            is_markdown_output = True
+        else:
+            logger.info(f"Generating documentation for code file: {filename}")
+            # Existing logic for code documentation
+            base_prompt = self.base_prompts[2].format(filename=filename)
+            # Adjust instruction slightly for non-markdown files
+            instruction_suffix = self.system_instructions.replace("file content", "documentation text")
+            system_prompt = base_prompt + instruction_suffix
+            user_prompt = f"""Code for file '{filename}':
+```
+{code}
+```
+
+Please generate documentation (e.g., docstrings, comments) for this code. {instruction_suffix}"""
+            # Set is_markdown=False for _generate_with_fallback
+            is_markdown_output = False
+
         await apply_request_delay("ai2", self.role)
         return await self._generate_with_fallback(
-            system_prompt=system_prompt, user_prompt=user_prompt
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            is_markdown=is_markdown_output # Pass the flag
         )
 
     async def commit_tests_to_git(self, filename: str, test_content: str) -> bool:
@@ -374,7 +419,7 @@ class AI2:
         role = task_info.get("role")
         filename = task_info.get("filename")
         task_description = task_info.get("text")
-        code_content = task_info.get("code")
+        code_content = task_info.get("code") # This will contain idea.md content for the refinement task
 
         if not subtask_id or not role or not filename:
             logger.error(f"Invalid task information: {task_info}")
@@ -398,7 +443,7 @@ class AI2:
 
         report = {
             "subtask_id": subtask_id,
-            "file": filename,
+            "file": filename, # Keep 'file' for consistency, even for idea.md
         }
         start_time = asyncio.get_event_loop().time()
         generated_content = None
@@ -414,7 +459,7 @@ class AI2:
                     generated_content = await self.generate_code(task_description, filename)
                     
             elif role == "tester":
-                report["type"] = "test_result"
+                report["type"] = "test_result" # Keep this type for tester reports
                 if code_content is None:
                     error_message = "Missing code for role tester"
                     logger.error(f"Missing code for tester: {task_info}")
@@ -423,32 +468,46 @@ class AI2:
                     generated_content = await self.generate_tests_based_on_file_type(code_content, filename)
                     if generated_content and not generated_content.startswith("Generation error"):
                         # Successfully generated and committed tests
-                        report["content"] = generated_content
+                        report["content"] = generated_content # Test code content
                         report["message"] = f"Tests for {filename} successfully generated and committed to Git"
-                        report["status"] = "tests_committed"
+                        report["status"] = "tests_committed" # Specific status for tester
                     else:
-                        error_message = f"Generation error for tests for {filename}: {generated_content}"
-                        
+                        # Handle test generation failure
+                        error_message = f"Generation error for tests for {filename}: {generated_content or 'No content generated'}"
+                        # Ensure report type indicates failure if tests weren't generated/committed
+                        report = {
+                            "type": "status_update",
+                            "subtask_id": subtask_id,
+                            "message": error_message,
+                            "status": "failed",
+                        }
+                        # Set generated_content to None to avoid incorrect logging below
+                        generated_content = None
+
             elif role == "documenter":
-                report["type"] = "code"
+                report["type"] = "code" # Use "code" type as we are updating file content (idea.md or code docs)
                 if code_content is None:
-                    error_message = "Missing code for role documenter"
-                    logger.error(f"Missing code for documenter: {task_info}")
+                    # For idea.md refinement, code_content holds the initial content
+                    error_message = f"Missing content for role documenter (needed for {filename})"
+                    logger.error(f"Missing content for documenter: {task_info}")
                 else:
+                    # Calls generate_docs, which now handles both code docs and idea.md refinement
                     generated_content = await self.generate_docs(code_content, filename)
-                    
+
             else:
                 error_message = f"Unknown role: {role}"
                 logger.error(f"Unknown role: {role}")
 
+            # Check if generation itself failed (applies to all roles)
             if isinstance(generated_content, str) and generated_content.startswith(
                 "Failed to generate a response"
             ):
                 error_message = generated_content
-                generated_content = None
+                generated_content = None # Ensure content is None if generation failed
 
-            if generated_content is not None:
-                report["content"] = generated_content
+            # Add generated content to the report if successful and not already handled (like tester)
+            if generated_content is not None and "content" not in report:
+                 report["content"] = generated_content
 
         except Exception as e:
             logger.exception(
@@ -459,13 +518,16 @@ class AI2:
         end_time = asyncio.get_event_loop().time()
         processing_time = end_time - start_time
 
+        # Finalize report based on success/failure
         if error_message:
-            report = {
-                "type": "status_update",
-                "subtask_id": subtask_id,
-                "message": f"Task processing error ({role} for {filename}): {error_message}",
-                "status": "failed",
-            }
+            # Ensure failed tasks send a status_update report
+            if report.get("type") != "status_update":
+                 report = {
+                     "type": "status_update",
+                     "subtask_id": subtask_id,
+                     "message": f"Task processing error ({role} for {filename}): {error_message}",
+                     "status": "failed",
+                 }
             log_message_data = {
                 "message": f"Task processing failed for {filename} ({role})",
                 "role": role,
@@ -474,15 +536,41 @@ class AI2:
                 "processing_time": round(processing_time, 2),
                 "error_message": error_message,
             }
-        else:
-            log_message_data = {
-                "message": f"Task processing successfully completed for {filename} ({role})",
-                "role": role,
-                "file": filename,
-                "status": "success",
-                "processing_time": round(processing_time, 2),
-                "report_type": report.get("type"),
-            }
+        elif "status" not in report: # If no error and status not set (e.g., by tester)
+             # Default success status for executor/documenter if content was generated
+             if "content" in report:
+                 report["status"] = "completed" # Generic completion status
+                 log_message_data = {
+                     "message": f"Task processing successfully completed for {filename} ({role})",
+                     "role": role,
+                     "file": filename,
+                     "status": "success",
+                     "processing_time": round(processing_time, 2),
+                     "report_type": report.get("type"),
+                 }
+             else: # Should not happen if no error, but handle defensively
+                  report = {
+                     "type": "status_update",
+                     "subtask_id": subtask_id,
+                     "message": f"Task processing finished for {filename} ({role}) but no content generated and no error reported.",
+                     "status": "error_processing", # Use a specific status
+                 }
+                  log_message_data = {
+                     "message": f"Task processing anomaly for {filename} ({role}): No content, no error.",
+                     "role": role,
+                     "file": filename,
+                     "status": "warning",
+                     "processing_time": round(processing_time, 2),
+                 }
+        else: # Status already set (e.g., tests_committed)
+             log_message_data = {
+                 "message": f"Task processing completed for {filename} ({role}) with status '{report['status']}'",
+                 "role": role,
+                 "file": filename,
+                 "status": "success", # Overall processing was successful
+                 "processing_time": round(processing_time, 2),
+                 "report_type": report.get("type"),
+             }
 
         log_message(json.dumps(log_message_data))
         return report
@@ -1086,6 +1174,320 @@ Choose the most suitable testing framework for this file type.
         
         return await self._generate_with_fallback(system_prompt="You are a testing expert. Generate appropriate tests for the provided code file.", user_prompt=prompt)
 
+async def run_ai2_tester(providers=None):
+    """Run the AI2 tester with the given providers."""
+    if not providers:
+        # Default providers from configuration
+        ai_config = config.get("ai_config", {}).get("ai2", {})
+        providers = ai_config.get("providers", {}).get("tester", ["codestral", "groq", "gemini"])
+        
+    logger.info(f"Configured providers for role 'tester': {', '.join(providers)}")
+    processor = TaskProcessor(providers)
+    
+    # Example task processing loop
+    while True:
+        try:
+            # Fetch task from queue or API
+            task = await fetch_task("tester")
+            if task:
+                await processor.process_task(task)
+            else:
+                # No task available, wait a bit
+                await asyncio.sleep(5)
+        except Exception as e:
+            logger.error(f"Error in AI2 tester: {str(e)}", exc_info=True)
+            await asyncio.sleep(10)
+
+async def fetch_task(role):
+    """Fetch a task for the given role from the API."""
+    api_url = f"{MCP_API_URL}/task/{role}"
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(api_url) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    return data.get("subtask")
+                else:
+                    logger.warning(f"Failed to fetch task: {response.status}")
+                    return None
+    except Exception as e:
+        logger.error(f"Error fetching task: {str(e)}")
+        return None
+
+class TaskProcessor:
+    """
+    Processes testing tasks for different file types.
+    This is the replacement for functionality that was in ai2_tester.py.
+    """
+    def __init__(self, providers):
+        self.providers = providers
+
+    def get_file_type(self, file_ext):
+        """Determine the file type based on the file extension."""
+        file_type_map = {
+            '.py': 'Python',
+            '.js': 'JavaScript',
+            '.ts': 'TypeScript',
+            '.html': 'HTML',
+            '.htm': 'HTML',
+            '.css': 'CSS',
+            '.scss': 'SCSS',
+            '.jsx': 'React',
+            '.tsx': 'React TypeScript',
+            '.vue': 'Vue',
+            '.java': 'Java',
+            '.cpp': 'C++',
+            '.c': 'C',
+            '.hpp': 'C++ Header',
+            '.h': 'C/C++ Header',
+            '.go': 'Go',
+            '.rs': 'Rust',
+        }
+        return file_type_map.get(file_ext)
+
+    async def process_task(self, task):
+        """Process a testing task."""
+        task_id = task.get('id')
+        file_path = task.get('file_path')
+        
+        if not file_path:
+            logger.error(f"No file path specified in task: {task}")
+            return
+        
+        logger.info(f"Received task: ID={task_id}, File={file_path}")
+        
+        try:
+            file_ext = os.path.splitext(file_path)[1].lower()
+            file_type = self.get_file_type(file_ext)
+            
+            if file_type:
+                log_message(f"[AI2-TESTER] Generating tests for {file_type} file: {file_path}")
+                
+                # Select provider
+                provider = None
+                provider_name = None
+                
+                try:
+                    for provider_option in self.providers:
+                        provider_name = provider_option
+                        log_message(f"[AI2-TESTER] Attempting to generate tests with provider '{provider_name}'")
+                        
+                        try:
+                            # Use ProviderFactory instead of create_provider
+                            provider = ProviderFactory.create_provider(provider_name)
+                            
+                            # Read the file content
+                            with open(file_path, 'r', encoding='utf-8') as f:
+                                file_content = f.read()
+                            
+                            # Generate tests based on file type
+                            if file_ext in ['.html', '.htm']:
+                                test_content = await self.generate_html_tests(provider, file_content, file_path)
+                            elif file_ext == '.css':
+                                test_content = await self.generate_css_tests(provider, file_content, file_path)
+                            elif file_ext == '.py':
+                                test_content = await self.generate_python_tests(provider, file_content, file_path)
+                            elif file_ext == '.js':
+                                test_content = await self.generate_js_tests(provider, file_content, file_path)
+                            elif file_ext == '.ts':
+                                test_content = await self.generate_ts_tests(provider, file_content, file_path)
+                            else:
+                                test_content = await self.generate_generic_tests(provider, file_content, file_path)
+                            
+                            if test_content and len(test_content.strip()) > 0:
+                                # Write tests to file
+                                test_file_path = self.get_test_file_path(file_path)
+                                os.makedirs(os.path.dirname(test_file_path), exist_ok=True)
+                                with open(test_file_path, 'w', encoding='utf-8') as f:
+                                    f.write(test_content)
+                                
+                                log_message(f"[AI2-TESTER] Tests generated and saved to {test_file_path}")
+                                
+                                # Successfully processed
+                                break
+                            else:
+                                raise Exception("Provider returned empty test content")
+                                
+                        except Exception as e:
+                            logger.warning(f"Provider '{provider_name}' failed: {str(e)}")
+                            continue
+                            
+                    if not provider:
+                        raise Exception("All providers failed")
+                        
+                finally:
+                    # Ensure provider is closed properly
+                    if provider and hasattr(provider, 'close'):
+                        await provider.close()
+                
+                # Send the report
+                report_data = {
+                    "message": f"Task processing successfully completed for {file_path} (tester)",
+                    "role": "tester",
+                    "file": file_path,
+                    "status": "success",
+                    "processing_time": 5.0,  # Placeholder
+                    "report_type": "test_result"
+                }
+                log_message(json.dumps(report_data))
+                
+            else:
+                logger.warning(f"Unsupported file type for testing: {file_ext}")
+                
+        except Exception as e:
+            logger.error(f"Error processing task: {str(e)}", exc_info=True)
+            report_data = {
+                "message": f"Task processing failed for {file_path} (tester)",
+                "role": "tester",
+                "file": file_path,
+                "status": "error",
+                "error_message": str(e),
+                "report_type": "error"
+            }
+            log_message(json.dumps(report_data))
+
+    def get_test_file_path(self, file_path):
+        """Convert a file path to its corresponding test file path."""
+        base_name, ext = os.path.splitext(file_path)
+        
+        if ext == '.py':
+            return f"{base_name}_test.py"
+        elif ext == '.js':
+            return f"{base_name}.test.js"
+        elif ext == '.ts':
+            return f"{base_name}.spec.ts"
+        elif ext == '.jsx':
+            return f"{base_name}.test.jsx"
+        elif ext == '.tsx':
+            return f"{base_name}.test.tsx"
+        elif ext == '.vue':
+            return f"{base_name}.spec.js"
+        else:
+            return f"{base_name}_test{ext}"
+
+    async def generate_html_tests(self, provider, content, file_path):
+        """Generate tests for HTML files."""
+        prompt = f"""
+Generate tests for the HTML file using tools like Jest + Testing Library, or a similar testing framework.
+For HTML specifically, consider:
+1. Structure validation
+2. Accessibility testing
+3. Responsive design tests
+
+HTML content:
+```html
+{content}
+```
+
+Output: JavaScript tests for this HTML file.
+"""
+        system_prompt = "You are an HTML testing expert. Generate complete, working tests for the provided HTML file."
+        
+        return await provider.generate(prompt=prompt, system_prompt=system_prompt)
+
+    async def generate_css_tests(self, provider, content, file_path):
+        """Generate tests for CSS files."""
+        prompt = f"""
+Generate tests for the CSS file using tools like Jest + CSS testing utilities.
+For CSS specifically, consider:
+1. Style application verification
+2. Responsive design breakpoints
+3. Visual regression tests
+
+CSS content:
+```css
+{content}
+```
+
+Output: JavaScript tests for this CSS file.
+"""
+        system_prompt = "You are a CSS testing expert. Generate complete, working tests for the provided CSS file."
+        
+        return await provider.generate(prompt=prompt, system_prompt=system_prompt)
+
+    async def generate_python_tests(self, provider, content, file_path):
+        """Generate tests for Python files."""
+        prompt = f"""
+Generate tests for the Python file using pytest or unittest.
+For Python specifically, consider:
+1. Function/method testing
+2. Edge cases
+3. Exception handling
+
+Python content:
+```python
+{content}
+```
+
+Output: Python tests for this Python file.
+"""
+        system_prompt = "You are a Python testing expert. Generate complete, working pytest tests for the provided Python file."
+        
+        return await provider.generate(prompt=prompt, system_prompt=system_prompt)
+
+    async def generate_js_tests(self, provider, content, file_path):
+        """Generate tests for JavaScript files."""
+        prompt = f"""
+Generate tests for the JavaScript file using Jest, Mocha, or a similar testing framework.
+For JavaScript specifically, consider:
+1. Function testing
+2. Asynchronous code testing
+3. DOM manipulation (if applicable)
+
+JavaScript content:
+```javascript
+{content}
+```
+
+Output: JavaScript tests for this JavaScript file.
+"""
+        system_prompt = "You are a JavaScript testing expert. Generate complete, working tests for the provided JavaScript file."
+        
+        return await provider.generate(prompt=prompt, system_prompt=system_prompt)
+
+    async def generate_ts_tests(self, provider, content, file_path):
+        """Generate tests for TypeScript files."""
+        prompt = f"""
+Generate tests for the TypeScript file using Jest, Mocha, or a similar testing framework with TypeScript support.
+For TypeScript specifically, consider:
+1. Type checking in tests
+2. Function testing
+3. Asynchronous code testing
+
+TypeScript content:
+```typescript
+{content}
+```
+
+Output: TypeScript tests for this TypeScript file.
+"""
+        system_prompt = "You are a TypeScript testing expert. Generate complete, working tests for the provided TypeScript file."
+        
+        return await provider.generate(prompt=prompt, system_prompt=system_prompt)
+
+    async def generate_generic_tests(self, provider, content, file_path):
+        """Generate tests for files of unknown or unsupported type."""
+        ext = os.path.splitext(file_path)[1]
+        
+        prompt = f"""
+Generate tests for the file with extension {ext}. Choose an appropriate testing framework.
+Consider:
+1. Basic functionality testing
+2. Format validation
+3. Any type-specific concerns
+
+File content:
+```
+{content}
+```
+
+Output: Tests for this file in an appropriate format.
+"""
+        system_prompt = "You are a testing expert. Generate complete, working tests for the provided file."
+        
+        return await provider.generate(prompt=prompt, system_prompt=system_prompt)
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="AI2 Worker")
     parser.add_argument(
@@ -1097,15 +1499,26 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    ai2_worker = AI2(role=args.role)
-
-    try:
-        asyncio.run(ai2_worker.run_worker())
-    except KeyboardInterrupt:
-        logger.info(f"AI2 worker ({args.role}) stopped manually.")
-    except Exception as e:
-        logger.exception(
-            f"Critical error in main loop of AI2 worker ({args.role}): {e}"
-        )
-    finally:
-        asyncio.run(ai2_worker.close_session())
+    if args.role == "tester":
+        # Configuration
+        ai_config = config.get("ai_config", {}).get("ai2", {})
+        providers = ai_config.get("providers", {}).get("tester", ["codestral", "groq", "gemini"])
+        logger.info(f"AI2-TESTER - Provider for role 'tester' configured: {providers[0]}")
+        logger.info(f"AI2-TESTER - Configured providers for role 'tester': {', '.join(providers)}")
+        logger.info(f"AI2 worker (tester) started.")
+        
+        # Run tester
+        asyncio.run(run_ai2_tester(providers))
+    else:
+        # Run standard AI2 worker for executor or documenter
+        ai2_worker = AI2(role=args.role)
+        try:
+            asyncio.run(ai2_worker.run_worker())
+        except KeyboardInterrupt:
+            logger.info(f"AI2 worker ({args.role}) stopped manually.")
+        except Exception as e:
+            logger.exception(
+                f"Critical error in main loop of AI2 worker ({args.role}): {e}"
+            )
+        finally:
+            asyncio.run(ai2_worker.close_session())

@@ -49,7 +49,7 @@ class AI1:
 
         # System instructions that will be added to the base prompt
         self.system_instructions = " Use only Latin characters in your responses. Format your output as requested in specific prompts. Provide JSON when asked. Be precise and direct in your decisions."
-        
+
         # Create LLM instance
         try:
             # Pass provider name and configuration for it
@@ -74,6 +74,8 @@ class AI1:
         self.status = "initializing"
         self.project_structure: Optional[Dict] = None
         self.structure_fetch_attempted = False
+        self.idea_content: Optional[str] = None # Add this
+        self.idea_md_path = "idea.md" # Define path relative to repo root
         self.files_to_fill = []  # All files to be filled (complete list)
         self.pending_files_to_fill = []  # Files waiting to be tasked
         self.files_to_test = []  # All files to be tested (complete list)
@@ -110,12 +112,22 @@ class AI1:
         self.status = "waiting_for_structure"
 
         try:
+            # Fetch structure first
             await self.ensure_structure_received()
             if not self.project_structure:
                 log_message("[AI1] Failed to obtain project structure. Exiting.")
                 self.status = "error"
                 return
 
+            # Then fetch initial idea.md content
+            await self._fetch_and_process_idea_md()
+            # Optional: Exit if idea.md is crucial and fetch failed
+            # if not self.idea_content:
+            #     log_message("[AI1] Failed to obtain initial idea.md content. Exiting.")
+            #     self.status = "error"
+            #     return
+
+            # Initialize statuses including the idea.md task
             self.initialize_task_status()
             self.status = "processing_tasks"
 
@@ -152,8 +164,9 @@ class AI1:
                         if structure_data and isinstance(structure_data.get("structure"), dict) and structure_data["structure"]:
                             self.project_structure = structure_data["structure"]
                             log_message("[AI1] Structure received successfully.")
+                            # Call process_structure HERE, before fetching idea.md
                             self.process_structure(self.project_structure)
-                            return True
+                            return True # Structure fetched, proceed to fetch idea.md
                         else:
                             log_message(f"[AI1] Received invalid or empty structure data: {structure_data}. Retrying...")
                     elif response.status == 404:
@@ -173,9 +186,25 @@ class AI1:
         log_message(f"[AI1] Failed to obtain project structure after {timeout} seconds.")
         return False
 
+    async def _fetch_and_process_idea_md(self):
+        """Fetches the initial content of idea.md."""
+        log_message(f"[AI1] Attempting to fetch initial content for: {self.idea_md_path}")
+        content = await self.get_file_content(self.idea_md_path)
+        if content is not None:
+            self.idea_content = content
+            log_message(f"[AI1] Successfully fetched initial idea.md content (Length: {len(self.idea_content)}).")
+        else:
+            log_message(f"[AI1] Failed to fetch initial content for {self.idea_md_path}. Proceeding without it.")
+            self.idea_content = None # Ensure it's None if fetch failed
+
     def process_structure(self, structure_data):
-        """Обработать структуру проекта и определить файлы для задач."""
+        """Process project structure, identify files for tasks, including idea.md."""
         self.files_to_fill = self._extract_files(structure_data)
+        # Ensure idea.md is not in the list extracted from structure if it's handled separately
+        if self.idea_md_path in self.files_to_fill:
+             self.files_to_fill.remove(self.idea_md_path)
+             log_message(f"[AI1] Removed {self.idea_md_path} from files_to_fill as it's handled separately.")
+
         # Determine which files need testing based on extension
         testable_extensions = (
             ".py",
@@ -196,17 +225,17 @@ class AI1:
         self.files_to_test = [
             f for f in self.files_to_fill if f.lower().endswith(testable_extensions)
         ]
-        self.files_to_document = list(
-            self.files_to_fill
-        )  # All files need documentation
-        
-        # Ініціалізація черг файлів, що очікують на обробку
+        # Documentation list should include regular files + idea.md
+        self.files_to_document = list(self.files_to_fill) + [self.idea_md_path]
+
+        # Initialize pending lists
         self.pending_files_to_fill = list(self.files_to_fill)
         self.pending_files_to_test = list(self.files_to_test)
-        self.pending_files_to_document = list(self.files_to_document)
+        # Add idea.md to the front of the documenter queue for priority
+        self.pending_files_to_document = [self.idea_md_path] + list(self.files_to_fill)
 
         log_message(
-            f"[AI1] Structure processed. Files to implement: {len(self.files_to_fill)}, Files to test: {len(self.files_to_test)}, Files to document: {len(self.files_to_document)}"
+            f"[AI1] Structure processed. Files to implement: {len(self.files_to_fill)}, Files to test: {len(self.files_to_test)}, Files to document (incl. idea.md): {len(self.files_to_document)}"
         )
 
     def _extract_files(self, node, current_path="") -> List[str]:
@@ -216,38 +245,62 @@ class AI1:
             return files
 
         for key, value in node.items():
-            sanitized_key = key.replace("..", "_").strip()
+            # Basic sanitization, might need refinement based on actual structure keys
+            sanitized_key = key.replace("..", "_").strip().replace(" ", "_") # Replace spaces too
             if not sanitized_key:
                 continue
 
             new_path = os.path.join(current_path, sanitized_key) if current_path else sanitized_key
 
             if isinstance(value, dict):
+                # It's a directory node, recurse
                 files.extend(self._extract_files(value, new_path))
             elif value is None or isinstance(value, str):
+                # It's a file node
+                # Normalize path separators to forward slashes for consistency
                 normalized_path = os.path.normpath(new_path).replace(os.sep, "/")
-                # Remove project name prefix if present
+
+                # Remove potential project name prefix if structure includes it at the root
+                # Assumes self.target is the root directory name used in the structure JSON
                 if self.target and normalized_path.startswith(self.target + "/"):
                     normalized_path = normalized_path[len(self.target) + 1:]
-                    # log_message(f"[AI1] Removed project name prefix: {new_path} -> {normalized_path}") # Keep logs less noisy
-                files.append(normalized_path)
+
+                # Avoid adding placeholder files like .gitkeep
+                if os.path.basename(normalized_path) != ".gitkeep":
+                    files.append(normalized_path)
+            # else: handle other types if necessary
         return files
 
+
     def initialize_task_status(self):
-        """Инициализирует словарь статусов задач для всех файлов."""
+        """Initializes task statuses, including the idea.md refinement task."""
         self.task_status = {}
+        # Initialize status for regular files
         for file_path in self.files_to_fill:
             self.task_status[file_path] = {
                 "executor": "pending",
-                # Mark as pending only if the file is in the test list
                 "tester": "pending" if file_path in self.files_to_test else "skipped",
-                "documenter": "pending",  # All files need documentation
+                "documenter": "pending",
             }
-        log_message(f"[AI1] Task status initialized for {len(self.task_status)} files.")
+        # Initialize status specifically for idea.md refinement
+        # Check if idea.md path exists before adding
+        if self.idea_md_path: # Simple check if path is defined
+             self.task_status[self.idea_md_path] = {
+                 "executor": "skipped", # No execution needed
+                 "tester": "skipped",   # No testing needed
+                 "documenter": "pending", # This represents the refinement task
+             }
+        else:
+             log_message("[AI1] Warning: idea_md_path is not defined, cannot initialize its task status.")
+
+        log_message(f"[AI1] Task status initialized for {len(self.task_status)} files (including idea.md if applicable).")
+
 
     async def get_file_content(self, file_path: str) -> Optional[str]:
-        """Получает содержимое файла из API."""
+        """Gets file content from the API, handling potential repo prefix."""
         api_url = f"{MCP_API_URL}/file_content"
+        # Ensure the path sent to the API doesn't have an unexpected prefix like 'repo/'
+        # Assuming file_path is relative to the repo root already
         params = {"path": file_path}
         log_message(f"[AI1] Attempting to fetch content for: {file_path}")
         await apply_request_delay("ai1")  # Add delay before request
@@ -422,26 +475,40 @@ class AI1:
         return tasks_done_count, active_task_count
 
     async def _get_prioritized_roles(self) -> List[str]:
-        """Uses LLM to get prioritized roles for task scheduling."""
-        if not self.llm or not (self.pending_files_to_fill or self.pending_files_to_test or self.pending_files_to_document):
-            return ["executor", "tester", "documenter"] # Default order
+        """Gets prioritized roles, giving high priority to idea.md refinement if pending."""
+        # Check if idea.md refinement is pending
+        idea_refinement_pending = self.task_status.get(self.idea_md_path, {}).get("documenter") == "pending"
 
-        log_message("[AI1] Requesting LLM for task prioritization...")
+        if idea_refinement_pending:
+            log_message("[AI1] Prioritizing 'documenter' role for idea.md refinement.")
+            # Return documenter first, then default order for the rest
+            default_order = ["executor", "tester", "documenter"]
+            prioritized = ["documenter"] + [r for r in default_order if r != "documenter"]
+            return prioritized
+
+        # If idea.md is done or not applicable, use LLM or default for other tasks
+        if not self.llm or not (self.pending_files_to_fill or self.pending_files_to_test or self.pending_files_to_document):
+             return ["executor", "tester", "documenter"] # Default order
+
+        log_message("[AI1] Requesting LLM for task prioritization (idea.md refinement done or not applicable)...")
         try:
-            pending_summary = {
-                "executor": len(self.pending_files_to_fill),
-                "tester": len(self.pending_files_to_test),
-                "documenter": len(self.pending_files_to_document),
-            }
-            role_example_files = {
-                "executor": self.pending_files_to_fill[:5],
-                "tester": self.pending_files_to_test[:5],
-                "documenter": self.pending_files_to_document[:5],
-            }
             status_summary = {}
             for statuses in self.task_status.values():
                 for status in statuses.values():
                     status_summary[status] = status_summary.get(status, 0) + 1
+
+            pending_summary = {
+                "executor": len(self.pending_files_to_fill),
+                "tester": len(self.pending_files_to_test),
+                # Exclude idea.md from documenter count for LLM context
+                "documenter": len([f for f in self.pending_files_to_document if f != self.idea_md_path]),
+            }
+            role_example_files = {
+                "executor": self.pending_files_to_fill[:5],
+                "tester": self.pending_files_to_test[:5],
+                "documenter": [f for f in self.pending_files_to_document if f != self.idea_md_path][:5] # Exclude idea.md
+            }
+            idea_status = self.task_status.get(self.idea_md_path, {}).get('documenter', 'unknown')
 
             llm_prompt = f"""{{
 "system_prompt": "{self.system_prompt}{self.system_instructions}",
@@ -450,9 +517,10 @@ class AI1:
     "pending_files": {json.dumps(pending_summary)},
     "example_files": {json.dumps(role_example_files)},
     "project_status": {json.dumps(status_summary)},
-    "active_tasks": {len(self.active_tasks)}
+    "active_tasks": {len(self.active_tasks)},
+    "idea_md_refinement_status": "{idea_status}"
 }},
-"request": "Given the current project state, provide guidance on which type of tasks (executor, tester, documenter) should be prioritized in this cycle. Consider dependencies (executor -> tester -> documenter), critical files, and balanced progress. Respond with a JSON structure like: {{ \\"priorities\\": [\\"executor\\", \\"tester\\", \\"documenter\\"] }} listing roles in recommended priority order."
+"request": "Given the current project state (idea.md refinement is {idea_status}), provide guidance on which type of tasks (executor, tester, documenter) for the *remaining code files* should be prioritized. Consider dependencies (executor -> tester -> documenter), critical files, and balanced progress. Respond with a JSON structure like: {{ \\"priorities\\": [\\"executor\\", \\"tester\\", \\"documenter\\"] }} listing roles in recommended priority order."
 }}"""
             await apply_request_delay("ai1")
             llm_response = await self.llm.generate(
@@ -463,32 +531,37 @@ class AI1:
 
             if llm_response:
                 import re
-                json_match = re.search(r'({.*})', llm_response, re.DOTALL) # Added DOTALL
+                # Try to extract JSON robustly
+                json_match = re.search(r'```(?:json)?\s*({.*?})\s*```', llm_response, re.DOTALL)
+                if not json_match:
+                    json_match = re.search(r'({.*?})', llm_response, re.DOTALL)
+
                 if json_match:
-                    llm_json = json.loads(json_match.group(1))
-                    prioritized_roles = llm_json.get("priorities", [])
-                    if isinstance(prioritized_roles, list) and all(isinstance(r, str) for r in prioritized_roles):
-                         log_message(f"[AI1] LLM recommended prioritization: {prioritized_roles}")
-                         # Ensure all roles are present, append missing ones in default order
-                         base_roles = ["executor", "tester", "documenter"]
-                         final_roles = prioritized_roles + [r for r in base_roles if r not in prioritized_roles]
-                         return final_roles
-                    else:
-                         log_message(f"[AI1] LLM returned invalid priorities format: {prioritized_roles}. Using default.")
+                    try:
+                        llm_json = json.loads(json_match.group(1))
+                        prioritized_roles = llm_json.get("priorities", [])
+                        if isinstance(prioritized_roles, list) and all(isinstance(r, str) for r in prioritized_roles):
+                             log_message(f"[AI1] LLM recommended prioritization: {prioritized_roles}")
+                             # Ensure all roles are present, append missing ones in default order
+                             base_roles = ["executor", "tester", "documenter"]
+                             final_roles = prioritized_roles + [r for r in base_roles if r not in prioritized_roles]
+                             return final_roles
+                        else:
+                             log_message(f"[AI1] LLM returned invalid priorities format: {prioritized_roles}. Using default.")
+                    except json.JSONDecodeError as e:
+                         log_message(f"[AI1] JSON decode error from LLM prioritization response: {e}. Response: {llm_response}")
                 else:
                     log_message(f"[AI1] Could not find JSON in LLM response: {llm_response}. Using default.")
             else:
                  log_message("[AI1] Empty response from LLM for prioritization. Using default.")
 
-        except json.JSONDecodeError as e:
-            log_message(f"[AI1] JSON decode error from LLM prioritization response: {e}")
         except Exception as e:
             log_message(f"[AI1] Error using LLM for prioritization: {e}")
 
         return ["executor", "tester", "documenter"] # Default order on error
 
     async def _queue_tasks_for_role(self, role: str, pending_files: List[str], tasks_to_send: List[Dict], current_active_count: int, slots_filled_this_cycle: int, dynamic_max_concurrent: int) -> int:
-        """Queues tasks for a specific role if slots are available."""
+        """Queues tasks for a specific role if slots are available, handling idea.md."""
         processed_files = []
         executor_done_statuses = [
             "code_received", "tested", "accepted", "completed_by_ai2", "review_needed", "failed_tests"
@@ -506,32 +579,63 @@ class AI1:
 
             file_statuses = self.task_status[file_path]
 
-            # Check dependencies and current status
+            # --- Handle idea.md refinement specifically ---
+            if file_path == self.idea_md_path and role == "documenter":
+                if file_statuses.get("documenter") == "pending":
+                    if self.idea_content is not None:
+                        task_text = f"Refine and add detail to the project description in {self.idea_md_path}. Focus on clarifying features, target audience, and technical considerations based on the project target: {self.target}. Ensure the output is well-structured markdown."
+                        tasks_to_send.append({
+                            "task_text": task_text,
+                            "role": "documenter", # Use documenter role
+                            "filename": self.idea_md_path,
+                            "code": self.idea_content, # Provide current content
+                        })
+                        slots_filled_this_cycle += 1
+                        processed_files.append(file_path)
+                        log_message(f"[AI1] Queued {role} task for {file_path} (Refinement). Cycle queue size: {len(tasks_to_send)}. Total active aim: {current_active_count + slots_filled_this_cycle}")
+                    else:
+                        log_message(f"[AI1] Cannot queue refinement for {self.idea_md_path}: initial content not available. Skipping.")
+                        file_statuses["documenter"] = "fetch_failed" # Or a specific skip status
+                        processed_files.append(file_path)
+                continue # Move to the next file after handling idea.md
+
+            # --- Handle regular files ---
             can_queue = False
+            # Check dependencies and current status for regular files
             if role == "executor" and file_statuses.get("executor") == "pending":
-                can_queue = True
+                 can_queue = True
             elif role == "tester" and file_statuses.get("tester") == "pending" and file_statuses.get("executor") in executor_done_statuses:
-                 can_queue = True
+                  can_queue = True
             elif role == "documenter" and file_statuses.get("documenter") == "pending" and file_statuses.get("executor") in executor_done_statuses: # Assuming doc depends on executor completion
-                 can_queue = True
+                  can_queue = True
 
             if can_queue:
                 code_content = None
-                if role != "executor": # Tester and Documenter need code content
+                # Fetch content if needed (tester, documenter for regular files)
+                if role != "executor":
                     code_content = await self.get_file_content(file_path)
                     if code_content is None:
                         log_message(f"[AI1] Failed to fetch content for {file_path} for {role} task. Setting status to fetch_failed.")
                         file_statuses[role] = "fetch_failed"
-                        processed_files.append(file_path) # Remove from pending
-                        continue # Skip queuing this file
+                        processed_files.append(file_path)
+                        continue
+
+                # --- Add idea.md context to task prompts for regular files ---
+                idea_context_prompt = ""
+                if self.idea_content:
+                    # Limit length to avoid overly long prompts
+                    idea_context_prompt = f"\n\nProject Description Context (from idea.md):\n---\n{self.idea_content[:1500]}...\n---\n"
+                else:
+                    idea_context_prompt = "\n\n(Project description from idea.md not available)\n"
 
                 task_text = ""
                 if role == "executor":
-                    task_text = f"Implement the required functionality in file: {file_path} based on the overall project goal: {self.target}"
+                    task_text = f"Implement the required functionality in file: {file_path} based on the overall project goal: {self.target}.{idea_context_prompt}Ensure the code aligns with the project description."
                 elif role == "tester":
-                    task_text = f"Generate unit tests for the code in file: {file_path}"
+                    task_text = f"Generate unit tests for the code in file: {file_path}.{idea_context_prompt}Consider the project description when defining test cases."
                 elif role == "documenter":
-                    task_text = f"Generate documentation (e.g., docstrings, comments, README section) for the code in file: {file_path}"
+                    # This is for regular files, not idea.md refinement
+                    task_text = f"Generate documentation (e.g., docstrings, comments) for the code in file: {file_path}.{idea_context_prompt}Ensure documentation reflects the project description."
 
                 tasks_to_send.append({
                     "task_text": task_text,
@@ -623,7 +727,10 @@ class AI1:
                 log_message(f"[AI1] Retrying fetch for documenter task: {file_path}")
                 statuses["documenter"] = "pending"
                 if file_path not in self.pending_files_to_document:
-                    self.pending_files_to_document.append(file_path)
+                    # Ensure we only add it back if it's supposed to be documented
+                    if file_path == self.idea_md_path or file_path in self.files_to_fill:
+                         self.pending_files_to_document.append(file_path)
+
 
     async def _log_progress_and_sleep(self, tasks_done_count: int, active_task_count: int):
         """Logs progress and determines sleep interval."""
@@ -665,7 +772,7 @@ class AI1:
         tasks_to_send = []
         slots_filled_this_cycle = 0
 
-        # Get prioritized roles (potentially from LLM)
+        # Get prioritized roles (potentially from LLM or based on idea.md status)
         prioritized_roles = await self._get_prioritized_roles()
         log_message(f"[AI1] Processing roles in order: {prioritized_roles}")
 
@@ -704,16 +811,27 @@ class AI1:
     ) -> Union[
         str, bool, Exception
     ]:  # Return subtask_id on success, False or Exception on failure
-        """Создать подзадачу через API. Возвращает subtask_id при успехе."""
+        """Create subtask via API, adding idea.md context if applicable."""
         api_url = f"{MCP_API_URL}/subtask"
         subtask_id = str(uuid.uuid4())
+
+        # Add idea.md context consistently, except for the idea.md refinement task itself
+        final_task_text = task_text
+        if filename != self.idea_md_path:
+            idea_context_prompt = ""
+            if self.idea_content:
+                 idea_context_prompt = f"\n\nProject Description Context (from idea.md):\n---\n{self.idea_content[:1500]}...\n---\n"
+            else:
+                 idea_context_prompt = "\n\n(Project description from idea.md not available)\n"
+            final_task_text += idea_context_prompt
+
         payload = {
             "subtask": {
                 "id": subtask_id,
-                "text": task_text,
+                "text": final_task_text, # Use potentially modified task text
                 "role": role,
                 "filename": filename,
-                "is_rework": is_rework,  # Додаємо новий параметр
+                "is_rework": is_rework,
             }
         }
         if code is not None:
@@ -780,7 +898,7 @@ class AI1:
         if decision == "accept":
             # Mark relevant files as accepted
             files_to_accept = set()
-            if "failed_files" in context: # Ironically, accept might come even with failed files if LLM overrides
+            if "failed_files" in context: # Accept might come even with failed files if LLM overrides
                  for test_file in context["failed_files"]:
                      original_file = self._get_original_file_from_test(test_file)
                      if original_file: files_to_accept.add(original_file)
@@ -834,12 +952,12 @@ class AI1:
                      task_text += f"Test file content snippet (may contain errors):\n```\n{test_content[:1000]}...\n```\n" # Limit length
                 task_text += "Please fix the code in the original file to pass the tests."
 
-
                 # Reset executor status and queue for rework
                 self.task_status[original_file]["executor"] = "needs_rework" # Specific status for rework
                 if original_file not in self.pending_files_to_fill:
                     self.pending_files_to_fill.append(original_file) # Add back to pending executor queue
 
+                # Note: create_subtask will add the idea.md context automatically
                 subtask_result = await self.create_subtask(
                     task_text=task_text,
                     role="executor",
@@ -948,7 +1066,7 @@ class AI1:
                 llm_response = await self.llm.generate(
                     prompt=llm_prompt,
                     temperature=self.ai1_llm_config.get("temperature", 0.2),
-                    max_tokens=self.ai1_llm_config.get("max_tokens", 15) # Increased slightly for safety
+                    max_tokens=self.ai1_llm_config.get("max_tokens", 20) # Slightly increased
                 )
 
                 if llm_response:
@@ -998,35 +1116,36 @@ class AI1:
         # Search for the original file in the known file list (self.files_to_fill)
         # This is more reliable than guessing paths
         possible_matches = []
-        for file_path in self.files_to_fill:
-             # Check if the end of the path matches the expected original name and directory structure
-             expected_suffix = os.path.join(dir_name, original_name).replace(os.sep, "/")
-             # Normalize file_path for comparison
-             normalized_file_path = file_path.replace(os.sep, "/")
+        # Normalize expected path components for comparison
+        normalized_original_name = os.path.normpath(original_name).replace(os.sep, "/")
+        normalized_dir_name = os.path.normpath(dir_name).replace(os.sep, "/")
 
-             # Prioritize exact match or suffix match
-             if normalized_file_path == expected_suffix:
-                 return file_path # Exact match found
-             if normalized_file_path.endswith("/" + original_name) and os.path.basename(file_path) == original_name:
-                 possible_matches.append(file_path)
+        for file_path in self.files_to_fill:
+             # Normalize file_path for comparison
+             normalized_file_path = os.path.normpath(file_path).replace(os.sep, "/")
+             file_base_name = os.path.basename(normalized_file_path)
+             file_dir_name = os.path.dirname(normalized_file_path)
+
+             # Check 1: Exact match of basename and directory name
+             if file_base_name == normalized_original_name and file_dir_name == normalized_dir_name:
+                  return file_path # Best match
+
+             # Check 2: Basename matches, directory might be slightly different (e.g., tests/ vs src/)
+             if file_base_name == normalized_original_name:
+                  possible_matches.append(file_path)
 
         if len(possible_matches) == 1:
+             log_message(f"[AI1] Found unique original file by basename match for {test_file}: {possible_matches[0]}")
              return possible_matches[0]
         elif len(possible_matches) > 1:
              log_message(f"[AI1] Ambiguous original file match for {test_file}. Found: {possible_matches}. Returning first match.")
              return possible_matches[0] # Or handle ambiguity differently
         else:
-             # Fallback: Check if any file just ends with the original name (less precise)
-             for file_path in self.files_to_fill:
-                 if os.path.basename(file_path) == original_name:
-                     log_message(f"[AI1] Found potential original file by basename match for {test_file}: {file_path}")
-                     return file_path
-
-        log_message(f"[AI1] Original file not found in known structure for test: {test_file} (expected name: {original_name})")
-        return None # Return None if no match found
+             log_message(f"[AI1] Original file not found in known structure for test: {test_file} (expected name: {original_name})")
+             return None # Return None if no match found
 
     def check_completion(self) -> bool:
-        """Проверяет, все ли задачи выполнены (статус 'accepted' или 'skipped')."""
+        """Checks if all tasks are in a final state ('accepted', 'skipped', or failed/review)."""
         if not self.task_status:
             log_message("[AI1] Task status not initialized, cannot check completion.")
             return False
@@ -1036,7 +1155,10 @@ class AI1:
             "failed_by_ai2",
             "error_processing",
             "review_needed",
-        ]  # Consider these 'done' but not successful
+            "failed_tests", # Added failed_tests as a final (though unsuccessful) state
+            "failed_to_send", # Added failed_to_send
+            "fetch_failed", # Added fetch_failed if we consider it final after retries
+        ]
 
         for file_path, statuses in self.task_status.items():
             for role, status in statuses.items():
@@ -1044,6 +1166,8 @@ class AI1:
                     status not in final_complete_statuses
                     and status not in final_failed_statuses
                 ):
+                    # If any task is still pending, sending, sent, processing, etc., it's not complete
+                    log_message(f"[AI1] Completion check: Task {file_path} ({role}) is not final (Status: {status}).")
                     return False
         log_message("[AI1] Completion check: All tasks are in a final state.")
         return True
