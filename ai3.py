@@ -112,113 +112,169 @@ def _commit_changes(repo: Repo, file_paths: list, message: str):
         logger.error(f"[AI3-Git] Unexpected error during commit: {e}")
 
 
-async def generate_structure(target: str) -> Optional[Dict]: # Add target param, update return type
-    # Load base prompt from configuration
-    base_prompt_template = config.get("ai3_prompt", "Generate a JSON structure for a project with the target: \"{target}\".")
-    base_prompt = base_prompt_template.format(target=target) # Format the target
-
-    # System instructions added in code
-    system_instructions = """
-Respond ONLY with the JSON structure itself, enclosed in triple backticks (```json ... ```).
-The structure should be a valid JSON object representing directories and files. Use null for files.
-Use only Latin characters for all generated names (files, directories).
-Example:
-```json
-{
-  "src": {
-    "main.py": null,
-    "utils.py": null
-  },
-  "tests": {
-    "test_main.py": null
-  },
-  "README.md": null,
-  ".gitignore": null
-}
-```
-Do not include any explanatory text before or after the JSON block. Ensure the JSON is well-formed.
-"""
-    # Combine base prompt and system instructions
+async def generate_structure(target: str) -> Optional[Dict]:
+    """
+    Генерує початкову структуру проекту, доопрацьовує її та повертає результат.
+    Використовує спеціальний список провайдерів 'structure_providers' з конфігурації AI3.
+    """
+    logger.info(f"[AI3] Starting structure generation for target: {target}")
+    base_prompt = config.get("ai3_prompt", "Generate a project structure for:")
+    system_instructions = f"""
+    Target Project: {target}
+    Generate a detailed JSON structure representing the directories and files for this project.
+    Include potential initial content placeholders or comments within the files where appropriate.
+    Output ONLY the JSON structure, without any introductory text or explanations.
+    Example format:
+    {{
+      "project_name": {{
+        "src": {{
+          "main.py": "# Main application entry point",
+          "utils.py": "# Utility functions"
+        }},
+        "tests": {{
+          "test_main.py": "# Tests for main.py"
+        }},
+        "README.md": "# Project Readme"
+      }}
+    }}
+    """
     full_prompt = base_prompt + "\n" + system_instructions
 
     ai_config_base = config.get("ai_config", {})
     ai3_config = ai_config_base.get("ai3", {})
     if not ai3_config:
         logger.warning("[AI3] Warning: 'ai_config.ai3' section not found. Using defaults.")
-        ai3_config = {"provider": "openai"}
+        ai3_config = {} 
 
-    # Updated: Iterate over the list of providers from the configuration
-    ai3_providers = ai3_config.get("providers", ["openai"])
-    if not ai3_providers:
-        logger.warning("[AI3] No providers configured. Defaulting to ['openai'].")
-        ai3_providers = ["openai"]
+    # ОБОВ'ЯЗКОВО використовувати 'structure_providers', без фолбеків на 'providers'
+    structure_providers = ai3_config.get("structure_providers")
+    if not structure_providers:
+        logger.warning("[AI3] 'structure_providers' not found in ai3 config. Using default ['codestral2'].")
+        structure_providers = ["codestral2"]  # Встановлюємо Codestral за замовчуванням
+    
+    logger.info(f"[AI3] Using structure_providers: {structure_providers}")
 
-    response_text = None
-    for provider_name in ai3_providers:
+    initial_response_text = None
+    selected_provider_name = None
+
+    # --- Перший цикл: Початкова генерація структури ---
+    logger.info(f"[AI3] Starting Cycle 1: Initial structure generation using providers: {structure_providers}")
+    for provider_name in structure_providers:
         try:
-            logger.info(f"[AI3] Attempting structure generation with provider: {provider_name}")
+            logger.info(f"[AI3] Cycle 1: Trying provider for initial generation: {provider_name}")
             provider: BaseProvider = ProviderFactory.create_provider(provider_name)
             try:
                 await apply_request_delay("ai3")
-                # Use the full prompt
-                response_text = await provider.generate(
-                    prompt=full_prompt, # Pass the combined prompt
+                initial_response_text = await provider.generate(
+                    prompt=full_prompt,
                     model=ai3_config.get("model"),
-                    max_tokens=ai3_config.get("max_tokens"),
+                    max_tokens=ai3_config.get("max_tokens", 4000),
                     temperature=ai3_config.get("temperature"),
                 )
-                if response_text:
-                    logger.info(f"[AI3] Successfully generated structure with provider: {provider_name}")
+                if initial_response_text:
+                    logger.info(f"[AI3] Cycle 1: Successfully generated initial structure with provider: {provider_name}")
+                    selected_provider_name = provider_name
                     break
+                else:
+                    logger.warning(f"[AI3] Cycle 1: Provider {provider_name} returned empty response for initial generation.")
             except Exception as e:
-                # Логування помилки і спроба використати інший провайдер
-                logger.error(f"Failed with provider {provider_name}: {str(e)}")
-                # Спробувати інший провайдер або повідомити про помилку
+                logger.error(f"[AI3] Cycle 1: Failed initial generation with provider {provider_name}: {str(e)}")
             finally:
                 if hasattr(provider, "close_session") and callable(provider.close_session):
                     await provider.close_session()
         except Exception as e:
-            logger.error(f"[AI3] Error with provider '{provider_name}': {e}")
+            logger.error(f"[AI3] Cycle 1: Error initializing provider '{provider_name}' for initial generation: {e}")
 
-    if not response_text:
-        logger.error("[AI3] All providers failed to generate a structure.")
+    if not initial_response_text:
+        logger.error("[AI3] Cycle 1: Failed to generate initial structure with all configured providers.")
         return None
 
-    # Consider replacing with a more robust JSON extraction method if needed
-    match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", response_text, re.DOTALL)
-    json_structure_str = None
-    if match:
-        json_structure_str = match.group(1)
-    else:
-        # Try to find JSON directly if backticks are missing
-        try:
-            start_index = response_text.find('{')
-            end_index = response_text.rfind('}')
-            if start_index != -1 and end_index != -1 and start_index < end_index:
-                potential_json = response_text[start_index:end_index+1]
-                # Basic validation
-                if potential_json.count('{') == potential_json.count('}'):
-                    json_structure_str = potential_json
-                    logger.warning("[AI3] Extracted JSON structure without backticks.")
-                else:
-                    raise ValueError("Mismatched braces")
-            else:
-                 raise ValueError("Could not find JSON object delimiters")
-        except Exception as direct_extract_err:
-            logger.error(
-                f"[AI3] Failed to extract JSON structure from response (tried direct extraction after backtick failure: {direct_extract_err}). Response: {response_text[:500]}"
-            )
-            return None
-
+    # Очищення та обробка початкової відповіді
     try:
-        structure_obj = json.loads(json_structure_str)
-        logger.info(f"[AI3] Successfully extracted structure: {json_structure_str[:200]}...")
-        return structure_obj
+        cleaned_initial_json_str = initial_response_text.strip()
+        # Видалення markdown-огородження ```json та ```
+        if "```json" in cleaned_initial_json_str:
+            cleaned_initial_json_str = cleaned_initial_json_str.split("```json", 1)[1]
+        if "```" in cleaned_initial_json_str:
+            cleaned_initial_json_str = cleaned_initial_json_str.split("```", 1)[0]
+        cleaned_initial_json_str = cleaned_initial_json_str.strip()
+        
+        initial_structure_json = json.loads(cleaned_initial_json_str)
+        logger.info("[AI3] Cycle 1: Successfully parsed initial JSON structure.")
+        
+        # --- Другий цикл: Доопрацювання структури ---
+        logger.info("[AI3] Starting Cycle 2: Structure refinement...")
+        
+        refinement_prompt = f"""
+        Review the following initial project structure JSON for the target '{target}'.
+        Analyze its completeness, logical organization, and adherence to common practices for such a project.
+        If you identify areas for improvement (missing essential files/directories, better organization),
+        provide a refined version of the JSON structure.
+        If the structure looks good, return the original JSON structure.
+        Output ONLY the JSON structure, without any introductory text or explanations.
+
+        Initial Structure:
+        ```json
+        {json.dumps(initial_structure_json, indent=2)}
+        ```
+        """
+
+        refined_response_text = None
+        # Повторне використання провайдера, який успішно згенерував початкову структуру
+        providers_to_try = [selected_provider_name] if selected_provider_name else structure_providers
+
+        for provider_name in providers_to_try:
+            try:
+                logger.info(f"[AI3] Cycle 2: Trying provider for refinement: {provider_name}")
+                provider: BaseProvider = ProviderFactory.create_provider(provider_name)
+                try:
+                    await apply_request_delay("ai3")
+                    refined_response_text = await provider.generate(
+                        prompt=refinement_prompt,
+                        model=ai3_config.get("model"),
+                        max_tokens=ai3_config.get("max_tokens", 4000),
+                        temperature=ai3_config.get("temperature"),
+                    )
+                    if refined_response_text:
+                        logger.info(f"[AI3] Cycle 2: Successfully refined structure with provider: {provider_name}")
+                        break
+                    else:
+                        logger.warning(f"[AI3] Cycle 2: Provider {provider_name} returned empty response for refinement.")
+                except Exception as e:
+                    logger.error(f"[AI3] Cycle 2: Failed refinement with provider {provider_name}: {str(e)}")
+                finally:
+                    if hasattr(provider, "close_session") and callable(provider.close_session):
+                        await provider.close_session()
+            except Exception as e:
+                logger.error(f"[AI3] Cycle 2: Error initializing provider '{provider_name}' for refinement: {e}")
+
+        if refined_response_text:
+            try:
+                # Очищення та обробка відповіді з доопрацювання
+                cleaned_refined_json_str = refined_response_text.strip()
+                # Видалення markdown-огородження ```json та ```
+                if "```json" in cleaned_refined_json_str:
+                    cleaned_refined_json_str = cleaned_refined_json_str.split("```json", 1)[1]
+                if "```" in cleaned_refined_json_str:
+                    cleaned_refined_json_str = cleaned_refined_json_str.split("```", 1)[0]
+                cleaned_refined_json_str = cleaned_refined_json_str.strip()
+                
+                final_structure_json = json.loads(cleaned_refined_json_str)
+                logger.info("[AI3] Cycle 2: Structure refinement successful.")
+                return final_structure_json
+            except json.JSONDecodeError as e:
+                logger.error(f"[AI3] Cycle 2: Failed to decode refined JSON structure: {e}. Falling back to initial structure.")
+                return initial_structure_json
+        else:
+            logger.warning("[AI3] Cycle 2: Failed to refine structure. Using initial structure.")
+            return initial_structure_json
+
     except json.JSONDecodeError as e:
-        logger.error(f"[AI3] JSON decode error: {e}. JSON string: {json_structure_str[:200]}")
+        logger.error(f"[AI3] Cycle 1: Failed to decode initial JSON structure: {e}")
+        logger.debug(f"[AI3] Invalid JSON received: {initial_response_text}")
         return None
     except Exception as e:
-        logger.error(f"[AI3] Unexpected error processing structure: {e}")
+        logger.error(f"[AI3] Unexpected error during structure processing: {e}")
         return None
 
 
@@ -303,97 +359,86 @@ async def initiate_collaboration(error: str, context: str):
 
 
 async def create_files_from_structure(structure_obj: dict, repo: Repo):
+    """Створює файлову структуру з JSON-об'єкта структури."""
     base_path = repo.working_dir
     created_files = []
+    skipped_files = []
     created_dirs = []
 
-    async def _create_recursive(struct: dict, current_rel_path: str):
+    async def _create_recursive(struct: dict, current_path: str):
+        """Рекурсивно створює файли та директорії."""
+        nonlocal created_files, skipped_files, created_dirs
+        
         for key, value in struct.items():
+            # Санітизація ключа
             sanitized_key = re.sub(r'[<>:"/\\|?*]', "_", key).strip()
+            sanitized_key = re.sub(r'\s+', '_', sanitized_key)
             if not sanitized_key:
-                logger.warning(
-                    f"[AI3] Warning: Skipping empty or invalid name derived from '{key}'"
-                )
+                logger.warning(f"[AI3] Пропуск порожнього/недійсного імені: '{key}' в шляху '{current_path}'")
                 continue
 
-            new_rel_path = os.path.join(current_rel_path, sanitized_key)
-            full_path = os.path.join(base_path, new_rel_path)
-
+            full_path = os.path.join(base_path, current_path, sanitized_key)
+            rel_path = os.path.join(current_path, sanitized_key)
+            
             try:
+                # Створення батьківської директорії, якщо потрібно
+                parent_dir = os.path.dirname(full_path)
+                os.makedirs(parent_dir, exist_ok=True)
+                
+                # Визначення типу елемента (файл або директорія)
                 if isinstance(value, dict):
+                    # Це директорія
                     if not os.path.exists(full_path):
-                        os.makedirs(full_path)
-                        logger.info(f"[AI3] Created directory: {new_rel_path}")
+                        os.makedirs(full_path, exist_ok=True)
                         created_dirs.append(full_path)
+                        logger.info(f"[AI3] Created directory: {rel_path}")
+                        
+                        # Додавання .gitkeep, якщо директорія пуста
                         if not value:
-                            gitkeep_path = os.path.join(full_path, GITKEEP_FILENAME) # Use constant
-                            with open(gitkeep_path, "w") as f:
-                                f.write("")
-                            logger.info(
-                                f"[AI3] Created .gitkeep in empty directory: {new_rel_path}"
-                            )
-                    await _create_recursive(value, new_rel_path)
-                elif value is None or isinstance(value, str):
-                    parent_dir = os.path.dirname(full_path)
-                    if not os.path.exists(parent_dir):
-                        os.makedirs(parent_dir)
-                        logger.info(
-                            f"[AI3] Created parent directory: {os.path.relpath(parent_dir, base_path)}"
-                        )
+                            gitkeep_path = os.path.join(full_path, GITKEEP_FILENAME)
+                            async with aiofiles.open(gitkeep_path, "w") as f:
+                                await f.write("")
+                            created_files.append(gitkeep_path)
+                            logger.info(f"[AI3] Created .gitkeep in empty directory: {rel_path}")
                     
-                    # Перевіряємо, чи шлях не містить 'project/' без явної вказівки в структурі
-                    if "project/" in new_rel_path and "project" not in structure_obj:
-                        logger.warning(f"[AI3] Path '{new_rel_path}' contains 'project/', but structure does not. Adjusting to remove 'project/'.")
-                        new_rel_path = new_rel_path.replace("project/", "", 1)
-                        full_path = os.path.join(base_path, new_rel_path)
-                        # Переконуємося, що батьківська директорія існує після зміни шляху
-                        parent_dir = os.path.dirname(full_path)
-                        if not os.path.exists(parent_dir):
-                            os.makedirs(parent_dir)
-
+                    # Рекурсивний виклик для вкладених директорій
+                    await _create_recursive(value, rel_path)
+                    
+                elif value is None or isinstance(value, str):
+                    # Це файл
                     if not os.path.exists(full_path):
-                        initial_content = (
-                            value
-                            if isinstance(value, str)
-                            else "# Initial empty file created by AI3\n"
-                        )
-                        with open(full_path, "w", encoding="utf-8") as f:
-                            f.write(initial_content)
-                        logger.info(f"[AI3] Created file: {new_rel_path}")
+                        content = value if isinstance(value, str) else ""
+                        # Додавання переносу рядка, якщо його немає
+                        if content and not content.endswith('\n'):
+                            content += '\n'
+                            
+                        async with aiofiles.open(full_path, "w", encoding="utf-8") as f:
+                            await f.write(content)
+                            
                         created_files.append(full_path)
+                        logger.info(f"[AI3] Created file: {rel_path}")
                     else:
-                        logger.info(
-                            f"[AI3] File already exists, skipping creation: {new_rel_path}"
-                        )
+                        skipped_files.append(full_path)
+                        logger.info(f"[AI3] File already exists, skipping: {rel_path}")
                 else:
-                    logger.warning(
-                        f"[AI3] Warning: Unknown type in structure for key '{key}', skipping: {type(value)}"
-                    )
-
-            except OSError as e:
-                logger.error(f"[AI3] Error creating file/directory {new_rel_path}: {e}")
+                    # Невідомий тип
+                    logger.warning(f"[AI3] Невідомий тип даних '{type(value)}' для '{key}' в '{rel_path}'")
+                    
             except Exception as e:
-                logger.error(f"[AI3] Unexpected error processing {new_rel_path}: {e}")
+                logger.error(f"[AI3] Помилка при створенні {rel_path}: {e}")
 
     try:
         logger.info("[AI3] Starting file creation from structure...")
         await _create_recursive(structure_obj, "")
-        files_to_commit = created_files + [
-            os.path.join(d, GITKEEP_FILENAME) # Use constant
-            for d in created_dirs
-            if os.path.exists(os.path.join(d, GITKEEP_FILENAME)) # Use constant
-        ]
-        _commit_changes(
-            repo, files_to_commit, "Created initial project structure from AI"
-        )
-        logger.info("[AI3] File creation process completed.")
-        await send_ai3_report("structure_creation_completed")
-        return True
+        
+        if created_files:
+            _commit_changes(repo, created_files, "AI3: Created initial project structure")
+        
+        logger.info(f"[AI3] File creation completed: {len(created_files)} files created, {len(skipped_files)} skipped")
+        return created_files, skipped_files
     except Exception as e:
-        logger.error(f"[AI3] Error in create_files_from_structure: {e}")
-        await initiate_collaboration(str(e), "Failed to create files from structure")
-        await send_ai3_report("structure_creation_failed", {"error": str(e)})
-        return False
+        logger.error(f"[AI3] Error in create_files_from_structure: {e}", exc_info=True)
+        return [], []
 
 
 # Remove simple_log_monitor as its functionality is covered by monitor_system_errors and logging setup
