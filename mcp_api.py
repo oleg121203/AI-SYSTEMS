@@ -44,6 +44,9 @@ load_dotenv()
 # --- CHANGE: Define constants ---
 CONFIG_FILE = "config.json"
 TEXT_PLAIN = "text/plain"
+# --- CHANGE: Add constant for default repo placeholder ---
+DEFAULT_GITHUB_REPO_PLACEHOLDER = "YOUR_GITHUB_USERNAME/YOUR_REPO_NAME"
+# --- END CHANGE ---
 # --- END CHANGE ---
 
 
@@ -90,7 +93,9 @@ except Exception as e:
     exit(1)
 
 # --- CHANGE: Define GITHUB_MAIN_REPO and GITHUB_TOKEN ---
-GITHUB_MAIN_REPO = config.get("github_repo", "YOUR_GITHUB_USERNAME/YOUR_REPO_NAME")
+# --- CHANGE: Use constant for default value ---
+GITHUB_MAIN_REPO = config.get("github_repo", DEFAULT_GITHUB_REPO_PLACEHOLDER)
+# --- END CHANGE ---
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN") # Get token from environment variable
 # --- END CHANGE ---
 
@@ -341,109 +346,140 @@ async def periodic_chart_updates():
             await asyncio.sleep(10)  # Продовжуємо спробувати навіть при помилці
 
 
-async def write_and_commit_code(
-    file_rel_path: str, content: str, subtask_id: Optional[str]
-):
-    """Helper function to write file content, commit changes, and trigger dispatch.""" # Updated docstring
-    global processed_tasks_count  # Доступ к глобальному счетчику
-    commit_successful = False # Flag to track commit success
-    async with file_write_lock:  # Используем блокировку
-        if not is_safe_path(repo_path, file_rel_path):
-            logger.error(
-                f"[API-Write] Attempt to write to unsafe path denied: {file_rel_path}"
-            )
-            return False
+async def _determine_adjusted_path(repo_path: Path, file_rel_path: str, repo_dir: str) -> str:
+    """Determines the adjusted relative path within the repo, handling the 'project' subdirectory."""
+    project_subdir = "project"
+    potential_project_root = repo_path / project_subdir
+    adjusted_rel_path = file_rel_path
 
-        full_path = repo_path / file_rel_path
-        try:
-            # Ensure directory exists
+    if potential_project_root.is_dir():
+        if not file_rel_path.startswith(project_subdir + "/") and file_rel_path != project_subdir:
+            adjusted_rel_path = os.path.join(project_subdir, file_rel_path)
+            logger.info(f"[API-Write] Prepending '{project_subdir}/' to path '{file_rel_path}' as '{repo_dir}/{project_subdir}/' exists. New path: '{adjusted_rel_path}'")
+    else:
+        if file_rel_path.startswith(project_subdir + "/"):
+            original_path = file_rel_path
+            adjusted_rel_path = file_rel_path[len(project_subdir) + 1:]
+            logger.warning(f"[API-Write] '{repo_dir}/{project_subdir}/' does not exist, but path '{original_path}' starts with '{project_subdir}/'. Removing prefix. New path: '{adjusted_rel_path}'")
+        elif file_rel_path == project_subdir:
+            original_path = file_rel_path
+            adjusted_rel_path = "."
+            logger.warning(f"[API-Write] '{repo_dir}/{project_subdir}/' does not exist, but path is '{original_path}'. Interpreting as root '{adjusted_rel_path}'.")
+
+    if not adjusted_rel_path and file_rel_path:
+        adjusted_rel_path = "."
+        logger.warning("[API-Write] Adjusted path became empty, defaulting to '.'")
+
+    return adjusted_rel_path
+
+async def _write_file_content(full_path: Path, content: str, adjusted_rel_path: str, subtask_id: Optional[str]) -> bool:
+    """Writes content to the specified file path."""
+    try:
+        if adjusted_rel_path and adjusted_rel_path != ".":
             full_path.parent.mkdir(parents=True, exist_ok=True)
 
-            # Write content using aiofiles
-            async with aiofiles.open(full_path, "w", encoding="utf-8") as f:
-                await f.write(content)
-            logger.info(
-                f"[API-Write] Successfully wrote code to: {file_rel_path} (Subtask: {subtask_id})"
-            )
-
-            # Commit changes using gitpython
-            if repo:
-                try:
-                    repo.index.add([str(full_path)])
-                    commit_message = f"AI2 code update for {file_rel_path}"
-                    if subtask_id:
-                        commit_message += f" (Subtask: {subtask_id})"
-                    if repo.is_dirty(index=True, working_tree=False):
-                        repo.index.commit(commit_message)
-                        logger.info(f"[API-Git] Committed changes for: {file_rel_path}")
-                        commit_successful = True # Mark commit as successful
-                        # Обновляем историю после успешного коммита
-                        processed_tasks_count += 1
-                        processed_history.append(processed_tasks_count)
-                        # Отправляем обновление истории коммитов в формате для графика
-                        history_list = list(processed_history)
-                        # --- CHANGE: Remove unused variable ---
-                        # git_activity_data = {
-                        #     "labels": [f"Commit {i+1}" for i in range(len(history_list))],
-                        #     "values": history_list
-                        # }
-                        # --- END CHANGE ---
-                        # --- CHANGE: Use broadcast_chart_updates instead of specific git update ---
-                        # await broadcast_specific_update({"git_activity": git_activity_data}) # Use git_activity key
-                        # Викликаємо повне оновлення графіків, яке включає і git_activity
-                        await broadcast_chart_updates()
-                        # --- END CHANGE ---
-                    else:
-                        logger.info(
-                            f"[API-Git] No changes staged for commit for: {file_rel_path}"
-                        )
-                        # Consider if writing without changes should still trigger dispatch?
-                        # For now, only trigger if a commit was made.
-                        commit_successful = True # Or False depending on desired logic
-
-                # --- CHANGE: Use GitCommandError ---
-                except GitCommandError as e:
-                # --- END CHANGE ---
-                    logger.error(f"[API-Git] Error committing {file_rel_path}: {e}")
-                    # Continue even if commit fails, file is written
-                except Exception as e:
-                    logger.error(
-                        f"[API-Git] Unexpected error during commit for {file_rel_path}: {e}"
-                    )
-
-            # --- CHANGE: Trigger repository_dispatch after successful commit ---
-            if commit_successful and GITHUB_TOKEN and GITHUB_MAIN_REPO != "YOUR_GITHUB_USERNAME/YOUR_REPO_NAME":
-                logger.info(f"[API-GitHub] Triggering repository_dispatch for {GITHUB_MAIN_REPO}")
-                headers = {
-                    "Authorization": f"token {GITHUB_TOKEN}",
-                    "Accept": "application/vnd.github.v3+json",
-                }
-                data = {"event_type": "code-committed-in-repo", "client_payload": {"file": file_rel_path, "subtask_id": subtask_id}}
-                dispatch_url = f"https://api.github.com/repos/{GITHUB_MAIN_REPO}/dispatches"
-                try:
-                    response = requests.post(dispatch_url, headers=headers, json=data, timeout=15)
-                    response.raise_for_status() # Raise exception for bad status codes
-                    logger.info(f"[API-GitHub] Successfully triggered repository_dispatch event 'code-committed-in-repo' for {file_rel_path}")
-                except requests.exceptions.RequestException as e:
-                    logger.error(f"[API-GitHub] Failed to trigger repository_dispatch: {e}")
-                except Exception as e:
-                     logger.error(f"[API-GitHub] Unexpected error during repository_dispatch: {e}")
-            elif not GITHUB_TOKEN:
-                 logger.warning("[API-GitHub] GITHUB_TOKEN not set. Skipping repository_dispatch.")
-            elif GITHUB_MAIN_REPO == "YOUR_GITHUB_USERNAME/YOUR_REPO_NAME":
-                 logger.warning("[API-GitHub] github_repo not configured in config.json. Skipping repository_dispatch.")
-            # --- END CHANGE ---
-
-            return True
-        except OSError as e:
-            logger.error(f"[API-Write] Error writing file {full_path}: {e}")
+        if full_path.is_dir():
+            logger.warning(f"[API-Write] Adjusted path '{adjusted_rel_path}' points to a directory. Cannot write file content.")
             return False
-        except Exception as e:
-            logger.error(
-                f"[API-Write] Unexpected error writing file {full_path}: {e}",
-                exc_info=True,
-            )
+
+        async with aiofiles.open(full_path, "w", encoding="utf-8") as f:
+            await f.write(content)
+        logger.info(f"[API-Write] Successfully wrote code to: {adjusted_rel_path} (Subtask: {subtask_id})")
+        return True
+    except OSError as e:
+        logger.error(f"[API-Write] Error writing file {full_path} (adjusted path: {adjusted_rel_path}): {e}")
+        return False
+    except Exception as e:
+        logger.error(f"[API-Write] Unexpected error writing file {full_path} (adjusted path: {adjusted_rel_path}): {e}", exc_info=True)
+        return False
+
+async def _commit_changes(repo: Optional[Repo], adjusted_rel_path: str, subtask_id: Optional[str]) -> bool:
+    """Commits changes for the specified path using gitpython."""
+    global processed_tasks_count, processed_history
+    if not repo:
+        logger.warning("[API-Git] Git repository not available. Skipping commit.")
+        return False # Indicate commit did not happen
+
+    try:
+        repo.index.add([adjusted_rel_path])
+        commit_message = f"AI2 code update for {adjusted_rel_path}"
+        if subtask_id:
+            commit_message += f" (Subtask: {subtask_id})"
+
+        if repo.is_dirty(index=True, working_tree=False):
+            repo.index.commit(commit_message)
+            logger.info(f"[API-Git] Committed changes for: {adjusted_rel_path}")
+
+            # Update history and broadcast
+            processed_tasks_count += 1
+            processed_history.append(processed_tasks_count)
+            await broadcast_chart_updates() # Broadcast full chart update
+            return True # Commit successful
+        else:
+            logger.info(f"[API-Git] No changes staged for commit for: {adjusted_rel_path}")
+            # Decide if writing without changes should be considered success for dispatch trigger
+            return True # Treat as success for triggering dispatch even if no commit needed
+    except GitCommandError as e:
+        logger.error(f"[API-Git] Error committing {adjusted_rel_path}: {e}")
+        return False # Commit failed
+    except Exception as e:
+        logger.error(f"[API-Git] Unexpected error during commit for {adjusted_rel_path}: {e}")
+        return False # Commit failed
+
+async def _trigger_repository_dispatch(commit_successful: bool, adjusted_rel_path: str, subtask_id: Optional[str]):
+    """Triggers a GitHub repository_dispatch event if conditions are met."""
+    if not commit_successful:
+        logger.debug("[API-GitHub] Skipping repository_dispatch because commit was not successful.")
+        return
+    if not GITHUB_TOKEN:
+        logger.warning("[API-GitHub] GITHUB_TOKEN not set. Skipping repository_dispatch.")
+        return
+    if GITHUB_MAIN_REPO == DEFAULT_GITHUB_REPO_PLACEHOLDER:
+        logger.warning("[API-GitHub] github_repo not configured in config.json. Skipping repository_dispatch.")
+        return
+
+    logger.info(f"[API-GitHub] Triggering repository_dispatch for {GITHUB_MAIN_REPO}")
+    headers = {
+        "Authorization": f"token {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github.v3+json",
+    }
+    data = {"event_type": "code-committed-in-repo", "client_payload": {"file": adjusted_rel_path, "subtask_id": subtask_id}}
+    dispatch_url = f"https://api.github.com/repos/{GITHUB_MAIN_REPO}/dispatches"
+    try:
+        response = requests.post(dispatch_url, headers=headers, json=data, timeout=15)
+        response.raise_for_status()
+        logger.info(f"[API-GitHub] Successfully triggered repository_dispatch event 'code-committed-in-repo' for {adjusted_rel_path}")
+    except requests.exceptions.RequestException as e:
+        logger.error(f"[API-GitHub] Failed to trigger repository_dispatch: {e}")
+    except Exception as e:
+        logger.error(f"[API-GitHub] Unexpected error during repository_dispatch: {e}")
+
+
+async def write_and_commit_code(
+    file_rel_path: str, content: str, subtask_id: Optional[str]
+) -> bool:
+    """Helper function to write file content, commit changes, and trigger dispatch."""
+    adjusted_rel_path = await _determine_adjusted_path(repo_path, file_rel_path, repo_dir)
+
+    async with file_write_lock:
+        if not is_safe_path(repo_path, adjusted_rel_path):
+            logger.error(f"[API-Write] Attempt to write to unsafe adjusted path denied: {adjusted_rel_path} (original: {file_rel_path})")
             return False
+
+        full_path = repo_path / adjusted_rel_path
+
+        write_successful = await _write_file_content(full_path, content, adjusted_rel_path, subtask_id)
+        if not write_successful:
+            return False # Stop if writing failed
+
+        commit_successful = await _commit_changes(repo, adjusted_rel_path, subtask_id)
+
+        # Trigger dispatch regardless of commit success *if writing succeeded*?
+        # Current logic triggers only if commit_successful is True (which includes "no changes staged")
+        await _trigger_repository_dispatch(commit_successful, adjusted_rel_path, subtask_id)
+
+        # Return overall success (writing succeeded, commit attempted/succeeded/no-op)
+        return write_successful # Or return commit_successful depending on strictness needed
 
 
 def process_test_results(test_data: Report, subtask_id: str):  # Уточним тип test_data
@@ -499,7 +535,7 @@ def build_directory_structure(start_path):
     return structure
 
 # Initialize structure from repo directory on startup
-if os.path.exists(repo_path):
+if (repo_path).exists():
     try:
         current_structure = build_directory_structure(repo_path)
         logger.info(f"Initial file structure built from {repo_path}")
@@ -593,7 +629,7 @@ def get_progress_chart_data():
     
     # Формуємо підсумкову точку даних з повною міткою часу
     return {
-        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%М:%S"),
+        "timestamp": datetime.now().strftime("%Y-%м-%d %H:%М:%S"),
         "completed_tasks": completed_tasks_count,
         "successful_tests": successful_tests_count,
         "git_actions": current_git_actions,
@@ -1015,9 +1051,11 @@ async def update_ai_provider(data: dict):
             return {"status": "success", "message": message}
         except Exception as e:
             logger.error(f"Failed to write updated config.json: {e}")
+            # --- CHANGE: Fix status_code usage ---
             raise HTTPException(
-                status_code(500), detail="Failed to save updated configuration file."
+                status_code=500, detail="Failed to save updated configuration file."
             )
+            # --- END CHANGE ---
     else:
         logger.info(message)
         return {"status": "no_change", "message": message}
@@ -1093,9 +1131,11 @@ async def update_config(data: dict):
             return {"status": "config updated"}
         except Exception as e:
             logger.error(f"Failed to write updated config.json: {e}")
+            # --- CHANGE: Fix status_code usage ---
             raise HTTPException(
-                status_code(500), detail="Failed to save updated configuration file."
+                status_code=500, detail="Failed to save updated configuration file."
             )
+            # --- END CHANGE ---
     else:
         logger.info("No configuration changes detected in update request.")
         return {"status": "no changes detected"}
@@ -1139,9 +1179,11 @@ async def update_config_item(data: dict):
             else:
                 # Якщо ключа раніше не було, видаляємо його
                 config.pop(key, None)
+            # --- CHANGE: Fix status_code usage ---
             raise HTTPException(
-                status_code(500), detail=f"Failed to save updated configuration file for '{key}'."
+                status_code=500, detail=f"Failed to save updated configuration file for '{key}'."
             )
+            # --- END CHANGE ---
     else:
         logger.info(f"Configuration item '{key}' already has the value '{value}'. No change.")
         return {"status": "no change detected"}

@@ -332,6 +332,8 @@ body {
   flex-direction: column; /* Stack elements vertically */
   transition: box-shadow 0.3s ease; /* Smooth shadow transition */
   min-height: 0;
+  resize: both; /* Allow resizing */
+  overflow: auto; /* Necessary for resize handle */
 }
 
 .panel h2 {
@@ -347,18 +349,21 @@ body {
 .control-panel {
   grid-column: span 1;
 }
+
 .monitoring-panel {
   grid-column: span 1;
 }
+
 .file-panel {
   grid-column: span 1; /* Adjust span as needed */
+  display: flex; /* Ensure flex layout */
+  flex-direction: column; /* Stack content vertically */
 }
-/* REMOVE .log-panel from here if it exists */
-/* .log-panel { */
-/*   grid-column: span 1; */ /* Adjust span as needed */
-/* } */
+
 .queue-panel {
   grid-column: span 1; /* Adjust span as needed */
+  display: flex; /* Use flexbox */
+  flex-direction: column; /* Stack vertically */
 }
 
 .log-panel {
@@ -466,16 +471,15 @@ body {
   background: var(--input-bg); /* Use theme variable */
   border: 1px solid var(--input-border); /* Use theme variable */
   border-radius: 4px;
-  resize: vertical;
   color: var(--input-text); /* Use theme variable */
   font-size: 0.9em;
   font-family: monospace;
   transition: background-color 0.3s ease, border-color 0.3s ease,
     color 0.3s ease;
+  flex-grow: 1; /* Allow textarea to grow within the panel */
 }
 
 .prompt-editor textarea {
-  height: 60px; /* Specific height for prompt textareas */
 }
 
 .config-item input[type="number"] {
@@ -648,8 +652,6 @@ body {
 }
 
 #file-structure {
-  height: 200px; /* Fixed initial height */
-  overflow-y: auto;
   font-family: monospace;
   background: var(--bg-color);
   padding: 10px;
@@ -658,6 +660,7 @@ body {
   margin-bottom: 15px;
   font-size: 0.9em;
   flex-shrink: 0; /* Prevent shrinking */
+  flex-grow: 1; /* Allow to grow within the resizable panel */
 }
 
 #file-structure > ul {
@@ -679,6 +682,7 @@ body {
   min-height: 250px; /* Minimum editor height */
   width: 100%;
   background-color: var(--editor-bg); /* Use theme variable */
+  overflow: hidden; /* Prevent the container div from scrolling */
 }
 
 #file-structure ul {
@@ -709,15 +713,12 @@ body {
 }
 
 /* Queue Panel */
-.queue-panel {
-  grid-column: span 1; /* Adjust span as needed */
-}
-
 .queue-list {
   display: flex; /* Use flexbox */
   flex-direction: column; /* Stack items vertically */
   gap: 15px;
   flex-grow: 1;
+  min-height: 0; /* Allow shrinking */
 }
 
 .queue-list > div {
@@ -831,7 +832,6 @@ body {
 
 /* Log Panel */
 #log-content {
-  overflow-y: auto; /* Keep scroll for log content itself */
   background: var(--bg-color);
   border: 1px solid var(--border-color);
   border-radius: 4px;
@@ -841,17 +841,6 @@ body {
   flex-grow: 1; /* Allow log content to fill available space in the panel */
   color: var(--text-color); /* Ensure text is visible */
   margin-bottom: 10px; /* Space before button */
-  min-height: 50px;
-}
-#log-content p {
-  margin: 2px 0;
-  white-space: pre-wrap; /* Preserve whitespace and wrap */
-  word-break: break-all; /* Break long lines */
-}
-#log-content em {
-  /* Style messages like 'connection established' */
-  color: var(--secondary-color);
-  font-style: normal;
 }
 
 /* Notifications */
@@ -887,7 +876,6 @@ body {
     grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
   }
   .file-panel,
-  /* .log-panel, */ /* REMOVE log-panel from here */
   .queue-panel {
     grid-column: span 1; /* Ensure they stack */
   }
@@ -907,6 +895,8 @@ body {
   }
   .panel {
     min-width: unset; /* Remove min-width */
+    resize: none; /* Disable resizing on small screens */
+    overflow: hidden; /* Hide overflow on small screens if resize is disabled */
   }
   .charts {
     grid-template-columns: 1fr; /* Ensure charts stack on small screens */
@@ -924,7 +914,6 @@ body {
     width: calc(100% - 30px);
   }
   .queue-panel {
-    resize: none;
     min-height: unset;
   }
   /* ... existing responsive styles ... */
@@ -1091,7 +1080,6 @@ body {
 }
 
 #log-content {
-  overflow-y: auto;
   background: var(--bg-color);
   border: 1px solid var(--border-color);
   border-radius: 4px;
@@ -1101,7 +1089,6 @@ body {
   flex-grow: 1;
   color: var(--text-color);
   margin-bottom: 10px; /* Space before button */
-  min-height: 50px;
 }
 
 #log-content p {
