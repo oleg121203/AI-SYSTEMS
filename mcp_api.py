@@ -146,20 +146,21 @@ repo_dir = config.get("repo_dir", "repo")
 repo_path = Path(repo_dir).resolve()  # Use absolute path
 os.makedirs(repo_path, exist_ok=True)  # Ensure repo directory exists
 
+# Ensure repo is treated as global if re-assigned
+repo: Optional[Repo] = None
 try:
-    # --- CHANGE: Use Repo ---
     repo = Repo(repo_path)
-    # --- END CHANGE ---
     logger.info(f"Initialized existing Git repository at {repo_path}")
-# --- CHANGE: Use git.exc ---
 except git.exc.InvalidGitRepositoryError:
-    repo = Repo.init(repo_path)
-# --- END CHANGE ---
-    logger.info(f"Initialized new Git repository at {repo_path}")
+    try:
+        repo = Repo.init(repo_path)
+        logger.info(f"Initialized new Git repository at {repo_path}")
+    except Exception as e:
+        logger.error(f"Error initializing Git repository at {repo_path}: {e}")
+        repo = None # Indicate repo is not available
 except Exception as e:
-    logger.error(f"Error initializing Git repository at {repo_path}: {e}")
-    # Decide if this is critical - maybe continue without Git? For now, log error.
-    repo = None  # Indicate repo is not available
+    logger.error(f"Error accessing Git repository at {repo_path}: {e}")
+    repo = None # Indicate repo is not available
 
 
 # --- Global State ---
@@ -425,12 +426,9 @@ async def _write_file_content(full_path: Path, content: str, adjusted_rel_path: 
         logger.error(f"[API-Write] Unexpected error writing file {full_path} (adjusted path: {adjusted_rel_path}): {e}", exc_info=True)
         return False
 
-async def _commit_changes(repo: Optional[Repo], adjusted_rel_path: str, subtask_id: Optional[str]) -> bool:
+async def _commit_changes(repo: Repo, adjusted_rel_path: str, subtask_id: Optional[str]) -> bool:
     """Commits changes for the specified path using gitpython."""
     global processed_tasks_count, processed_history
-    if not repo:
-        logger.warning("[API-Git] Git repository not available. Skipping commit.")
-        return False # Indicate commit did not happen
 
     try:
         repo.index.add([adjusted_rel_path])
@@ -452,7 +450,8 @@ async def _commit_changes(repo: Optional[Repo], adjusted_rel_path: str, subtask_
             # Decide if writing without changes should be considered success for dispatch trigger
             return True # Treat as success for triggering dispatch even if no commit needed
     except GitCommandError as e:
-        logger.error(f"[API-Git] Error committing {adjusted_rel_path}: {e}")
+        logger.error(f"[API-Git] GitCommandError committing {adjusted_rel_path}: {e}")
+        logger.error(f"[API-Git] Stderr: {e.stderr}")
         return False # Commit failed
     except Exception as e:
         logger.error(f"[API-Git] Unexpected error during commit for {adjusted_rel_path}: {e}")
@@ -504,7 +503,16 @@ async def write_and_commit_code(
         if not write_successful:
             return False # Stop if writing failed
 
-        commit_successful = await _commit_changes(repo, adjusted_rel_path, subtask_id)
+        try:
+            current_repo = Repo(repo_path) # Get a fresh repo object reflecting current state
+        except git.exc.InvalidGitRepositoryError:
+            logger.error("[API-Git] Failed to re-initialize repository. Skipping commit.")
+            return False # Cannot commit if repo is invalid
+        except Exception as e:
+            logger.error(f"[API-Git] Unexpected error re-initializing repository: {e}")
+            return False # Cannot commit if repo init fails
+
+        commit_successful = await _commit_changes(current_repo, adjusted_rel_path, subtask_id)
 
         # Trigger dispatch regardless of commit success *if writing succeeded*?
         # Current logic triggers only if commit_successful is True (which includes "no changes staged")
@@ -1273,11 +1281,15 @@ async def start_all(background_tasks: BackgroundTasks):
     ai_status["ai3"] = True
     await broadcast_full_status() # Update UI immediately
 
-    # Run the restart script in the background
-    background_tasks.add_task(run_restart_script, "restart")
+    # --- CHANGE: Call 'start_ai' action ---
+    # Run the start_ai script in the background
+    background_tasks.add_task(run_restart_script, "start_ai")
+    # --- END CHANGE ---
 
     return JSONResponse(
-        {"status": "Restart process initiated.", "ai_status": ai_status}
+        # --- CHANGE: Update status message ---
+        {"status": "Start AI process initiated.", "ai_status": ai_status}
+        # --- END CHANGE ---
     )
 
 
@@ -1289,26 +1301,40 @@ async def stop_all(background_tasks: BackgroundTasks):
     ai_status["ai3"] = False
     await broadcast_full_status() # Update UI immediately
 
+    # --- CHANGE: Call 'stop' action ---
     # Run the stop script in the background
     background_tasks.add_task(run_restart_script, "stop")
+    # --- END CHANGE ---
 
     return JSONResponse(
-        {"status": "Stop process initiated.", "ai_status": ai_status}
+        # --- CHANGE: Update status message ---
+        {"status": "Stop AI process initiated.", "ai_status": ai_status}
+        # --- END CHANGE ---
     )
 
 
 @app.post("/clear")
-async def clear_state(background_tasks: BackgroundTasks):
-    """Clears logs, queues, resets state, and restarts services."""
-    global subtask_status, report_metrics, current_structure, ai3_report, processed_history, collaboration_requests
-    global executor_queue, tester_queue, documenter_queue
+async def clear_state(): # Removed background_tasks as we await commands now
+    """Stops AI, clears state, repo, logs, cache, then restarts AI (keeps MCP API running)."""
+    global subtask_status, report_metrics, current_structure, ai3_report, processed_history, collaboration_requests, processed_tasks_count
+    global executor_queue, tester_queue, documenter_queue, repo # Declare repo as global to allow re-assignment
 
-    logger.warning("Clearing application state: logs, queues, status...")
+    logger.warning("Initiating AI stop and full state/repo clear...")
 
+    # 1. Stop AI services
+    logger.info("Stopping AI services...")
+    stop_ai_success = await run_restart_script("stop")
+    if not stop_ai_success:
+        logger.error("Failed to stop AI services. Aborting clear operation.")
+        raise HTTPException(status_code=500, detail="Failed to stop AI services.")
+    logger.info("AI services stopped.")
+    await asyncio.sleep(3) # Pause after stopping AI
+
+    # 2. Clear internal state (queues, statuses, etc.)
+    logger.info("Clearing internal MCP state (queues, statuses...).")
     # Clear queues
-    # ... (queue clearing logic remains the same)
     while not executor_queue.empty():
-        try: executor_queue.get_nowait() # Use non-blocking get
+        try: executor_queue.get_nowait()
         except asyncio.QueueEmpty: break
     while not tester_queue.empty():
         try: tester_queue.get_nowait()
@@ -1316,35 +1342,102 @@ async def clear_state(background_tasks: BackgroundTasks):
     while not documenter_queue.empty():
         try: documenter_queue.get_nowait()
         except asyncio.QueueEmpty: break
-    logger.info("Cleared task queues.")
-
     # Reset state variables
-    # ... (state reset logic remains the same)
     subtask_status = {}
     report_metrics = {}
+    current_structure = {} # Reset structure as repo is cleared
     ai3_report = {"status": "pending"}
     processed_history.clear()
+    processed_tasks_count = 0 # Reset counter
     collaboration_requests = []
-    logger.info("Reset internal state variables.")
+    logger.info("Internal MCP state cleared.")
 
-    # Clear log file (keep this synchronous for simplicity before restart)
+    # 3. Clear repo, logs, cache using shell commands
+    async def run_shell_command(command, description, working_dir=None):
+        if working_dir is None:
+            # Use the parent directory of repo_path (workspace root)
+            working_dir = repo_path.parent
+        logger.info(f"Executing: {description} (`{command}` in `{working_dir}`)")
+        process = await asyncio.create_subprocess_shell(
+            command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=working_dir
+        )
+        stdout, stderr = await process.communicate()
+        if process.returncode == 0:
+            logger.info(f"Successfully executed: {description}")
+            if stdout: logger.debug(f"stdout:\n{stdout.decode(errors='ignore')}")
+            return True
+        else:
+            logger.error(f"Failed to execute: {description}. Return code: {process.returncode}")
+            if stderr: logger.error(f"stderr:\n{stderr.decode(errors='ignore')}")
+            if stdout: logger.error(f"stdout:\n{stdout.decode(errors='ignore')}") # Log stdout on error too
+            return False
+
+    # Clear repo contents (preserves repo/ directory itself)
+    # Ensure repo_path is correctly used for the working directory
+    repo_clear_cmd = f"find . -mindepth 1 -delete" # Command to run inside repo_dir
+    if not await run_shell_command(repo_clear_cmd, "Clear repository contents", working_dir=repo_path):
+         logger.error("Failed to clear repository contents. Continuing cleanup...")
+
+    # Re-initialize git repo
+    logger.info(f"Re-initializing Git repository at {repo_path}")
     try:
-        with open(log_file_path, "w") as f:
-            f.write("")
-        logger.info(f"Cleared log file: {log_file_path}")
+        # Use git init command via shell, ensure it runs in repo_path
+        init_cmd = f"git init" # Command to run inside repo_dir
+        if not await run_shell_command(init_cmd, "Initialize Git repository", working_dir=repo_path):
+             logger.error("Failed to re-initialize Git repository via command.")
+             repo = None # Mark as unavailable
+        else:
+             # Re-initialize the global repo object
+             try:
+                 repo = Repo(repo_path)
+                 logger.info("Global repo object re-initialized.")
+                 # Add initial commit? Optional, but might prevent issues.
+                 # try:
+                 #     repo.index.commit("Initial commit after clear")
+                 #     logger.info("Added initial commit.")
+                 # except Exception as commit_err:
+                 #     logger.warning(f"Could not create initial commit: {commit_err}")
+             except Exception as e:
+                 logger.error(f"Failed to re-initialize global repo object: {e}")
+                 repo = None # Mark as unavailable
     except Exception as e:
-        logger.error(f"Failed to clear log file {log_file_path}: {e}")
+        logger.error(f"Error during Git re-initialization: {e}")
+        repo = None
 
-    # Update status optimistically before restarting
-    ai_status["ai1"] = True
-    ai_status["ai2"] = True
-    ai_status["ai3"] = True
-    await broadcast_full_status() # Update UI immediately
+    # Clear logs (run from workspace root)
+    log_clear_cmd = f"rm -f logs/*.log"
+    await run_shell_command(log_clear_cmd, "Clear log files") # Don't abort if fails
 
-    # Schedule the restart script to run after the response is sent
-    background_tasks.add_task(run_restart_script, "restart")
+    # Clear Python cache (run from workspace root)
+    cache_clear_cmd_1 = "find . -type d -name '__pycache__' -exec rm -rf {} +"
+    cache_clear_cmd_2 = "find . -name '*.pyc' -delete"
+    await run_shell_command(cache_clear_cmd_1, "Clear __pycache__ directories")
+    await run_shell_command(cache_clear_cmd_2, "Clear .pyc files")
 
-    return {"status": "State cleared and restart initiated."}
+    logger.info("Cleanup of repo, logs, and cache finished.")
+    await asyncio.sleep(3) # Pause after cleanup
+
+    # 4. Broadcast cleared state to UI
+    logger.info("Broadcasting cleared state to UI.")
+    await broadcast_full_status() # Send the now empty state
+
+    # 5. Start AI services
+    logger.info("Starting AI services...")
+    start_ai_success = await run_restart_script("start_ai")
+    if not start_ai_success:
+        logger.error("Failed to start AI services after clearing state.")
+        # Return an error response, but don't raise HTTPException as the clear part succeeded
+        return JSONResponse(
+            status_code=500,
+            content={"status": "State cleared, repo reset, but failed to restart AI services."}
+        )
+
+    logger.info("AI services restart initiated.")
+
+    return {"status": "AI stopped, state/repo cleared, AI restart initiated. MCP API remains running."}
 
 
 @app.post("/clear_repo")

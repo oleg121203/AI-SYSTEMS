@@ -3,7 +3,7 @@ let ws;
 const reconnectInterval = 10000; // Reconnect interval 5 seconds
 const maxReconnectAttempts = 10;
 let reconnectAttempts = 0;
-const MAX_LOG_LINES = 30; // Maximum number of log lines to keep
+const MAX_LOG_LINES = 60; // Maximum number of log lines to keep
 let actualTotalTasks = 0; // Add global variable for actual total tasks
 
 // --- Global DOM Elements (cache them, assign in DOMContentLoaded) ---
@@ -1548,15 +1548,16 @@ async function resetSystem() {
     )
   ) {
     try {
-      await sendRequest("/clear", "POST");
-      await sendRequest("/start_all", "POST");
-      showNotification("System reset and restart requested", "info");
-      logContent.innerHTML = "<p><em>System reset requested...</em></p>";
-      updateQueues({ executor: [], tester: [], documenter: [] });
-      updateStats({}, {});
+      // --- CHANGE: Ensure resetSystem calls /clear ---
+      await sendRequest("/clear");
+      // --- END CHANGE ---
+      showNotification(
+        "System reset initiated. Services will restart.",
+        "warning"
+      );
     } catch (error) {
       console.error("Failed to reset system:", error);
-      // Error handled by sendRequest
+      // Error already shown by sendRequest
     }
   }
 }

@@ -118,18 +118,25 @@ start_services() {
     fi
 }
 
-# Функція для зупинки всіх сервісів
-stop_all_services() {
-    echo "1. Stopping all existing MCP services using PID files and pkill fallback..."
+# Функція для зупинки ТІЛЬКИ AI сервісів
+stop_ai_services() {
+    echo "1. Stopping AI services (AI1, AI2, AI3) using PID files and pkill fallback..."
     # Use more specific pkill patterns
     stop_process "AI3" "ai3" "python3 ai3.py"
     stop_process "AI2 documenter" "ai2_documenter" "python3 ai2.py --role documenter"
     stop_process "AI2 tester" "ai2_tester" "python3 ai2.py --role tester"
     stop_process "AI2 executor" "ai2_executor" "python3 ai2.py --role executor"
     stop_process "AI1" "ai1" "python3 ai1.py"
-    stop_process "MCP API" "mcp_api" "python3 mcp_api.py"
+    echo "Finished stopping AI services."
+}
 
-    echo "2. Verifying all processes are stopped (redundant check)..."
+# Функція для зупинки ВСІХ сервісів, включаючи MCP API
+stop_all_including_mcp() {
+    echo "Stopping ALL services (AI + MCP API)..."
+    stop_ai_services                                      # Зупиняємо AI сервіси
+    stop_process "MCP API" "mcp_api" "python3 mcp_api.py" # Зупиняємо MCP API
+
+    echo "Verifying all processes are stopped (redundant check)..."
     # Ця перевірка може бути менш надійною, але залишаємо її як додаткову
     if pgrep -f "python3 mcp_api.py" >/dev/null ||
         pgrep -f "python3 ai1.py" >/dev/null ||
@@ -148,7 +155,7 @@ stop_all_services() {
     if [ -n "$PORT_PID" ]; then
         echo "Port 7860 is used by process $PORT_PID. Killing process..."
         kill -9 $PORT_PID || echo "Failed to kill process using port 7860"
-        sleep 2 # Дамо час на звільнення порту
+        sleep 3 # Дамо трохи більше часу на звільнення порту
 
         # Перевірка чи порт звільнився
         if lsof -ti:7860 >/dev/null 2>&1; then
@@ -156,8 +163,7 @@ stop_all_services() {
             echo "Process using port 7860:"
             lsof -i:7860
             echo "Aborting restart. Please free port 7860 manually."
-            # Не виходимо з помилкою, якщо це просто зупинка
-            # exit 1
+            exit 1 # Exit with error for restart action
         else
             echo "Port 7860 successfully freed."
         fi
@@ -166,18 +172,72 @@ stop_all_services() {
     fi
 }
 
+# Функція для запуску ТІЛЬКИ AI сервісів
+start_ai_services() {
+    echo "Starting AI services (AI1, AI2, AI3)..."
+    # Створення необхідних директорій (про всяк випадок)
+    mkdir -p logs
+    mkdir -p repo
+    mkdir -p tmp
+
+    # Перевірка, чи MCP API вже працює (необов'язково, але корисно)
+    if ! curl -s http://localhost:7860 >/dev/null; then
+        echo "WARNING: MCP API does not seem to be running. AI services might not function correctly."
+    fi
+
+    # Запуск AI1
+    echo "Starting AI1 service..."
+    python3 ai1.py >logs/ai1.log 2>&1 &
+    AI1_PID=$!
+    echo $AI1_PID >logs/ai1.pid
+    echo "AI1 has been started in background with PID $AI1_PID"
+
+    # Запуск AI2 (executor, tester, documenter)
+    echo "Starting AI2 executor service..."
+    python3 ai2.py --role executor >logs/ai2_executor.log 2>&1 &
+    AI2_EXEC_PID=$!
+    echo $AI2_EXEC_PID >logs/ai2_executor.pid
+    echo "AI2 executor has been started in background with PID $AI2_EXEC_PID"
+
+    echo "Starting AI2 tester service..."
+    python3 ai2.py --role tester >logs/ai2_tester.log 2>&1 &
+    AI2_TEST_PID=$!
+    echo $AI2_TEST_PID >logs/ai2_tester.pid
+    echo "AI2 tester has been started in background with PID $AI2_TEST_PID"
+
+    echo "Starting AI2 documenter service..."
+    python3 ai2.py --role documenter >logs/ai2_documenter.log 2>&1 &
+    AI2_DOC_PID=$!
+    echo $AI2_DOC_PID >logs/ai2_documenter.pid
+    echo "AI2 documenter has been started in background with PID $AI2_DOC_PID"
+
+    # Запуск AI3
+    echo "Starting AI3 service..."
+    python3 ai3.py >logs/ai3.log 2>&1 &
+    AI3_PID=$!
+    echo $AI3_PID >logs/ai3.pid
+    echo "AI3 has been started in background with PID $AI3_PID"
+
+    echo "AI services have been started!"
+}
+
 # Основна логіка скрипта
 ACTION=${1:-restart} # За замовчуванням виконуємо повний перезапуск
 
 if [ "$ACTION" == "stop" ]; then
-    echo "===== AI-SYSTEMS STOP ====="
-    echo "Starting stop process at $(date)"
-    stop_all_services
-    echo "===== STOP COMPLETED at $(date) ====="
+    echo "===== AI-SYSTEMS AI STOP ====="
+    echo "Starting AI stop process at $(date)"
+    stop_ai_services # Зупиняємо тільки AI
+    echo "===== AI STOP COMPLETED at $(date) ====="
+elif [ "$ACTION" == "start_ai" ]; then
+    echo "===== AI-SYSTEMS AI START ====="
+    echo "Starting AI start process at $(date)"
+    start_ai_services # Запускаємо тільки AI
+    echo "===== AI START COMPLETED at $(date) ====="
 elif [ "$ACTION" == "restart" ]; then
-    echo "===== AI-SYSTEMS RESTART ====="
-    echo "Starting restart process at $(date)"
-    stop_all_services
+    echo "===== AI-SYSTEMS FULL RESTART ====="
+    echo "Starting full restart process at $(date)"
+    stop_all_including_mcp # Зупиняємо ВСЕ
 
     echo "4. Cleaning up Python cache files..."
     find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
@@ -205,8 +265,8 @@ elif [ "$ACTION" == "restart" ]; then
     fi
 
     start_services
-    echo "===== RESTART COMPLETED at $(date) ====="
+    echo "===== FULL RESTART COMPLETED at $(date) ====="
 else
-    echo "Invalid action: $ACTION. Use 'stop' or 'restart'."
+    echo "Invalid action: $ACTION. Use 'stop', 'start_ai', or 'restart'."
     exit 1
 fi
