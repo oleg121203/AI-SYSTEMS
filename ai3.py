@@ -1139,23 +1139,47 @@ class AI3:
     async def monitor_system_errors(self):
         """Monitors for system-level errors or critical failures."""
         logger.info("[AI3] System error monitor started.")
-        check_interval = self.config.get("error_check_interval", 300)  # 5 minutes by default
+        check_interval = self.config.get("error_check_interval", 300)
+        error_patterns = {}  # Track error patterns for prediction
         
         while True:
             try:
                 # Run automated tests
-                await self._run_automated_tests()
+                test_results = await self._run_automated_tests()
                 
-                # Scan logs for errors
-                await self.scan_logs_for_errors()
+                # Analyze error patterns
+                if test_results and test_results.get("failing_tests"):
+                    for test_file, failures in test_results["failing_tests"].items():
+                        error_key = f"{test_file}:{str(failures)}"
+                        if error_key in error_patterns:
+                            error_patterns[error_key]["count"] += 1
+                            if error_patterns[error_key]["count"] >= 3:
+                                # Pattern detected - attempt proactive fix
+                                await self._attempt_pattern_based_fix(test_file, error_patterns[error_key])
+                        else:
+                            error_patterns[error_key] = {"count": 1, "first_seen": datetime.now(), "failures": failures}
+
+                # Scan logs for errors with context analysis
+                await self._scan_logs_with_context()
                 
-                # Check queue sizes for imbalances
+                # Check system health metrics
+                system_metrics = await self._check_system_health()
+                if system_metrics.get("requires_attention"):
+                    await self._send_system_health_alert(system_metrics)
+
+                # Check queue sizes and balance
                 executor_queue_size, all_queue_sizes = await self.check_worker_status()
-                if (executor_queue_size > 20 and all_queue_sizes.get("tester", 0) < 5):
-                    logger.warning(f"[AI3] Queue imbalance detected: executor={executor_queue_size}, tester={all_queue_sizes.get('tester', 0)}")
+                if self._detect_queue_imbalance(all_queue_sizes):
                     await self.send_queue_info_to_ai1(all_queue_sizes)
-                
+                    await self._rebalance_queues(all_queue_sizes)
+
+                # Cleanup old patterns
+                current_time = datetime.now()
+                error_patterns = {k: v for k, v in error_patterns.items() 
+                                if (current_time - v["first_seen"]).total_seconds() < 86400}  # 24 hour retention
+
                 await asyncio.sleep(check_interval)
+                
             except asyncio.CancelledError:
                 logger.info("[AI3] System error monitor stopped.")
                 break

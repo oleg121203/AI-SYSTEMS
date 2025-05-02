@@ -299,87 +299,663 @@ class AI2:
         return error_msg
 
     async def generate_code(self, task: str, filename: str) -> str:
-        """Generate code based on task description."""
-        logger.info(f"Generating code for file: {filename}")
-        # Combine base prompt with system instructions
+        """Generate code based on task description with enhanced context and quality checks."""
+        logger.info(f"[AI2-EXECUTOR] Generating code for file: {filename}")
+        
+        # Get project context from idea.md if available
+        project_context = ""
+        try:
+            with open("repo/idea.md", "r", encoding="utf-8") as f:
+                project_context = f.read()
+        except FileNotFoundError:
+            logger.warning("[AI2-EXECUTOR] idea.md not found. Proceeding without project context.")
+        
+        # Analyze file type and add language-specific context
+        file_ext = os.path.splitext(filename)[1].lower()
+        language_specific_instructions = self._get_language_specific_instructions(file_ext)
+        
+        # Enhanced system prompt with context and best practices
         base_prompt = self.base_prompts[0].format(filename=filename)
-        system_prompt = base_prompt + self.system_instructions
-        user_prompt = f"Task Description: {task}\n\nPlease generate the content for the file '{filename}' based on this task."
-        # FIXED: Use combined identifier instead of passing two arguments
+        system_prompt = f"""{base_prompt}
+        You are an expert programmer focused on writing high-quality, maintainable code.
+        Follow these guidelines:
+        1. Use modern best practices for the target language/framework
+        2. Include proper error handling and input validation
+        3. Write clean, self-documenting code with clear names
+        4. Add brief comments for complex logic
+        5. Consider performance implications
+        6. Follow the project's architectural patterns
+        {language_specific_instructions}
+        {self.system_instructions}"""
+        
+        # Enhanced user prompt with project context
+        user_prompt = f"""Project Context:
+    {project_context[:1000] if project_context else 'No project context available'}
+    
+    Task Description: {task}
+    
+    Generate production-quality code for the file '{filename}' that:
+    - Implements the required functionality
+    - Handles errors appropriately
+    - Is well-structured and maintainable
+    - Follows best practices for the language/framework
+    - Is ready for testing
+    
+    The code should be complete and ready to use."""
+    
+        # Apply rate limiting
         await apply_request_delay(f"ai2_{self.role}")
-        return await self._generate_with_fallback(
-            system_prompt=system_prompt, user_prompt=user_prompt
-        )
-
-    async def generate_tests(self, code: str, filename: str) -> str:
-        """Generate tests for the code."""
-        logger.info(f"Generating tests for file: {filename}")
-        # Combine base prompt with system instructions
-        base_prompt = self.base_prompts[1].format(filename=filename)
-        system_prompt = base_prompt + self.system_instructions.replace("file content", "test code") # Adjust instruction slightly
-        user_prompt = f"Code for file '{filename}':\n```\n{code}\n```\n\nPlease generate unit tests for this code."
-        # FIXED: Use combined identifier instead of passing two arguments
-        await apply_request_delay(f"ai2_{self.role}")
-        test_content = await self._generate_with_fallback(
-            system_prompt=system_prompt, user_prompt=user_prompt
+        
+        # Generate with quality validation
+        code = await self._generate_with_fallback(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt
         )
         
-        # If tests are successfully generated, commit them to Git
-        if test_content and not test_content.startswith("Generation error"):
-            if await self.commit_tests_to_git(filename, test_content):
-                return test_content
+        if code and not code.startswith("Generation error"):
+            # Validate generated code
+            if self._validate_generated_code(code, file_ext):
+                logger.info(f"[AI2-EXECUTOR] Successfully generated and validated code for {filename}")
+                return code
             else:
-                return f"Generation error: Failed to save tests to Git for {filename}"
+                logger.warning(f"[AI2-EXECUTOR] Generated code failed validation for {filename}. Retrying...")
+                # Retry once with stricter quality requirements
+                user_prompt += "\nPlease fix any quality issues in the code and ensure it meets all requirements."
+                code = await self._generate_with_fallback(
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt
+                )
+                
+        return code
+
+    def _get_language_specific_instructions(self, file_ext: str) -> str:
+        """Get language-specific coding guidelines and best practices."""
+        instructions = {
+            '.py': """
+    - Use type hints for function parameters and return values
+    - Follow PEP 8 style guidelines
+    - Use context managers for resource handling
+    - Prefer composition over inheritance
+    - Use descriptive variable names
+    - Include docstrings for public interfaces""",
+            
+            '.js': """
+    - Use modern ES6+ features appropriately
+    - Handle async operations with Promises/async-await
+    - Use const/let instead of var
+    - Include proper error boundaries
+    - Consider browser compatibility
+    - Use proper module imports/exports""",
+            
+            '.ts': """
+    - Use strict TypeScript types
+    - Avoid any type when possible
+    - Use interfaces for object shapes
+    - Handle null/undefined properly
+    - Use type guards when needed
+    - Follow TSLint/ESLint rules""",
+            
+            '.go': """
+    - Follow Go idioms and conventions
+    - Use proper error handling patterns
+    - Implement interfaces implicitly
+    - Use goroutines and channels appropriately
+    - Follow standard project layout
+    - Use meaningful package names""",
+            
+            '.java': """
+    - Follow Java coding conventions
+    - Use appropriate design patterns
+    - Handle exceptions properly
+    - Use interfaces where appropriate
+    - Follow SOLID principles
+    - Consider thread safety""",
+            
+            '.cpp': """
+    - Use modern C++ features
+    - Follow RAII principles
+    - Handle memory management properly
+    - Use smart pointers
+    - Consider const correctness
+    - Handle exceptions appropriately"""
+        }
+        
+        return instructions.get(file_ext, """
+    - Use consistent naming conventions
+    - Handle errors appropriately
+    - Write maintainable, self-documenting code
+    - Include necessary comments
+    - Follow language best practices""")
+
+    def _validate_generated_code(self, code: str, file_ext: str) -> bool:
+        """Validate generated code for common quality issues."""
+        try:
+            if not code or len(code.strip()) < 10:
+                return False
+                
+            # Check for basic code structure
+            if 'import' not in code and 'package' not in code and 'include' not in code:
+                logging.warning("[AI2-EXECUTOR] Generated code missing imports/includes")
+                
+            # Check for error handling
+            error_patterns = {
+                '.py': ['try:', 'except', 'raise'],
+                '.js': ['try {', 'catch', 'throw'],
+                '.ts': ['try {', 'catch', 'throw'],
+                '.go': ['if err != nil', 'error'],
+                '.java': ['try {', 'catch', 'throws'],
+                '.cpp': ['try {', 'catch', 'throw']
+            }
+            
+            patterns = error_patterns.get(file_ext, ['try', 'catch', 'throw', 'error'])
+            has_error_handling = any(pattern in code for pattern in patterns)
+            if not has_error_handling:
+                logging.warning("[AI2-EXECUTOR] Generated code missing error handling")
+                
+            # Check for comments/documentation
+            comment_patterns = {
+                '.py': ['"""', '#'],
+                '.js': ['//', '/*'],
+                '.ts': ['//', '/*'],
+                '.go': ['//', '/*'],
+                '.java': ['//', '/*'],
+                '.cpp': ['//', '/*']
+            }
+            
+            patterns = comment_patterns.get(file_ext, ['//', '/*', '#'])
+            has_comments = any(pattern in code for pattern in patterns)
+            if not has_comments:
+                logging.warning("[AI2-EXECUTOR] Generated code missing documentation")
+                
+            # Additional language-specific checks
+            if file_ext == '.py':
+                if 'def ' in code and 'typing' not in code:
+                    logging.warning("[AI2-EXECUTOR] Python code missing type hints")
+            elif file_ext in ['.ts', '.tsx']:
+                if 'interface' not in code and 'type' not in code:
+                    logging.warning("[AI2-EXECUTOR] TypeScript code missing type definitions")
+                    
+            return True  # Return true but log warnings for monitoring
+            
+        except Exception as e:
+            logging.error(f"[AI2-EXECUTOR] Error validating generated code: {e}")
+            return False
+
+    async def generate_tests(self, code: str, filename: str) -> str:
+        """Generate comprehensive tests with improved coverage and validation."""
+        logger.info(f"[AI2-TESTER] Generating tests for file: {filename}")
+        
+        # Get project context from idea.md if available
+        project_context = ""
+        try:
+            with open("repo/idea.md", "r", encoding="utf-8") as f:
+                project_context = f.read()
+        except FileNotFoundError:
+            logger.warning("[AI2-TESTER] idea.md not found. Proceeding without project context.")
+        
+        # Analyze file type and get language-specific test patterns
+        file_ext = os.path.splitext(filename)[1].lower()
+        test_patterns = self._get_test_patterns(file_ext)
+        
+        # Enhanced system prompt for test generation
+        base_prompt = self.base_prompts[1].format(filename=filename)
+        system_prompt = f"""{base_prompt}
+        You are an expert in writing comprehensive tests. Follow these guidelines:
+        1. Achieve high code coverage (aim for >80%)
+        2. Test edge cases and error conditions
+        3. Use appropriate mocking/stubbing
+        4. Follow testing best practices for the language
+        5. Include clear test descriptions
+        6. Group related tests logically
+        {test_patterns}
+        {self.system_instructions.replace("file content", "test code")}"""
+        
+        # Enhanced user prompt with project context
+        user_prompt = f"""Project Context:
+    {project_context[:1000] if project_context else 'No project context available'}
+    
+    Code to test from '{filename}':
+    ```
+    {code}
+    ```
+    
+    Generate comprehensive tests that:
+    1. Test all public interfaces
+    2. Cover edge cases and error conditions
+    3. Include integration tests where appropriate
+    4. Use proper assertions and matchers
+    5. Follow {self._get_test_framework(file_ext)} conventions
+    6. Include setup/teardown if needed
+    
+    Tests should be complete and ready to run."""
+    
+        # Apply rate limiting
+        await apply_request_delay(f"ai2_{self.role}")
+        
+        # Generate tests with validation
+        test_content = await self._generate_with_fallback(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt
+        )
+        
+        if test_content and not test_content.startswith("Generation error"):
+            # Validate generated tests
+            if self._validate_generated_tests(test_content, file_ext):
+                logger.info(f"[AI2-TESTER] Successfully generated and validated tests for {filename}")
+                # Commit tests to Git
+                if await self.commit_tests_to_git(filename, test_content):
+                    return test_content
+                else:
+                    return f"Generation error: Failed to save tests to Git for {filename}"
+            else:
+                logger.warning(f"[AI2-TESTER] Generated tests failed validation for {filename}. Retrying...")
+                # Retry with stricter requirements
+                user_prompt += "\nPlease fix the test quality issues and ensure comprehensive test coverage."
+                test_content = await self._generate_with_fallback(
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt
+                )
         
         return test_content
 
+    def _get_test_patterns(self, file_ext: str) -> str:
+        """Get language-specific test patterns and best practices."""
+        patterns = {
+            '.py': """
+        Test Pattern Requirements:
+        - Use pytest fixtures for setup/teardown
+        - Test both success and failure paths
+        - Use parametrize for multiple test cases
+        - Mock external dependencies
+        - Test async functions with pytest.mark.asyncio
+        - Include docstrings for complex tests""",
+            
+            '.js': """
+        Test Pattern Requirements:
+        - Use describe/it blocks for organization
+        - Test async code with async/await
+        - Mock API calls and external services
+        - Test React components with proper events
+        - Use beforeEach/afterEach for setup
+        - Include error boundary testing""",
+            
+            '.ts': """
+        Test Pattern Requirements:
+        - Include type checking in tests
+        - Test type guards and assertions
+        - Mock with TypeScript-aware mocks
+        - Test null/undefined handling
+        - Verify type constraints
+        - Test async operations properly""",
+            
+            '.go': """
+        Test Pattern Requirements:
+        - Use table-driven tests
+        - Test error handling thoroughly
+        - Use subtests for organization
+        - Mock interfaces appropriately
+        - Test concurrent code safely
+        - Include benchmarks if needed""",
+            
+            '.java': """
+        Test Pattern Requirements:
+        - Use JUnit 5 features fully
+        - Include parameterized tests
+        - Mock with Mockito properly
+        - Test exception handling
+        - Use assertj for readable assertions
+        - Include integration tests""",
+            
+            '.cpp': """
+        Test Pattern Requirements:
+        - Use TEST/TEST_F macros properly
+        - Test memory management
+        - Include fixture setup/teardown
+        - Mock C++ interfaces correctly
+        - Test exception handling
+        - Verify resource cleanup"""
+        }
+        
+        return patterns.get(file_ext, """
+        Test Pattern Requirements:
+        - Group related tests logically
+        - Include positive and negative tests
+        - Test error conditions
+        - Mock external dependencies
+        - Verify edge cases
+        - Document test purposes""")
+
+    def _get_test_framework(self, file_ext: str) -> str:
+        """Get the appropriate test framework name for the file type."""
+        frameworks = {
+            '.py': 'pytest',
+            '.js': 'Jest',
+            '.jsx': 'Jest + React Testing Library',
+            '.ts': 'Jest + ts-jest',
+            '.tsx': 'Jest + React Testing Library + TypeScript',
+            '.go': 'Go testing package',
+            '.java': 'JUnit 5',
+            '.cpp': 'Google Test',
+            '.cs': 'xUnit.net',
+            '.rb': 'RSpec',
+            '.php': 'PHPUnit'
+        }
+        return frameworks.get(file_ext, 'appropriate testing framework')
+
+    def _validate_generated_tests(self, tests: str, file_ext: str) -> bool:
+        """Validate generated tests for quality and coverage."""
+        try:
+            if not tests or len(tests.strip()) < 10:
+                return False
+                
+            # Check for test structure
+            framework_patterns = {
+                '.py': ['def test_', 'assert', '@pytest'],
+                '.js': ['describe(', 'it(', 'test(', 'expect('],
+                '.ts': ['describe(', 'it(', 'test(', 'expect('],
+                '.go': ['func Test', 't.Run(', 't.Error'],
+                '.java': ['@Test', 'assert', '@Before'],
+                '.cpp': ['TEST(', 'EXPECT_', 'ASSERT_']
+            }
+            
+            patterns = framework_patterns.get(file_ext, ['test', 'assert', 'expect'])
+            has_framework_patterns = any(pattern in tests for pattern in patterns)
+            if not has_framework_patterns:
+                logging.warning("[AI2-TESTER] Generated tests missing framework patterns")
+                
+            # Check for test organization
+            if not any(marker in tests for marker in ['describe', 'class Test', 'TEST_F']):
+                logging.warning("[AI2-TESTER] Generated tests lack proper organization")
+                
+            # Check for assertions
+            assertion_patterns = ['assert', 'expect', 'should', 'EXPECT_']
+            has_assertions = any(pattern in tests for pattern in assertion_patterns)
+            if not has_assertions:
+                logging.warning("[AI2-TESTER] Generated tests missing assertions")
+                
+            # Check for test documentation
+            comment_patterns = {
+                '.py': ['"""', '#'],
+                '.js': ['//', '/*'],
+                '.ts': ['//', '/*'],
+                '.java': ['//', '/*'],
+                '.cpp': ['//', '/*'],
+                '.go': ['//', '/*']
+            }
+            
+            patterns = comment_patterns.get(file_ext, ['//', '/*', '#'])
+            has_comments = any(pattern in tests for pattern in patterns)
+            if not has_comments:
+                logging.warning("[AI2-TESTER] Generated tests missing documentation")
+                
+            # Additional framework-specific checks
+            if file_ext == '.py':
+                if 'pytest' in tests and 'fixture' not in tests:
+                    logging.warning("[AI2-TESTER] Python tests missing fixtures")
+            elif file_ext in ['.js', '.ts']:
+                if 'beforeEach' not in tests and 'afterEach' not in tests:
+                    logging.warning("[AI2-TESTER] JS/TS tests missing setup/teardown")
+                    
+            return True  # Return true but log warnings for monitoring
+            
+        except Exception as e:
+            logging.error(f"[AI2-TESTER] Error validating generated tests: {e}")
+            return False
+
     async def generate_docs(self, code: str, filename: str) -> str:
-        """Generate documentation for the code OR refine idea.md."""
+        """Generate comprehensive documentation with improved context and style awareness."""
+        logger.info(f"[AI2-DOCUMENTER] Generating documentation for: {filename}")
+        
+        # Get project context from idea.md if available
+        project_context = ""
+        try:
+            with open("repo/idea.md", "r", encoding="utf-8") as f:
+                project_context = f.read()
+        except FileNotFoundError:
+            logger.warning("[AI2-DOCUMENTER] idea.md not found. Proceeding without project context.")
+        
         is_markdown_file = filename.lower().endswith(".md")
-
+        file_ext = os.path.splitext(filename)[1].lower()
+        
         if filename == "idea.md":
-            logger.info(f"Refining project description in: {filename}")
-            # Specific prompts for refining idea.md
-            system_prompt = "You are a project planner and technical writer. Refine the provided project description (idea.md)."
-            user_prompt = f"""Refine and add detail to the following project description, which is currently in the file '{filename}'.
-Focus on:
-1.  Clarifying the core features and functionality.
-2.  Defining the target audience.
-3.  Outlining potential technical considerations or architecture choices.
-4.  Ensuring the description is well-structured, clear, and comprehensive using Markdown formatting.
-5.  Do NOT use placeholder text like "[Specify X]" or "[Details needed]". Fill in reasonable details based on the context.
+            return await self._generate_idea_md(code, project_context)
+        
+        # Get language-specific documentation patterns
+        doc_patterns = self._get_doc_patterns(file_ext)
+        
+        # Enhanced system prompt for documentation
+        base_prompt = self.base_prompts[2].format(filename=filename)
+        system_prompt = f"""{base_prompt}
+        You are an expert technical writer. Follow these guidelines:
+        1. Use clear, concise language
+        2. Document all public interfaces thoroughly
+        3. Include examples for complex functionality
+        4. Explain important design decisions
+        5. Follow language-specific documentation standards
+        6. Link related components and concepts
+        {doc_patterns}
+        {self.system_instructions.replace("file content", "documentation text")}"""
+        
+        # Enhanced user prompt with project context
+        user_prompt = f"""Project Context:
+    {project_context[:1000] if project_context else 'No project context available'}
+    
+    Code to document from '{filename}':
+    ```
+    {code}
+    ```
+    
+    Generate comprehensive documentation that:
+    1. Follows {self._get_doc_style(file_ext)} standards
+    2. Documents all public interfaces
+    3. Explains complex logic and algorithms
+    4. Includes examples where helpful
+    5. Notes dependencies and requirements
+    6. Highlights important assumptions
+    
+    Documentation should be complete and follow best practices."""
 
-Current content of '{filename}':
-```markdown
-{code}
-```
-
-Respond ONLY with the refined and detailed Markdown content for the file. Do not include explanations or apologies."""
-            # Set is_markdown=True for _generate_with_fallback
-            is_markdown_output = True
-        else:
-            logger.info(f"Generating documentation for code file: {filename}")
-            # Existing logic for code documentation
-            base_prompt = self.base_prompts[2].format(filename=filename)
-            # Adjust instruction slightly for non-markdown files
-            instruction_suffix = self.system_instructions.replace("file content", "documentation text")
-            system_prompt = base_prompt + instruction_suffix
-            user_prompt = f"""Code for file '{filename}':
-```
-{code}
-```
-
-Please generate documentation (e.g., docstrings, comments) for this code. {instruction_suffix}"""
-            # Set is_markdown=False for _generate_with_fallback
-            is_markdown_output = False
-
-        # FIXED: Use combined identifier instead of passing two arguments
+        # Apply rate limiting
         await apply_request_delay(f"ai2_{self.role}")
+        
+        # Generate with validation
+        docs = await self._generate_with_fallback(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            is_markdown=is_markdown_file
+        )
+        
+        if docs and not docs.startswith("Generation error"):
+            # Validate generated documentation
+            if self._validate_generated_docs(docs, file_ext):
+                logger.info(f"[AI2-DOCUMENTER] Successfully generated and validated documentation for {filename}")
+                return docs
+            else:
+                logger.warning(f"[AI2-DOCUMENTER] Generated documentation failed validation for {filename}. Retrying...")
+                # Retry with stricter requirements
+                user_prompt += "\nPlease fix documentation quality issues and ensure comprehensive coverage."
+                docs = await self._generate_with_fallback(
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    is_markdown=is_markdown_file
+                )
+        
+        return docs
+
+    async def _generate_idea_md(self, current_content: str, project_context: str) -> str:
+        """Generate or refine the idea.md project description."""
+        logger.info("[AI2-DOCUMENTER] Generating/refining idea.md")
+        
+        system_prompt = """You are a project planner and technical writer.
+        Generate a comprehensive project description that:
+        1. Clearly defines project goals and scope
+        2. Identifies target audience and use cases
+        3. Outlines technical architecture and choices
+        4. Lists key features and requirements
+        5. Considers potential challenges
+        6. Provides implementation guidance
+        
+        Use clear, professional Markdown formatting."""
+        
+        user_prompt = f"""Current project description:
+    ```markdown
+    {current_content}
+    ```
+    
+    Project Context (if available):
+    {project_context}
+    
+    Enhance this project description to be:
+    1. More detailed and specific
+    2. Well-structured and organized
+    3. Implementation-focused
+    4. Clear about technical decisions
+    5. Comprehensive in scope
+    
+    Do NOT use placeholders. Provide concrete details based on the context.
+    Respond with complete Markdown content."""
+        
         return await self._generate_with_fallback(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
-            is_markdown=is_markdown_output # Pass the flag
+            is_markdown=True
         )
+
+    def _get_doc_patterns(self, file_ext: str) -> str:
+        """Get language-specific documentation patterns and standards."""
+        patterns = {
+            '.py': """
+        Documentation Pattern Requirements:
+        - Use Google-style docstrings
+        - Document parameters with types
+        - Specify return types and values
+        - Include usage examples
+        - Document exceptions raised
+        - Add module-level docstrings""",
+            
+            '.js': """
+        Documentation Pattern Requirements:
+        - Use JSDoc format
+        - Document parameters and types
+        - Specify return values
+        - Include usage examples
+        - Document async behaviors
+        - Add module and class docs""",
+            
+            '.ts': """
+        Documentation Pattern Requirements:
+        - Use TSDoc format
+        - Document types thoroughly
+        - Specify interfaces and types
+        - Include examples with types
+        - Document generics usage
+        - Note type constraints""",
+            
+            '.go': """
+        Documentation Pattern Requirements:
+        - Follow godoc format
+        - Document exported items
+        - Include example functions
+        - Document error returns
+        - Add package documentation
+        - Use complete sentences""",
+            
+            '.java': """
+        Documentation Pattern Requirements:
+        - Use Javadoc format
+        - Document all public APIs
+        - Specify exceptions thrown
+        - Include param/return tags
+        - Document thread safety
+        - Add class-level docs""",
+            
+            '.cpp': """
+        Documentation Pattern Requirements:
+        - Use Doxygen format
+        - Document public interfaces
+        - Specify memory ownership
+        - Note thread safety
+        - Document preconditions
+        - Include usage examples"""
+        }
+        
+        return patterns.get(file_ext, """
+        Documentation Pattern Requirements:
+        - Use consistent format
+        - Document public interfaces
+        - Include usage examples
+        - Note important details
+        - Add context and purpose
+        - Follow conventions""")
+
+    def _get_doc_style(self, file_ext: str) -> str:
+        """Get the appropriate documentation style for the file type."""
+        styles = {
+            '.py': 'Google-style docstrings',
+            '.js': 'JSDoc',
+            '.jsx': 'JSDoc with React component documentation',
+            '.ts': 'TSDoc',
+            '.tsx': 'TSDoc with React component documentation',
+            '.go': 'godoc',
+            '.java': 'Javadoc',
+            '.cpp': 'Doxygen',
+            '.hpp': 'Doxygen',
+            '.rb': 'YARD',
+            '.php': 'PHPDoc'
+        }
+        return styles.get(file_ext, 'standard documentation')
+
+    def _validate_generated_docs(self, docs: str, file_ext: str) -> bool:
+        """Validate generated documentation for quality and completeness."""
+        try:
+            if not docs or len(docs.strip()) < 10:
+                return False
+                
+            # Check for documentation format
+            doc_format_patterns = {
+                '.py': ['"""', 'Args:', 'Returns:', 'Raises:'],
+                '.js': ['/**', '@param', '@returns', '@throws'],
+                '.ts': ['/**', '@param', '@returns', '@throws'],
+                '.java': ['/**', '@param', '@return', '@throws'],
+                '.cpp': ['/**', '@param', '@return', '@throws'],
+                '.go': ['// ', 'Example']
+            }
+            
+            patterns = doc_format_patterns.get(file_ext, ['/**', '@param', '@return', '//'])
+            has_doc_format = any(pattern in docs for pattern in patterns)
+            if not has_doc_format:
+                logging.warning("[AI2-DOCUMENTER] Generated docs missing standard format")
+                
+            # Check for interface documentation
+            if 'class' in docs or 'function' in docs or 'method' in docs:
+                interface_patterns = ['param', 'return', 'arg', 'throws']
+                has_interface_docs = any(pattern in docs.lower() for pattern in interface_patterns)
+                if not has_interface_docs:
+                    logging.warning("[AI2-DOCUMENTER] Generated docs missing interface documentation")
+                    
+            # Check for examples
+            example_patterns = ['example', 'usage', 'Example:', 'Usage:']
+            has_examples = any(pattern in docs for pattern in example_patterns)
+            if not has_examples:
+                logging.warning("[AI2-DOCUMENTER] Generated docs missing examples")
+                
+            # Check for overall structure
+            if len(docs.split('\n')) < 3:
+                logging.warning("[AI2-DOCUMENTER] Generated docs too brief")
+                
+            # Language-specific checks
+            if file_ext == '.py':
+                if 'def ' in docs and '"""' not in docs:
+                    logging.warning("[AI2-DOCUMENTER] Python docs missing docstrings")
+            elif file_ext in ['.js', '.ts']:
+                if 'function ' in docs and '/**' not in docs:
+                    logging.warning("[AI2-DOCUMENTER] JS/TS docs missing JSDoc blocks")
+                    
+            return True  # Return true but log warnings for monitoring
+            
+        except Exception as e:
+            logging.error(f"[AI2-DOCUMENTER] Error validating generated docs: {e}")
+            return False
 
     async def commit_tests_to_git(self, filename: str, test_content: str) -> bool:
         """Commits generated tests to the Git repository."""
