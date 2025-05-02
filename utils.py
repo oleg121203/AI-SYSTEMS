@@ -471,7 +471,7 @@ def extract_files_from_structure(structure: Dict[str, Any]) -> Dict[str, Any]:
     def extract_from_node(node, current_path=""):
         if isinstance(node, dict):
             if "type" in node and node["type"] == "file":
-                # Это файл
+                # Це файл
                 file_path = current_path + node.get("name", "")
                 files[file_path] = {
                     "description": node.get("description", ""),
@@ -479,7 +479,7 @@ def extract_files_from_structure(structure: Dict[str, Any]) -> Dict[str, Any]:
                     "code": node.get("code", ""),
                 }
             elif "type" in node and node["type"] == "directory":
-                 # Это директория
+                 # Це директорія
                  dir_name = node.get("name", "")
                  # Construct path correctly, handling root case
                  new_path = os.path.join(current_path, dir_name) if current_path else dir_name
@@ -537,3 +537,624 @@ async def wait_for_service(url: str, timeout: int = 60) -> bool:
 
     logger.error({"message": f"Service at {url} not available after {timeout}s"})
     return False
+
+# New automated test execution utilities
+import subprocess
+import json
+import os
+from typing import Dict, List, Optional, Any, Tuple
+from dataclasses import dataclass
+import logging
+import re
+
+test_logger = logging.getLogger("test_execution")
+
+@dataclass
+class TestResult:
+    """Results from a test execution"""
+    file_path: str
+    success: bool
+    failures: List[str]
+    output: str
+    error_details: Optional[Dict[str, Any]] = None
+    coverage: Optional[float] = None
+
+class TestRunner:
+    """Executes tests and collects detailed results for AI analysis"""
+    
+    def __init__(self, repo_dir: str = "repo"):
+        self.repo_dir = repo_dir
+        self._setup_logger()
+    
+    def _setup_logger(self):
+        handler = logging.FileHandler("logs/test_execution.log")
+        formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+        handler.setFormatter(formatter)
+        test_logger.addHandler(handler)
+        test_logger.setLevel(logging.INFO)
+    
+    def run_tests(self) -> Dict[str, TestResult]:
+        """Run all tests in the repository and collect results"""
+        test_logger.info("Starting test execution")
+        results = {}
+        
+        # Run Python tests
+        python_results = self._run_python_tests()
+        results.update(python_results)
+        
+        # Run JavaScript tests
+        js_results = self._run_js_tests()
+        results.update(js_results)
+        
+        # Run web tests (HTML/CSS)
+        web_results = self._run_web_tests()
+        results.update(web_results)
+        
+        # Run other language tests based on file types
+        test_logger.info(f"Completed test execution. Total test files: {len(results)}")
+        return results
+    
+    def _run_python_tests(self) -> Dict[str, TestResult]:
+        """Run Python tests with pytest"""
+        results = {}
+        test_files = self._find_files("*_test.py") + self._find_files("test_*.py")
+        
+        if not test_files:
+            test_logger.info("No Python test files found")
+            return results
+        
+        test_logger.info(f"Found {len(test_files)} Python test files")
+        for test_file in test_files:
+            try:
+                result = self._execute_python_test(test_file)
+                results[test_file] = result
+            except Exception as e:
+                test_logger.error(f"Error running Python test {test_file}: {str(e)}")
+                results[test_file] = TestResult(
+                    file_path=test_file,
+                    success=False,
+                    failures=[f"Exception: {str(e)}"],
+                    output=f"Error: {str(e)}",
+                    error_details={"exception": str(e), "type": str(type(e))}
+                )
+        
+        return results
+    
+    def _run_js_tests(self) -> Dict[str, TestResult]:
+        """Run JavaScript tests with Jest"""
+        results = {}
+        test_files = (
+            self._find_files("*.test.js") + 
+            self._find_files("*.spec.js") + 
+            self._find_files("*.test.jsx") + 
+            self._find_files("*.test.tsx")
+        )
+        
+        if not test_files:
+            test_logger.info("No JavaScript test files found")
+            return results
+        
+        test_logger.info(f"Found {len(test_files)} JavaScript test files")
+        for test_file in test_files:
+            try:
+                result = self._execute_js_test(test_file)
+                results[test_file] = result
+            except Exception as e:
+                test_logger.error(f"Error running JavaScript test {test_file}: {str(e)}")
+                results[test_file] = TestResult(
+                    file_path=test_file,
+                    success=False,
+                    failures=[f"Exception: {str(e)}"],
+                    output=f"Error: {str(e)}",
+                    error_details={"exception": str(e), "type": str(type(e))}
+                )
+        
+        return results
+    
+    def _run_web_tests(self) -> Dict[str, TestResult]:
+        """Run web tests for HTML/CSS files"""
+        results = {}
+        html_test_files = self._find_files("*_test.html") + self._find_files("*.test.html")
+        css_test_files = self._find_files("*_test.css") + self._find_files("*.test.css")
+        
+        test_files = html_test_files + css_test_files
+        if not test_files:
+            test_logger.info("No web test files found")
+            return results
+        
+        test_logger.info(f"Found {len(test_files)} web test files")
+        
+        # Web tests are typically part of JavaScript test files
+        # We'll look for associated JS test files and run them
+        for test_file in test_files:
+            js_test_file = test_file.replace('.html', '.test.js').replace('.css', '.test.js')
+            if os.path.exists(os.path.join(self.repo_dir, js_test_file)):
+                try:
+                    result = self._execute_js_test(js_test_file)
+                    results[test_file] = result
+                except Exception as e:
+                    test_logger.error(f"Error running web test {test_file}: {str(e)}")
+                    results[test_file] = TestResult(
+                        file_path=test_file,
+                        success=False,
+                        failures=[f"Exception: {str(e)}"],
+                        output=f"Error: {str(e)}",
+                        error_details={"exception": str(e), "type": str(type(e))}
+                    )
+        
+        return results
+    
+    def _execute_python_test(self, test_file: str) -> TestResult:
+        """Execute a single Python test file with pytest"""
+        full_path = os.path.join(self.repo_dir, test_file)
+        if not os.path.exists(full_path):
+            return TestResult(
+                file_path=test_file,
+                success=False,
+                failures=["File not found"],
+                output="File not found error"
+            )
+        
+        test_logger.info(f"Running Python test: {test_file}")
+        orig_dir = os.getcwd()
+        os.chdir(self.repo_dir)
+        
+        try:
+            # Run the test with pytest
+            process = subprocess.run(
+                ["python", "-m", "pytest", test_file, "-v"],
+                capture_output=True,
+                text=True
+            )
+            
+            output = process.stdout + process.stderr
+            success = process.returncode == 0
+            
+            # Parse failures from output
+            failures = []
+            if not success:
+                failure_pattern = r"FAILED\s+(.*?::.*?)\s+"
+                matches = re.findall(failure_pattern, output)
+                failures = matches if matches else ["Test failed but couldn't parse specific failure"]
+            
+            return TestResult(
+                file_path=test_file,
+                success=success,
+                failures=failures,
+                output=output,
+                coverage=self._extract_python_coverage(output)
+            )
+            
+        finally:
+            os.chdir(orig_dir)
+    
+    def _execute_js_test(self, test_file: str) -> TestResult:
+        """Execute a single JavaScript test file with Jest"""
+        full_path = os.path.join(self.repo_dir, test_file)
+        if not os.path.exists(full_path):
+            return TestResult(
+                file_path=test_file,
+                success=False,
+                failures=["File not found"],
+                output="File not found error"
+            )
+        
+        test_logger.info(f"Running JavaScript test: {test_file}")
+        orig_dir = os.getcwd()
+        os.chdir(self.repo_dir)
+        
+        try:
+            # Run the test with Jest
+            process = subprocess.run(
+                ["npx", "jest", test_file, "--no-cache"],
+                capture_output=True,
+                text=True
+            )
+            
+            output = process.stdout + process.stderr
+            success = process.returncode == 0
+            
+            # Parse failures from output
+            failures = []
+            if not success:
+                # Look for the specific error in the output
+                if "FAIL" in output:
+                    # Extract the lines following FAIL until the next test or summary
+                    fail_sections = re.findall(r"FAIL.*?(?=PASS|FAIL|Summary|$)", output, re.DOTALL)
+                    for section in fail_sections:
+                        failures.append(section.strip())
+                
+                if not failures:
+                    failures = ["Test failed but couldn't parse specific failure"]
+            
+            return TestResult(
+                file_path=test_file,
+                success=success,
+                failures=failures,
+                output=output,
+                coverage=self._extract_js_coverage(output)
+            )
+            
+        finally:
+            os.chdir(orig_dir)
+    
+    def _extract_python_coverage(self, output: str) -> Optional[float]:
+        """Extract coverage percentage from pytest output"""
+        coverage_pattern = r"TOTAL\s+.*?\s+(\d+)%"
+        match = re.search(coverage_pattern, output)
+        if match:
+            return float(match.group(1))
+        return None
+    
+    def _extract_js_coverage(self, output: str) -> Optional[float]:
+        """Extract coverage percentage from Jest output"""
+        coverage_pattern = r"All files.*?\|.*?\|.*?\|.*?\|.*?\|\s+(\d+\.?\d*).*?\|"
+        match = re.search(coverage_pattern, output)
+        if match:
+            return float(match.group(1))
+        return None
+    
+    def _find_files(self, pattern: str) -> List[str]:
+        """Find files matching a pattern in the repo directory"""
+        import glob
+        orig_dir = os.getcwd()
+        os.chdir(self.repo_dir)
+        try:
+            # Use relative paths within the repo directory
+            matches = glob.glob("**/" + pattern, recursive=True)
+            return matches
+        finally:
+            os.chdir(orig_dir)
+    
+    def run_linters(self) -> Dict[str, TestResult]:
+        """Run linters on all files in the repository"""
+        results = {}
+        
+        # Run Python linters
+        python_files = self._find_files("*.py")
+        for file_path in python_files:
+            result = self._run_python_linter(file_path)
+            results[file_path] = result
+        
+        # Run JavaScript linters
+        js_files = self._find_files("*.js") + self._find_files("*.jsx") + self._find_files("*.tsx")
+        for file_path in js_files:
+            result = self._run_js_linter(file_path)
+            results[file_path] = result
+        
+        # Run HTML linters
+        html_files = self._find_files("*.html") + self._find_files("*.htm")
+        for file_path in html_files:
+            result = self._run_html_linter(file_path)
+            results[file_path] = result
+        
+        # Run CSS linters
+        css_files = self._find_files("*.css") + self._find_files("*.scss")
+        for file_path in css_files:
+            result = self._run_css_linter(file_path)
+            results[file_path] = result
+        
+        return results
+    
+    def _run_python_linter(self, file_path: str) -> TestResult:
+        """Run flake8 on Python file"""
+        full_path = os.path.join(self.repo_dir, file_path)
+        if not os.path.exists(full_path):
+            return TestResult(
+                file_path=file_path,
+                success=False,
+                failures=["File not found"],
+                output="File not found error"
+            )
+        
+        try:
+            # Run flake8
+            process = subprocess.run(
+                ["flake8", full_path],
+                capture_output=True,
+                text=True
+            )
+            
+            output = process.stdout + process.stderr
+            success = process.returncode == 0
+            
+            # Parse failures from output
+            failures = []
+            if not success:
+                failures = [line.strip() for line in output.splitlines() if line.strip()]
+            
+            return TestResult(
+                file_path=file_path,
+                success=success,
+                failures=failures,
+                output=output
+            )
+        except Exception as e:
+            return TestResult(
+                file_path=file_path,
+                success=False,
+                failures=[f"Linter error: {str(e)}"],
+                output=f"Error: {str(e)}"
+            )
+    
+    def _run_js_linter(self, file_path: str) -> TestResult:
+        """Run eslint on JavaScript file"""
+        full_path = os.path.join(self.repo_dir, file_path)
+        if not os.path.exists(full_path):
+            return TestResult(
+                file_path=file_path,
+                success=False,
+                failures=["File not found"],
+                output="File not found error"
+            )
+        
+        try:
+            # Run eslint
+            # First ensure .eslintrc.json exists
+            eslint_config = os.path.join(self.repo_dir, ".eslintrc.json")
+            if not os.path.exists(eslint_config):
+                with open(eslint_config, "w") as f:
+                    f.write('{"extends": ["eslint:recommended"], "parserOptions": {"ecmaVersion": 2020}, "env": {"browser": true, "node": true, "es6": true}}')
+            
+            process = subprocess.run(
+                ["eslint", full_path, "--no-eslintrc", "--config", eslint_config],
+                capture_output=True,
+                text=True
+            )
+            
+            output = process.stdout + process.stderr
+            success = process.returncode == 0
+            
+            # Parse failures from output
+            failures = []
+            if not success:
+                failures = [line.strip() for line in output.splitlines() if line.strip() and not line.startswith("eslint:")]
+            
+            return TestResult(
+                file_path=file_path,
+                success=success,
+                failures=failures,
+                output=output
+            )
+        except Exception as e:
+            return TestResult(
+                file_path=file_path,
+                success=False,
+                failures=[f"Linter error: {str(e)}"],
+                output=f"Error: {str(e)}"
+            )
+    
+    def _run_html_linter(self, file_path: str) -> TestResult:
+        """Run htmlhint on HTML file"""
+        full_path = os.path.join(self.repo_dir, file_path)
+        if not os.path.exists(full_path):
+            return TestResult(
+                file_path=file_path,
+                success=False,
+                failures=["File not found"],
+                output="File not found error"
+            )
+        
+        try:
+            # Run htmlhint
+            # First ensure .htmlhintrc exists
+            htmlhint_config = os.path.join(self.repo_dir, ".htmlhintrc")
+            if not os.path.exists(htmlhint_config):
+                with open(htmlhint_config, "w") as f:
+                    f.write('{"tagname-lowercase": true, "attr-lowercase": true, "attr-value-double-quotes": true, "doctype-first": false, "tag-pair": true, "spec-char-escape": true, "id-unique": true, "src-not-empty": true, "attr-no-duplication": true, "title-require": true}')
+            
+            process = subprocess.run(
+                ["htmlhint", full_path],
+                capture_output=True,
+                text=True
+            )
+            
+            output = process.stdout + process.stderr
+            success = "no error" in output.lower()
+            
+            # Parse failures from output
+            failures = []
+            if not success:
+                failure_lines = [line.strip() for line in output.splitlines() if line.strip() and "error" in line.lower()]
+                failures = failure_lines if failure_lines else ["HTML validation errors found"]
+            
+            return TestResult(
+                file_path=file_path,
+                success=success,
+                failures=failures,
+                output=output
+            )
+        except Exception as e:
+            return TestResult(
+                file_path=file_path,
+                success=False,
+                failures=[f"Linter error: {str(e)}"],
+                output=f"Error: {str(e)}"
+            )
+    
+    def _run_css_linter(self, file_path: str) -> TestResult:
+        """Run stylelint on CSS file"""
+        full_path = os.path.join(self.repo_dir, file_path)
+        if not os.path.exists(full_path):
+            return TestResult(
+                file_path=file_path,
+                success=False,
+                failures=["File not found"],
+                output="File not found error"
+            )
+        
+        try:
+            # Run stylelint
+            # First ensure .stylelintrc.json exists
+            stylelint_config = os.path.join(self.repo_dir, ".stylelintrc.json")
+            if not os.path.exists(stylelint_config):
+                with open(stylelint_config, "w") as f:
+                    if file_path.endswith(".scss"):
+                        f.write('{"extends": "stylelint-config-standard", "plugins": ["stylelint-scss"]}')
+                    else:
+                        f.write('{"extends": "stylelint-config-standard"}')
+            
+            process = subprocess.run(
+                ["stylelint", full_path],
+                capture_output=True,
+                text=True
+            )
+            
+            output = process.stdout + process.stderr
+            success = process.returncode == 0
+            
+            # Parse failures from output
+            failures = []
+            if not success:
+                failures = [line.strip() for line in output.splitlines() if line.strip() and file_path in line]
+            
+            return TestResult(
+                file_path=file_path,
+                success=success,
+                failures=failures,
+                output=output
+            )
+        except Exception as e:
+            return TestResult(
+                file_path=file_path,
+                success=False,
+                failures=[f"Linter error: {str(e)}"],
+                output=f"Error: {str(e)}"
+            )
+    
+    def generate_test_report(self, test_results: Dict[str, TestResult]) -> Dict[str, Any]:
+        """Generate a comprehensive test report for AI consumption"""
+        total_tests = len(test_results)
+        successful_tests = sum(1 for result in test_results.values() if result.success)
+        failed_tests = total_tests - successful_tests
+        
+        # Group failures by file type
+        failures_by_type = {}
+        for file_path, result in test_results.items():
+            if not result.success:
+                file_ext = os.path.splitext(file_path)[1]
+                if file_ext not in failures_by_type:
+                    failures_by_type[file_ext] = []
+                failures_by_type[file_ext].append({
+                    "file": file_path,
+                    "failures": result.failures
+                })
+        
+        # Generate actionable insights
+        insights = self._generate_insights(test_results)
+        
+        report = {
+            "timestamp": datetime.datetime.now().isoformat(),
+            "summary": {
+                "total_tests": total_tests,
+                "successful_tests": successful_tests,
+                "failed_tests": failed_tests,
+                "success_rate": (successful_tests / total_tests) * 100 if total_tests > 0 else 0
+            },
+            "failures_by_type": failures_by_type,
+            "insights": insights,
+            "detailed_results": {
+                file_path: {
+                    "success": result.success,
+                    "failures": result.failures,
+                    "coverage": result.coverage
+                }
+                for file_path, result in test_results.items()
+            }
+        }
+        
+        # Save report to a file in JSON format
+        os.makedirs("test_reports", exist_ok=True)
+        report_path = f"test_reports/test_report_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        with open(report_path, 'w') as f:
+            json.dump(report, f, indent=2)
+        
+        test_logger.info(f"Test report generated and saved to {report_path}")
+        return report
+    
+    def _generate_insights(self, test_results: Dict[str, TestResult]) -> List[str]:
+        """Generate actionable insights from test results"""
+        insights = []
+        
+        # Pattern analysis on failures
+        common_errors = self._identify_common_errors(test_results)
+        for error_type, count in common_errors.items():
+            if count > 1:
+                insights.append(f"Common error pattern found: '{error_type}' appears in {count} tests")
+        
+        # Look for files with no tests
+        if self._find_files("*.py") and not self._find_files("*_test.py") and not self._find_files("test_*.py"):
+            insights.append("Python application files found but no Python tests exist")
+        
+        if self._find_files("*.js") and not self._find_files("*.test.js") and not self._find_files("*.spec.js"):
+            insights.append("JavaScript files found but no JavaScript tests exist")
+        
+        # Check test coverage
+        low_coverage_files = []
+        for file_path, result in test_results.items():
+            if result.coverage is not None and result.coverage < 50:
+                low_coverage_files.append(file_path)
+        
+        if low_coverage_files:
+            insights.append(f"Low test coverage (<50%) found in {len(low_coverage_files)} files")
+        
+        # Check for failing tests
+        failing_files = [file_path for file_path, result in test_results.items() if not result.success]
+        if failing_files:
+            insights.append(f"Found {len(failing_files)} failing test files that need fixing")
+        
+        return insights
+    
+    def _identify_common_errors(self, test_results: Dict[str, TestResult]) -> Dict[str, int]:
+        """Identify common error patterns in test failures"""
+        error_patterns = {}
+        
+        for result in test_results.values():
+            if not result.success:
+                for failure in result.failures:
+                    # Extract key parts of error messages
+                    if "import" in failure and "error" in failure.lower():
+                        error_patterns["Import Error"] = error_patterns.get("Import Error", 0) + 1
+                    elif "undefined" in failure.lower():
+                        error_patterns["Undefined Reference"] = error_patterns.get("Undefined Reference", 0) + 1
+                    elif "assertionerror" in failure.lower() or "assert" in failure.lower():
+                        error_patterns["Assertion Failure"] = error_patterns.get("Assertion Failure", 0) + 1
+                    elif "syntax" in failure.lower():
+                        error_patterns["Syntax Error"] = error_patterns.get("Syntax Error", 0) + 1
+                    elif "type" in failure.lower() and "error" in failure.lower():
+                        error_patterns["Type Error"] = error_patterns.get("Type Error", 0) + 1
+        
+        return error_patterns
+
+def get_original_file_from_test(test_file: str) -> Optional[str]:
+    """Determine the original file path based on the test file path"""
+    dir_name = os.path.dirname(test_file)
+    base_name = os.path.basename(test_file)
+    file_ext = os.path.splitext(test_file)[1]
+    
+    # Python test conventions
+    if base_name.startswith("test_"):
+        original_name = base_name[5:]
+        if dir_name.endswith("/tests") or dir_name.endswith("\\tests"):
+            # Check if this is in a tests directory and adjust path
+            return os.path.join(dir_name.replace("/tests", "").replace("\\tests", ""), original_name)
+        else:
+            return os.path.join(dir_name, original_name)
+    
+    # JavaScript test conventions
+    elif ".test" in base_name:
+        original_name = base_name.replace(".test", "")
+        if dir_name.endswith("/tests") or dir_name.endswith("\\tests"):
+            return os.path.join(dir_name.replace("/tests", "").replace("\\tests", ""), original_name)
+        else:
+            return os.path.join(dir_name, original_name)
+    
+    # Python test suffix
+    elif base_name.endswith("_test.py"):
+        original_name = base_name[:-8] + ".py"
+        if dir_name.endswith("/tests") or dir_name.endswith("\\tests"):
+            return os.path.join(dir_name.replace("/tests", "").replace("\\tests", ""), original_name)
+        else:
+            return os.path.join(dir_name, original_name)
+    
+    return None

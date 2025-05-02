@@ -1113,21 +1113,351 @@ class AI3:
 
     async def monitor_system_errors(self):
         """Monitors for system-level errors or critical failures."""
-        # Placeholder for system error monitoring logic
-        # TODO: Implement actual error monitoring, e.g., checking logs, system health endpoints
         logger.info("[AI3] System error monitor started.")
+        check_interval = self.config.get("error_check_interval", 300)  # 5 minutes by default
+        
         while True:
             try:
-                # Example: Check for specific error patterns in logs or system status
-                # await self.check_system_logs_for_errors()
-                # await self.check_service_health()
-                await asyncio.sleep(60) # Check every 60 seconds
+                # Run automated tests
+                await self._run_automated_tests()
+                
+                # Scan logs for errors
+                await self.scan_logs_for_errors()
+                
+                # Check queue sizes for imbalances
+                executor_queue_size, all_queue_sizes = await self.check_worker_status()
+                if executor_queue_size > 20 and all_queue_sizes.get("tester", 0) < 5:
+                    logger.warning(f"[AI3] Queue imbalance detected: executor={executor_queue_size}, tester={all_queue_sizes.get('tester', 0)}")
+                    await self.send_queue_info_to_ai1(all_queue_sizes)
+                
+                await asyncio.sleep(check_interval)
             except asyncio.CancelledError:
                 logger.info("[AI3] System error monitor stopped.")
                 break
             except Exception as e:
                 logger.error(f"[AI3] Error in system error monitor: {e}", exc_info=True)
-                await asyncio.sleep(300) # Wait longer after an error
+                await asyncio.sleep(300)  # Wait longer after an error
+
+    async def _run_automated_tests(self):
+        """Run automated tests and analyze results"""
+        from utils import TestRunner
+        
+        logger.info("[AI3] Starting automated test execution...")
+        try:
+            # Initialize the test runner
+            test_runner = TestRunner(repo_dir=self.repo_dir)
+            
+            # Run tests and collect results
+            test_results = test_runner.run_tests()
+            
+            # Check if we have any failing tests
+            failing_tests = {path: result for path, result in test_results.items() if not result.success}
+            
+            if failing_tests:
+                logger.info(f"[AI3] Found {len(failing_tests)} failing tests. Starting self-healing process...")
+                await self._attempt_test_fixes(failing_tests)
+            else:
+                logger.info("[AI3] All tests passed successfully.")
+                
+            # Run linters to check code quality
+            lint_results = test_runner.run_linters()
+            failing_lints = {path: result for path, result in lint_results.items() if not result.success}
+            
+            if failing_lints:
+                logger.info(f"[AI3] Found {len(failing_lints)} files with linting issues. Attempting to fix...")
+                await self._attempt_lint_fixes(failing_lints)
+            else:
+                logger.info("[AI3] All files pass linting checks.")
+                
+            # Generate and save comprehensive test report
+            report = test_runner.generate_test_report(test_results)
+            
+            # Send insights to AI1 for planning if needed
+            if report["insights"]:
+                await self._send_test_insights_to_ai1(report["insights"])
+                
+            return True
+        except Exception as e:
+            logger.error(f"[AI3] Error running automated tests: {e}", exc_info=True)
+            return False
+            
+    async def _attempt_test_fixes(self, failing_tests):
+        """Attempt to fix failing tests automatically"""
+        # Get an Ollama provider for fixing tests
+        try:
+            ollama_config = self.config.get("ai_config", {}).get("ai3", {}).get("providers", ["ollama1"])[0]
+            endpoint = self.config.get("providers", {}).get(ollama_config, {}).get("endpoint")
+            model = self.config.get("providers", {}).get(ollama_config, {}).get("model")
+            
+            if not endpoint or not model:
+                logger.error("[AI3] Ollama configuration not found. Cannot attempt test fixes.")
+                return
+                
+            # Process each failing test
+            for test_path, test_result in failing_tests.items():
+                # Find the original file being tested
+                original_file = self._get_original_file_from_test(test_path)
+                if not original_file:
+                    logger.warning(f"[AI3] Could not determine original file for test: {test_path}")
+                    continue
+                    
+                # Get content of both files
+                try:
+                    with open(os.path.join(self.repo_dir, test_path), 'r', encoding='utf-8') as f:
+                        test_content = f.read()
+                        
+                    original_path = os.path.join(self.repo_dir, original_file)
+                    if not os.path.exists(original_path):
+                        logger.warning(f"[AI3] Original file not found: {original_file}")
+                        continue
+                        
+                    with open(original_path, 'r', encoding='utf-8') as f:
+                        original_content = f.read()
+                    
+                    # Prepare context for fixing
+                    failures_text = "\n".join(test_result.failures[:5])  # Limit to first 5 failures for clarity
+                    
+                    # Use Ollama to fix the code
+                    prompt = f"""
+                    I need to fix a failing test. Below are:
+                    1. The original implementation file
+                    2. The test file that's failing
+                    3. The specific test failures
+                    
+                    Please analyze and fix the ORIGINAL code so the tests pass. Return ONLY the fixed implementation without explanation.
+                    
+                    ORIGINAL IMPLEMENTATION ({original_file}):
+                    ```
+                    {original_content}
+                    ```
+                    
+                    TEST FILE ({test_path}):
+                    ```
+                    {test_content}
+                    ```
+                    
+                    TEST FAILURES:
+                    ```
+                    {failures_text}
+                    ```
+                    
+                    FIXED IMPLEMENTATION:
+                    """
+                    
+                    logger.info(f"[AI3] Requesting fix for failing test: {test_path}")
+                    fixed_code = await call_ollama(prompt, endpoint, model, max_tokens=4000)
+                    
+                    if fixed_code:
+                        # Extract just the code (remove any markdown or explanations)
+                        code_pattern = r"```(?:.*?)\n([\s\S]*?)\n```"
+                        code_match = re.search(code_pattern, fixed_code)
+                        if code_match:
+                            fixed_code = code_match.group(1)
+                        
+                        # Remove any explanations before or after the code
+                        if "```" not in fixed_code:
+                            lines = fixed_code.split("\n")
+                            # Find where the actual code might begin (skip explanatory text)
+                            start_idx = 0
+                            for i, line in enumerate(lines):
+                                if line.strip().startswith("import ") or line.strip().startswith("class ") or line.strip().startswith("def "):
+                                    start_idx = i
+                                    break
+                            fixed_code = "\n".join(lines[start_idx:])
+                        
+                        # Apply fix if code was generated
+                        if fixed_code.strip():
+                            logger.info(f"[AI3] Applying fix to: {original_file}")
+                            await self.update_file_and_commit(original_file, fixed_code)
+                            
+                            # Re-run the specific test to verify fix
+                            await self._verify_test_fix(test_path)
+                        else:
+                            logger.warning(f"[AI3] Generated fix was empty for {original_file}")
+                            
+                except Exception as e:
+                    logger.error(f"[AI3] Error attempting to fix test {test_path}: {e}", exc_info=True)
+        
+        except Exception as e:
+            logger.error(f"[AI3] Error in test fix process: {e}", exc_info=True)
+    
+    async def _verify_test_fix(self, test_path):
+        """Verify if a test fix was successful by running the test again"""
+        try:
+            # Detect test type and run appropriate command
+            if test_path.endswith('.py'):
+                # Run Python test
+                test_cmd = ["python", "-m", "pytest", test_path, "-v"]
+            elif test_path.endswith('.js') or test_path.endswith('.jsx') or test_path.endswith('.tsx'):
+                # Run JavaScript test
+                test_cmd = ["npx", "jest", test_path, "--no-cache"]
+            else:
+                logger.warning(f"[AI3] Unsupported test file type for verification: {test_path}")
+                return False
+                
+            # Run the test
+            orig_dir = os.getcwd()
+            os.chdir(self.repo_dir)
+            try:
+                process = subprocess.run(test_cmd, capture_output=True, text=True)
+                success = process.returncode == 0
+                
+                if success:
+                    logger.info(f"[AI3] Test fix verified successfully: {test_path}")
+                    # Generate a success report
+                    await self._report_fix_success_to_ai1(test_path)
+                else:
+                    logger.warning(f"[AI3] Test fix was not successful: {test_path}")
+                    output = process.stdout + process.stderr
+                    # Possibly send for another round of fixing if needed
+                    await self._report_fix_failure_to_ai1(test_path, output)
+                    
+                return success
+            finally:
+                os.chdir(orig_dir)
+                
+        except Exception as e:
+            logger.error(f"[AI3] Error verifying test fix: {e}", exc_info=True)
+            return False
+    
+    async def _attempt_lint_fixes(self, failing_lints):
+        """Attempt to fix linting issues automatically"""
+        # Similar to test fixes but for linting issues
+        try:
+            ollama_config = self.config.get("ai_config", {}).get("ai3", {}).get("providers", ["ollama1"])[0]
+            endpoint = self.config.get("providers", {}).get(ollama_config, {}).get("endpoint")
+            model = self.config.get("providers", {}).get(ollama_config, {}).get("model")
+            
+            if not endpoint or not model:
+                logger.error("[AI3] Ollama configuration not found. Cannot attempt lint fixes.")
+                return
+                
+            # Process each file with lint errors
+            for file_path, lint_result in failing_lints.items():
+                try:
+                    with open(os.path.join(self.repo_dir, file_path), 'r', encoding='utf-8') as f:
+                        file_content = f.read()
+                    
+                    # Prepare context for fixing
+                    failures_text = "\n".join(lint_result.failures[:10])
+                    
+                    # Use Ollama to fix the code
+                    prompt = f"""
+                    Fix the following linting issues in this file. Return ONLY the fixed implementation without explanation.
+                    
+                    FILE ({file_path}):
+                    ```
+                    {file_content}
+                    ```
+                    
+                    LINTING ERRORS:
+                    ```
+                    {failures_text}
+                    ```
+                    
+                    FIXED IMPLEMENTATION:
+                    """
+                    
+                    logger.info(f"[AI3] Requesting fix for linting issues: {file_path}")
+                    fixed_code = await call_ollama(prompt, endpoint, model)
+                    
+                    if fixed_code:
+                        # Extract just the code (remove any markdown or explanations)
+                        code_pattern = r"```(?:.*?)\n([\s\S]*?)\n```"
+                        code_match = re.search(code_pattern, fixed_code)
+                        if code_match:
+                            fixed_code = code_match.group(1)
+                        
+                        # Apply fix if code was generated
+                        if fixed_code.strip():
+                            logger.info(f"[AI3] Applying lint fix to: {file_path}")
+                            await self.update_file_and_commit(file_path, fixed_code)
+                        else:
+                            logger.warning(f"[AI3] Generated lint fix was empty for {file_path}")
+                except Exception as e:
+                    logger.error(f"[AI3] Error attempting to fix lint issues for {file_path}: {e}", exc_info=True)
+                    
+        except Exception as e:
+            logger.error(f"[AI3] Error in lint fix process: {e}", exc_info=True)
+    
+    async def _send_test_insights_to_ai1(self, insights):
+        """Send test insights to AI1 for planning and decision making"""
+        try:
+            insights_text = "\n".join([f"- {insight}" for insight in insights])
+            payload = {
+                "source": "AI3",
+                "type": "test_insights",
+                "details": {
+                    "insights": insights_text,
+                    "timestamp": datetime.now().isoformat()
+                }
+            }
+            
+            logger.info(f"[AI3 -> AI1] Sending test insights to AI1")
+            await self.create_session()
+            async with self.session.post(f"{MCP_API_URL}/ai_collaboration", json=payload, timeout=15) as response:
+                if response.status == 200:
+                    logger.info("[AI3 -> AI1] Successfully sent test insights to AI1")
+                else:
+                    logger.error(f"[AI3 -> AI1] Failed to send test insights: {response.status} - {await response.text()}")
+        except Exception as e:
+            logger.error(f"[AI3 -> AI1] Error sending test insights to AI1: {e}", exc_info=True)
+    
+    async def _report_fix_success_to_ai1(self, file_path):
+        """Report successful test fix to AI1"""
+        try:
+            payload = {
+                "source": "AI3",
+                "type": "test_fix_success",
+                "details": {
+                    "file_path": file_path,
+                    "message": f"Successfully fixed and verified test: {file_path}",
+                    "timestamp": datetime.now().isoformat()
+                }
+            }
+            
+            logger.info(f"[AI3 -> AI1] Reporting successful test fix for {file_path}")
+            await self.create_session()
+            async with self.session.post(f"{MCP_API_URL}/ai_collaboration", json=payload, timeout=15) as response:
+                if response.status == 200:
+                    logger.info(f"[AI3 -> AI1] Successfully reported test fix for {file_path}")
+                else:
+                    logger.error(f"[AI3 -> AI1] Failed to report test fix: {response.status} - {await response.text()}")
+        except Exception as e:
+            logger.error(f"[AI3 -> AI1] Error reporting test fix to AI1: {e}", exc_info=True)
+    
+    async def _report_fix_failure_to_ai1(self, file_path, output):
+        """Report failed test fix attempt to AI1"""
+        try:
+            # Limit output size to avoid huge payloads
+            if len(output) > 2000:
+                output = output[:2000] + "... [truncated]"
+                
+            payload = {
+                "source": "AI3",
+                "type": "test_fix_failure",
+                "details": {
+                    "file_path": file_path,
+                    "message": f"Failed to fix test: {file_path}",
+                    "output": output,
+                    "timestamp": datetime.now().isoformat()
+                }
+            }
+            
+            logger.info(f"[AI3 -> AI1] Reporting failed test fix for {file_path}")
+            await self.create_session()
+            async with self.session.post(f"{MCP_API_URL}/ai_collaboration", json=payload, timeout=15) as response:
+                if response.status == 200:
+                    logger.info(f"[AI3 -> AI1] Successfully reported test fix failure for {file_path}")
+                else:
+                    logger.error(f"[AI3 -> AI1] Failed to report test fix failure: {response.status} - {await response.text()}")
+        except Exception as e:
+            logger.error(f"[AI3 -> AI1] Error reporting test fix failure to AI1: {e}", exc_info=True)
+    
+    def _get_original_file_from_test(self, test_file):
+        """Determine the original file that is being tested"""
+        from utils import get_original_file_from_test
+        return get_original_file_from_test(test_file)
 
     async def start_background_tasks(self):
         """Starts all background monitoring tasks."""
@@ -1163,7 +1493,7 @@ async def main():
     ai3 = AI3(config_data)
     logger.info("[AI3] Starting structure setup...")
     setup_successful = await ai3.setup_structure()
-    if setup_successful:
+    if (setup_successful):
         logger.info("[AI3] Structure setup completed successfully. Starting background tasks.")
         await ai3.run()
     else:
