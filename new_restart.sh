@@ -177,7 +177,7 @@ start_ai_services() {
     echo "Starting AI services (AI1, AI2, AI3)..."
     # Створення необхідних директорій (про всяк випадок)
     mkdir -p logs
-    mkdir -p repo
+    mkdir -p repo # Added this line back
     mkdir -p tmp
 
     # Перевірка, чи MCP API вже працює (необов'язково, але корисно)
@@ -263,6 +263,8 @@ elif [ "$ACTION" == "restart" ]; then
     else
         echo "Configuration files found."
     fi
+
+    mkdir -p repo # Added this line back
 
     start_services
     echo "===== FULL RESTART COMPLETED at $(date) ====="

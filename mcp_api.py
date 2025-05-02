@@ -398,33 +398,62 @@ async def periodic_chart_updates():
 
 
 async def _determine_adjusted_path(repo_path: Path, file_rel_path: str, repo_dir: str) -> str:
-    """Determines the adjusted relative path within the repo, respecting the structure from AI3."""
-    project_subdir = "project"
-    adjusted_rel_path = file_rel_path
-
-    # Перевіряємо, чи структура від AI3 містить папку 'project'
+    """Determines the adjusted relative path within the repo, respecting the structure from AI3.
+    
+    Args:
+        repo_path: Повний шлях до репозиторію (/repo)
+        file_rel_path: Відносний шлях файлу, який потрібно створити
+        repo_dir: Ім'я директорії репозиторію (зазвичай "repo")
+        
+    Returns:
+        Скоригований відносний шлях в межах repo_path
+    """
     global current_structure
-    has_project_dir = "project" in current_structure
-
-    potential_project_root = repo_path / project_subdir
-    if potential_project_root.is_dir() and has_project_dir:
-        if not file_rel_path.startswith(project_subdir + "/") and file_rel_path != project_subdir:
-            adjusted_rel_path = os.path.join(project_subdir, file_rel_path)
-            logger.info(f"[API-Write] Prepending '{project_subdir}/' to path '{file_rel_path}' as '{repo_dir}/{project_subdir}/' exists and structure includes 'project'. New path: '{adjusted_rel_path}'")
+    
+    # Перевіряємо, чи ім'я проекту є верхнім рівнем поза репозиторієм
+    # Зараз використовуємо реальне ім'я проекту з структури, а не хардкодоване "project"
+    project_names = [k for k in current_structure.keys() if isinstance(current_structure[k], dict)]
+    # Встановлюємо ім'я проекту, якщо є саме один основний проект у структурі
+    project_name = project_names[0] if len(project_names) == 1 else None
+    
+    # Визначаємо, чи початковий шлях містить ім'я проекту поза репо
+    is_outside_repo = False
+    adjusted_rel_path = file_rel_path
+    
+    # Якщо існує імя проекту, і шлях починається з нього, але не як шлях в репо
+    if project_name and file_rel_path.startswith(project_name + "/"):
+        # Перевіряємо, чи файл не є явно в структурі репозиторію
+        repo_file_exists = False
+        repo_path_check = repo_path / file_rel_path
+        if repo_path_check.exists():
+            repo_file_exists = True
+            logger.info(f"[API-Write] File {file_rel_path} already exists in repo, keeping path as is.")
+        
+        if not repo_file_exists:
+            is_outside_repo = True
+            logger.warning(f"[API-Write] Path '{file_rel_path}' appears to be outside repo (starts with '{project_name}/')")
+    
+    # Якщо шлях здається зовнішнім, виправляємо його
+    if is_outside_repo:
+        # Залишаємо шлях як є, MCP записує його у внутрішню директорію repo/
+        logger.info(f"[API-Write] Using path '{file_rel_path}' as is in repo.")
     else:
-        if file_rel_path.startswith(project_subdir + "/"):
-            original_path = file_rel_path
-            adjusted_rel_path = file_rel_path[len(project_subdir) + 1:]
-            logger.warning(f"[API-Write] Removing '{project_subdir}/' from path '{original_path}' as structure does not include 'project'. New path: '{adjusted_rel_path}'")
-        elif file_rel_path == project_subdir:
-            original_path = file_rel_path
-            adjusted_rel_path = "."
-            logger.warning(f"[API-Write] Path is '{original_path}', but structure does not include 'project'. Interpreting as root '{adjusted_rel_path}'.")
-
+        # Для всіх інших випадків, перевіряємо, чи є у нас структура з ім'ям проекту
+        if project_name and project_name in current_structure:
+            potential_project_root = repo_path / project_name
+            
+            # Якщо директорія проекту існує в репо і шлях НЕ починається з неї
+            if potential_project_root.is_dir() and not file_rel_path.startswith(f"{project_name}/"):
+                # Додаємо ім'я проекту на початок шляху, якщо він не порожній і не є самим ім'ям проекту
+                if file_rel_path and file_rel_path != project_name:
+                    adjusted_rel_path = os.path.join(project_name, file_rel_path)
+                    logger.info(f"[API-Write] Prepending '{project_name}/' to path '{file_rel_path}'. New path: '{adjusted_rel_path}'")
+    
     if not adjusted_rel_path and file_rel_path:
-        adjusted_rel_path = "."
-        logger.warning("[API-Write] Adjusted path became empty, defaulting to '.'")
-
+        adjusted_rel_path = file_rel_path
+        logger.warning(f"[API-Write] Adjusted path became empty, defaulting back to original: '{file_rel_path}'")
+    
+    logger.info(f"[API-Write] Final adjusted path: '{adjusted_rel_path}' (original: '{file_rel_path}')")
     return adjusted_rel_path
 
 async def _write_file_content(full_path: Path, content: str, adjusted_rel_path: str, subtask_id: Optional[str]) -> bool:

@@ -95,7 +95,7 @@ class AI2:
 
     async def _get_api_session(self) -> aiohttp.ClientSession:
         """Gets or creates an aiohttp session."""
-        if self.api_session is None or self.api_session.closed:
+        if (self.api_session is None or self.api_session.closed):
             self.api_session = aiohttp.ClientSession()
         return self.api_session
 
@@ -465,7 +465,7 @@ Please generate documentation (e.g., docstrings, comments) for this code. {instr
                     logger.error(f"Missing code for tester: {task_info}")
                 else:
                     # Generate and commit tests
-                    generated_content = await self.generate_tests_based_on_file_type(code_content, filename)
+                    generated_content = await self.generate_tests(code_content, filename)
                     if generated_content and not generated_content.startswith("Generation error"):
                         # Successfully generated and committed tests
                         report["content"] = generated_content # Test code content
@@ -1144,7 +1144,7 @@ Include all necessary tests to verify code correctness.
         
         return await self._generate_with_fallback(system_prompt="You are a Rust testing expert. Generate unit tests for the provided code.", user_prompt=prompt)
 
-    async def generate_generic_tests(self, content: str, filename: str) -> str:
+    async def generate_generic_tests(self, provider, content: str, filename: str) -> str:
         """Generate tests for files of unknown type."""
         log_message(f"[AI2-TESTER] Generating tests for file of unknown type: {filename}")
         
@@ -1172,7 +1172,126 @@ The result should be a file {test_filename} with tests.
 Choose the most suitable testing framework for this file type.
 """
         
-        return await self._generate_with_fallback(system_prompt="You are a testing expert. Generate appropriate tests for the provided code file.", user_prompt=prompt)
+        # If provider is passed, use it directly, otherwise use _generate_with_fallback
+        if provider:
+            system_prompt = "You are a testing expert. Generate appropriate tests for the provided code file."
+            return await provider.generate(prompt=prompt, system_prompt=system_prompt)
+        else:
+            return await self._generate_with_fallback(system_prompt="You are a testing expert. Generate appropriate tests for the provided code file.", user_prompt=prompt)
+
+    def get_file_type(self, file_ext):
+        """Determine the file type based on the file extension."""
+        file_type_map = {
+            '.py': 'Python',
+            '.js': 'JavaScript',
+            '.ts': 'TypeScript',
+            '.html': 'HTML',
+            '.htm': 'HTML',
+            '.css': 'CSS',
+            '.scss': 'SCSS',
+            '.jsx': 'React',
+            '.tsx': 'React TypeScript',
+            '.vue': 'Vue',
+            '.java': 'Java',
+            '.cpp': 'C++',
+            '.c': 'C',
+            '.hpp': 'C++ Header',
+            '.h': 'C/C++ Header',
+            '.go': 'Go',
+            '.rs': 'Rust',
+            '.md': 'Markdown',
+            '.png': 'Image (PNG)',
+            '.jpg': 'Image (JPEG)',
+            '.jpeg': 'Image (JPEG)',
+            '.gif': 'Image (GIF)',
+            '.svg': 'Image (SVG)',
+            '.mp3': 'Audio (MP3)',
+            '.wav': 'Audio (WAV)',
+            '.ogg': 'Audio (OGG)',
+            '.mp4': 'Video (MP4)',
+            '.yml': 'YAML',
+            '.yaml': 'YAML',
+            '.json': 'JSON',
+            '.xml': 'XML',
+            '.csv': 'CSV',
+            '.txt': 'Text',
+            '': 'No Extension (e.g., Dockerfile)',
+        }
+        return file_type_map.get(file_ext.lower(), f'Unknown ({file_ext})')
+
+    def get_test_file_path(self, file_path):
+        """Convert a file path to its corresponding test file path.
+        
+        This method ensures that all test files are created within the repository directory.
+        
+        Args:
+            file_path: Original file path
+            
+        Returns:
+            Path to the corresponding test file
+        """
+        # Ensure we're working with the repo path
+        repo_path = os.path.join(os.getcwd(), "repo")
+        
+        # Get the root directories in the repo to identify project folders
+        try:
+            repo_dirs = [d for d in os.listdir(repo_path) 
+                        if os.path.isdir(os.path.join(repo_path, d)) 
+                        and not d.startswith('.')]
+        except Exception as e:
+            logger.warning(f"Error listing repo directories: {e}. Using empty list.")
+            repo_dirs = []
+            
+        # Check if file_path already has repo/ at the beginning
+        if file_path.startswith("repo/"):
+            # Path already has repo/ prefix, use as is
+            test_file_path = file_path
+        else:
+            # See if the path starts with any of the project directories
+            project_prefix = None
+            for project_dir in repo_dirs:
+                if file_path.startswith(f"{project_dir}/"):
+                    project_prefix = project_dir
+                    break
+                    
+            if project_prefix:
+                # Path starts with a project directory, put it in the repo
+                test_file_path = os.path.join(repo_path, file_path)
+            elif '/' in file_path:
+                # Path contains subdirectories but doesn't match a known project
+                # This is likely a new project directory structure, put it in repo
+                test_file_path = os.path.join(repo_path, file_path)
+            else:
+                # Simple filename with no directory structure
+                test_file_path = os.path.join(repo_path, file_path)
+                
+        # Log the file path transformation
+        logger.info(f"[AI2-TESTER] Converting file path '{file_path}' to test path '{test_file_path}'")
+            
+        # Now determine the appropriate test filename based on extension
+        base_name, ext = os.path.splitext(test_file_path)
+        
+        if ext == '.py':
+            return f"{base_name}_test.py"
+        elif ext == '.js':
+            return f"{base_name}.test.js"
+        elif ext == '.ts':
+            return f"{base_name}.spec.ts"
+        elif ext == '.jsx':
+            return f"{base_name}.test.jsx"
+        elif ext == '.tsx':
+            return f"{base_name}.test.tsx"
+        elif ext == '.vue':
+            return f"{base_name}.spec.js"
+        elif ext == '.html':
+            return f"{base_name}_test.html"
+        elif ext == '.css':
+            return f"{base_name}_test.css"
+        elif ext == '.md':
+            # For markdown files, create a test for validating the markdown syntax
+            return f"{base_name}_test.md"
+        else:
+            return f"{base_name}_test{ext}"
 
 async def run_ai2_tester(providers=None):
     """Run the AI2 tester with the given providers."""
@@ -1324,14 +1443,27 @@ class TaskProcessor:
                         except Exception as e:
                             logger.warning(f"Provider '{provider_name}' failed: {str(e)}")
                             continue
+                        finally:
+                            # Ensure provider is closed properly - MAKE SURE we close any provider resources
+                            if provider:
+                                # Try both close_session and close methods 
+                                if hasattr(provider, 'close_session') and callable(getattr(provider, 'close_session')):
+                                    try:
+                                        await provider.close_session()
+                                    except Exception as e:
+                                        logger.warning(f"Error closing provider session: {e}")
+                                elif hasattr(provider, 'close') and callable(getattr(provider, 'close')):
+                                    try:
+                                        await provider.close()
+                                    except Exception as e:
+                                        logger.warning(f"Error closing provider: {e}")
                             
                     if not provider:
                         raise Exception("All providers failed")
                         
                 finally:
-                    # Ensure provider is closed properly
-                    if provider and hasattr(provider, 'close'):
-                        await provider.close()
+                    # No additional cleanup needed here - moved to within the provider loop
+                    pass
                 
                 # Send the report
                 report_data = {
@@ -1360,8 +1492,50 @@ class TaskProcessor:
             log_message(json.dumps(report_data))
 
     def get_test_file_path(self, file_path):
-        """Convert a file path to its corresponding test file path."""
-        base_name, ext = os.path.splitext(file_path)
+        """Convert a file path to its corresponding test file path.
+        
+        This method ensures that all test files are created within the repository directory.
+        """
+        # Ensure we're working with the repo path
+        repo_path = os.path.join(os.getcwd(), "repo")
+        
+        # Get the root directories in the repo to identify project folders
+        try:
+            repo_dirs = [d for d in os.listdir(repo_path) 
+                        if os.path.isdir(os.path.join(repo_path, d)) 
+                        and not d.startswith('.')]
+        except Exception as e:
+            logger.warning(f"Error listing repo directories: {e}. Using empty list.")
+            repo_dirs = []
+            
+        # Check if file_path already has repo/ at the beginning
+        if file_path.startswith("repo/"):
+            # Path already has repo/ prefix, use as is
+            test_file_path = file_path
+        else:
+            # See if the path starts with any of the project directories
+            project_prefix = None
+            for project_dir in repo_dirs:
+                if file_path.startswith(f"{project_dir}/"):
+                    project_prefix = project_dir
+                    break
+                    
+            if project_prefix:
+                # Path starts with a project directory, put it in the repo
+                test_file_path = os.path.join(repo_path, file_path)
+            elif '/' in file_path:
+                # Path contains subdirectories but doesn't match a known project
+                # This is likely a new project directory structure, put it in repo
+                test_file_path = os.path.join(repo_path, file_path)
+            else:
+                # Simple filename with no directory structure
+                test_file_path = os.path.join(repo_path, file_path)
+                
+        # Log the file path transformation
+        logger.info(f"[AI2-TESTER] Converting file path '{file_path}' to test path '{test_file_path}'")
+            
+        # Now determine the appropriate test filename based on extension
+        base_name, ext = os.path.splitext(test_file_path)
         
         if ext == '.py':
             return f"{base_name}_test.py"
@@ -1375,6 +1549,13 @@ class TaskProcessor:
             return f"{base_name}.test.tsx"
         elif ext == '.vue':
             return f"{base_name}.spec.js"
+        elif ext == '.html':
+            return f"{base_name}_test.html"
+        elif ext == '.css':
+            return f"{base_name}_test.css"
+        elif ext == '.md':
+            # For markdown files, create a test for validating the markdown syntax
+            return f"{base_name}_test.md"
         else:
             return f"{base_name}_test{ext}"
 
@@ -1478,27 +1659,40 @@ Output: TypeScript tests for this TypeScript file.
         
         return await provider.generate(prompt=prompt, system_prompt=system_prompt)
 
-    async def generate_generic_tests(self, provider, content, file_path):
-        """Generate tests for files of unknown or unsupported type."""
-        ext = os.path.splitext(file_path)[1]
+    async def generate_generic_tests(self, provider, content: str, filename: str) -> str:
+        """Generate tests for files of unknown type."""
+        log_message(f"[AI2-TESTER] Generating tests for file of unknown type: {filename}")
         
+        basename = os.path.splitext(os.path.basename(filename))[0]
+        ext = os.path.splitext(filename)[1]
+        test_filename = f"{basename}_test{ext}"
+        if not test_filename.startswith("tests/"):
+            test_filename = f"tests/{test_filename}"
+        
+        # Form prompt for test generator
         prompt = f"""
-Generate tests for the file with extension {ext}. Choose an appropriate testing framework.
-Consider:
-1. Basic functionality testing
-2. Format validation
-3. Any type-specific concerns
+Create tests for the file {filename} using an appropriate testing framework.
+Please verify the following aspects:
+1. Core functionality
+2. Error handling
+3. Edge cases
+4. Integration with other components
 
-File content:
+File content ({filename}):
 ```
 {content}
 ```
 
-Output: Tests for this file in an appropriate format.
+The result should be a file {test_filename} with tests.
+Choose the most suitable testing framework for this file type.
 """
-        system_prompt = "You are a testing expert. Generate complete, working tests for the provided file."
         
-        return await provider.generate(prompt=prompt, system_prompt=system_prompt)
+        # If provider is passed, use it directly, otherwise use _generate_with_fallback
+        if provider:
+            system_prompt = "You are a testing expert. Generate appropriate tests for the provided code file."
+            return await provider.generate(prompt=prompt, system_prompt=system_prompt)
+        else:
+            return await self._generate_with_fallback(system_prompt="You are a testing expert. Generate appropriate tests for the provided code file.", user_prompt=prompt)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="AI2 Worker")

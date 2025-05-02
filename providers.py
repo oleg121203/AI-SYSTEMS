@@ -217,10 +217,12 @@ class BaseProvider(ABC):
             if isinstance(self, CodestralProvider) and self.api_key:
                 headers["Authorization"] = f"Bearer {self.api_key}"
 
-            if hasattr(self, "api_key") and self.api_key and not is_sdk_provider and not isinstance(self, CodestralProvider):
-                current_headers = self._session.headers if self._session else {}
-                if "Authorization" not in current_headers:
-                    headers["Authorization"] = f"Bearer {self.api_key}"
+            # Add Authorization header for non-SDK providers if API key exists and not already set
+            # Check if _session exists and has headers before accessing them
+            current_headers = self._session.headers if self._session else {}
+            if hasattr(self, "api_key") and self.api_key and not is_sdk_provider and not isinstance(self, CodestralProvider) and "Authorization" not in current_headers:
+                 headers["Authorization"] = f"Bearer {self.api_key}"
+
 
             if isinstance(self, OpenRouterProvider):
                 headers["HTTP-Referer"] = self.config.get("referer", "http://localhost")
@@ -523,41 +525,31 @@ class GroqProvider(BaseProvider):
             except Exception as e:
                 logger.error(f"Error initializing Groq AsyncClient: {e}")
                 # REMOVED: Manual closing of http_client_instance. The Groq client should manage this.
-                # if http_client_instance:
-                #     try:
-                #         loop = asyncio.get_event_loop()
-                #         if loop.is_running():
-                #             loop.create_task(http_client_instance.aclose())
-                #         else:
-                #             loop.run_until_complete(http_client_instance.aclose())
-                #     except Exception as close_err:
-                #          logger.error(f"Error closing httpx client during Groq init failure: {close_err}")
-
                 raise ValueError(f"Failed to initialize Groq client: {e}")
         return self._client
 
     def select_optimal_model(self, prompt: str, requested_model: Optional[str] = None) -> str:
         """Selects the optimal model based on prompt complexity and specified model.
-        
+
         Args:
             prompt: The input prompt text
             requested_model: The requested model (can be None)
-            
+
         Returns:
             str: The model name to use
         """
         # If a specific model is requested, use it
         if requested_model:
             return requested_model
-            
+
         # Get default model from configuration
         default_model = self.get_default_model()
         if default_model:
             return default_model
-            
+
         # Evaluate prompt complexity based on length
         prompt_length = len(prompt)
-        
+
         if prompt_length < 500:
             # For short prompts, use a lightweight model
             return self._model_tiers["lightweight"][0]
@@ -567,28 +559,28 @@ class GroqProvider(BaseProvider):
         else:
             # For complex prompts, use a powerful model
             return self._model_tiers["powerful"][0]
-    
+
     def split_complex_prompt(self, prompt: str, max_length: int = 2000) -> List[str]:
         """Splits a complex prompt into smaller parts to optimize resource usage.
-        
+
         Args:
             prompt: The input prompt
             max_length: Maximum length of each part
-            
+
         Returns:
             List[str]: List of prompt parts
         """
         # If the prompt is short, return it as is
         if len(prompt) <= max_length:
             return [prompt]
-            
+
         # Try to split by paragraphs
         paragraphs = prompt.split('\n\n')
-        
+
         # Collect parts without exceeding the maximum length
         parts = []
         current_part = ""
-        
+
         for paragraph in paragraphs:
             if len(current_part) + len(paragraph) + 2 <= max_length:
                 if current_part:
@@ -603,7 +595,7 @@ class GroqProvider(BaseProvider):
                     # If paragraph is longer than max_length, split by sentences
                     sentences = re.split(r'(?<=[.!?])\s+', paragraph)
                     current_sentence_group = ""
-                    
+
                     for sentence in sentences:
                         if len(current_sentence_group) + len(sentence) + 1 <= max_length:
                             if current_sentence_group:
@@ -616,17 +608,17 @@ class GroqProvider(BaseProvider):
                                 current_sentence_group = sentence
                             else:
                                 # If sentence is too long, split it into chunks
-                                sentence_parts = [sentence[i:i+max_length] 
+                                sentence_parts = [sentence[i:i+max_length]
                                                   for i in range(0, len(sentence), max_length)]
                                 parts.extend(sentence_parts)
-                    
+
                     if current_sentence_group:
                         parts.append(current_sentence_group)
-        
+
         # Add the last part if it exists
         if current_part:
             parts.append(current_part)
-            
+
         return parts
 
     async def generate(
@@ -651,32 +643,32 @@ class GroqProvider(BaseProvider):
 
         # Flag for performance optimization
         enable_optimization = self.config.get("enable_optimization", True)
-        
+
         # If the prompt is too complex and optimization is enabled, split it
         if enable_optimization and len(prompt) > 2000:
             parts = self.split_complex_prompt(prompt)
-            
+
             # If the prompt was split into parts
             if len(parts) > 1:
                 logger.info(f"Prompt split into {len(parts)} parts for optimization")
                 responses = []
-                
+
                 # Process each part
                 for i, part in enumerate(parts):
                     messages = []
-                    
+
                     # For the first part, add system prompt if it exists
                     if i == 0 and system_prompt:
                         messages.append({"role": "system", "content": system_prompt})
-                    
+
                     # Add context for all parts
                     if i > 0:
                         part_prompt = f"This is part {i+1} of {len(parts)} of the request. " + part
                     else:
                         part_prompt = part
-                        
+
                     messages.append({"role": "user", "content": part_prompt})
-                    
+
                     try:
                         client = self.get_client()
                         response = await client.chat.completions.create(
@@ -695,10 +687,10 @@ class GroqProvider(BaseProvider):
                     except Exception as e:
                         logger.error(f"Error processing part {i+1}: {e}")
                         responses.append(f"[Error processing part {i+1}]")
-                
+
                 # Combine results
                 return "\n\n".join(responses)
-        
+
         # Standard path - process the prompt without splitting
         messages = []
         if system_prompt:
@@ -799,6 +791,8 @@ class LocalProvider(BaseProvider):
         payload = {k: v for k, v in payload.items() if v is not None}
         api_url = f"{self.endpoint}/chat/completions"
 
+        response = None # Define response outside try block
+        response_data = {} # Define response_data outside try block
         try:
             session = await self.get_client_session()
             async with session.post(api_url, json=payload) as response:
@@ -817,11 +811,16 @@ class LocalProvider(BaseProvider):
                     response.raise_for_status()
         except aiohttp.ClientResponseError as e:
             error_message = e.message
-            try:
-                response_data = await e.response.json()
-                error_message = response_data.get("error", {}).get("message", e.message)
-            except Exception:
-                pass
+            # Try to get more specific error from response if available
+            if response and response.status != 200:
+                try:
+                    # Ensure response_data is populated if an error occurred after response started
+                    if not response_data:
+                         response_data = await response.json()
+                    error_message = response_data.get("error", {}).get("message", e.message)
+                except Exception:
+                    # Fallback if response body is not JSON or other error
+                    pass
             logger.error(
                 f"Local API HTTP Error ({model_to_use}, {e.status}): {error_message}"
             )
@@ -835,6 +834,7 @@ class LocalProvider(BaseProvider):
                 exc_info=True,
             )
             return f"Ошибка генерации: {str(e)}"
+        # Removed finally block: session closing handled by __aexit__
 
     async def get_available_models(self) -> List[str]:
         api_url = f"{self.endpoint}/models"
@@ -865,7 +865,7 @@ class OllamaProvider(BaseProvider):
         super().__init__(config)
         self.name = "ollama"
         self._client = None
-        self._session = None
+        # self._session is managed by BaseProvider
 
     def setup(self) -> None:
         if not self.endpoint:
@@ -887,7 +887,12 @@ class OllamaProvider(BaseProvider):
 
             self.ollama = ollama
             try:
+                # Use host parameter for AsyncClient
                 self._client = self.ollama.AsyncClient(host=self.endpoint)
+                # Simple check to see if client is usable (e.g., list models)
+                # Note: This makes setup async, which might require changes elsewhere
+                # Alternatively, defer the check or make it synchronous if possible
+                # For now, assume initialization implies usability
                 self.use_sdk = True
                 logger.info(
                     f"Ollama SDK настроен успешно для эндпоинта: {self.endpoint}"
@@ -897,6 +902,7 @@ class OllamaProvider(BaseProvider):
                     f"Не удалось инициализировать Ollama AsyncClient ({client_err}). Попытка использовать REST API."
                 )
                 self._client = None
+                self.ollama = None # Ensure ollama module is not used if client fails
         except ImportError:
             logger.warning(
                 "Модуль ollama не установлен. Будет использоваться REST API."
@@ -921,7 +927,7 @@ class OllamaProvider(BaseProvider):
         prompt: str,
         system_prompt: Optional[str] = None,
         model: Optional[str] = None,
-        max_tokens: Optional[int] = None,
+        max_tokens: Optional[int] = None, # Ollama doesn't directly use max_tokens in chat
         temperature: Optional[float] = None,
     ) -> str:
 
@@ -931,6 +937,8 @@ class OllamaProvider(BaseProvider):
             if temperature is not None
             else self.config.get("temperature", 0.7)
         )
+        # num_predict corresponds roughly to max_tokens, but behavior might differ
+        num_predict = max_tokens or self.config.get("num_predict", -1) # Default -1 (no limit)
 
         messages = []
         if system_prompt:
@@ -938,10 +946,15 @@ class OllamaProvider(BaseProvider):
         messages.append({"role": "user", "content": prompt})
 
         options = {"temperature": temperature_to_use}
+        if num_predict > 0:
+            options["num_predict"] = num_predict
 
+
+        response = None # Define response outside try block
+        response_data = {} # Define response_data outside try block
         try:
             if self.use_sdk and self._client:
-                response = await self._client.chat(
+                response = await self._client.chat( # Assign to response
                     model=model_to_use, messages=messages, options=options
                 )
                 if response and isinstance(response, dict) and response.get("message"):
@@ -954,6 +967,7 @@ class OllamaProvider(BaseProvider):
                         "Ошибка генерации: Не получен корректный ответ от Ollama SDK."
                     )
             else:
+                # Use REST API
                 session = await self.get_client_session()
                 api_url = f"{self.endpoint}/api/chat"
                 payload = {
@@ -962,7 +976,7 @@ class OllamaProvider(BaseProvider):
                     "options": options,
                     "stream": False,
                 }
-                async with session.post(api_url, json=payload) as response:
+                async with session.post(api_url, json=payload) as response: # Assign to inner response
                     response_data = await response.json()
                     if response.status == 200:
                         if (
@@ -981,50 +995,72 @@ class OllamaProvider(BaseProvider):
 
         except aiohttp.ClientResponseError as e:
             error_message = e.message
-            try:
-                response_data = await e.response.json()
-                error_message = response_data.get("error", e.message)
-            except Exception:
-                pass
+            # Try to get more specific error from response if available (REST API case)
+            if response and response.status != 200 and not self.use_sdk:
+                 try:
+                     # Ensure response_data is populated if an error occurred after response started
+                     if not response_data:
+                          response_data = await response.json()
+                     error_message = response_data.get("error", e.message)
+                 except Exception:
+                     pass # Fallback if response body is not JSON or other error
             logger.error(
                 f"Ollama REST API HTTP Error ({model_to_use}, {e.status}): {error_message}"
             )
             return f"Ошибка генерации ({e.status}): {error_message}"
         except aiohttp.ClientError as e:
+             # This applies only to the REST API case
             logger.error(f"Ошибка соединения с Ollama REST API {self.endpoint}: {e}")
             return f"Ошибка генерации: Не удалось подключиться к Ollama REST API ({e})"
         except Exception as e:
+            # Catch potential SDK errors or other unexpected errors
+            sdk_or_rest = "SDK" if self.use_sdk else "REST API"
             logger.error(
-                f"Ошибка при генерации ответа с помощью Ollama ({model_to_use}): {e}",
+                f"Ошибка при генерации ответа с помощью Ollama ({sdk_or_rest}, {model_to_use}): {e}",
                 exc_info=True,
             )
+            # Check if it's an Ollama SDK specific error if possible
+            if self.ollama and hasattr(self.ollama, 'ResponseError') and isinstance(e, self.ollama.ResponseError):
+                 return f"Ошибка генерации (Ollama SDK {e.status_code}): {e.error}"
             return f"Ошибка генерации: {str(e)}"
+        # Removed finally block: session closing handled by __aexit__
 
     async def get_available_models(self) -> List[str]:
-        default_models = ["llama3", "mistral"]
+        default_models = ["llama3", "mistral"] # Provide some defaults
         try:
             if self.use_sdk and self._client:
                 models_info = await self._client.list()
+                # Ensure models_info and models_info['models'] exist
                 return (
-                    [model["name"] for model in models_info.get("models", [])]
-                    if models_info
+                    [model["name"] for model in models_info.get("models", []) if "name" in model]
+                    if models_info and isinstance(models_info.get("models"), list)
                     else default_models
                 )
             else:
+                # Use REST API
                 session = await self.get_client_session()
                 api_url = f"{self.endpoint}/api/tags"
                 async with session.get(api_url) as response:
                     if response.status == 200:
                         data = await response.json()
-                        return [model["name"] for model in data.get("models", [])]
+                         # Ensure data['models'] exists and is a list
+                        return (
+                            [model["name"] for model in data.get("models", []) if "name" in model]
+                             if isinstance(data.get("models"), list)
+                             else default_models
+                        )
                     else:
                         logger.error(
                             f"Ошибка при получении списка моделей Ollama REST API ({response.status}): {await response.text()}"
                         )
-                        return default_models + super().get_available_models()
+                        # Return defaults + configured model if API fails
+                        base_models = super().get_available_models()
+                        return list(set(default_models + base_models))
         except Exception as e:
             logger.error(f"Ошибка при получении списка моделей Ollama: {e}")
-            return default_models + super().get_available_models()
+             # Return defaults + configured model on any exception
+            base_models = super().get_available_models()
+            return list(set(default_models + base_models))
 
 
 class OpenRouterProvider(BaseProvider):
@@ -1067,7 +1103,10 @@ class OpenRouterProvider(BaseProvider):
 
         model_to_use = model or self.get_default_model()
         if not model_to_use:
-            return "Ошибка генерации: Модель для OpenRouter не указана."
+            # Try a sensible default if none configured
+            model_to_use = "openai/gpt-3.5-turbo"
+            logger.warning(f"Модель для OpenRouter не указана, используется дефолтная: {model_to_use}")
+            # return "Ошибка генерации: Модель для OpenRouter не указана." # Or allow default
 
         max_tokens_to_use = max_tokens or self.config.get("max_tokens") or 4096
         temperature_to_use = (
@@ -1091,29 +1130,39 @@ class OpenRouterProvider(BaseProvider):
         payload = {k: v for k, v in payload.items() if v is not None}
         api_url = f"{self.endpoint}/chat/completions"
 
+        response = None # Define response outside try block
+        response_data = {} # Define response_data outside try block
         try:
             session = await self.get_client_session()
-            async with session.post(api_url, json=payload) as response:
+            # OpenRouter requires API Key in Authorization header
+            headers = {"Authorization": f"Bearer {self.api_key}"}
+            # Add optional headers from config
+            headers["HTTP-Referer"] = self.config.get("referer", "http://localhost") # Example referer
+            headers["X-Title"] = self.config.get("title", "MCP-AI-App") # Example title
+
+            async with session.post(api_url, json=payload, headers=headers) as response:
                 response_data = await response.json()
                 if response.status == 200:
-                    if response_data.get("choices") and response_data["choices"][0].get(
-                        "message"
-                    ):
+                    if response_data.get("choices") and response_data["choices"][0].get("message"):
                         return response_data["choices"][0]["message"].get("content", "")
                     else:
                         logger.warning(
-                            f"Ответ от OpenRouter ({model_to_use}) не содержит ожидаемых данных: {response_data}"
+                            f"Ответ от OpenRouter API ({model_to_use}) не содержит ожидаемых данных: {response_data}"
                         )
                         return "Ошибка генерации: Не получен корректный ответ от OpenRouter API."
                 else:
                     response.raise_for_status()
         except aiohttp.ClientResponseError as e:
             error_message = e.message
-            try:
-                response_data = await e.response.json()
-                error_message = response_data.get("error", {}).get("message", e.message)
-            except Exception:
-                pass
+             # Try to get more specific error from response if available
+            if response and response.status != 200:
+                try:
+                     # Ensure response_data is populated if an error occurred after response started
+                     if not response_data:
+                          response_data = await response.json()
+                     error_message = response_data.get("error", {}).get("message", e.message)
+                except Exception:
+                     pass # Fallback if response body is not JSON or other error
             logger.error(
                 f"OpenRouter API HTTP Error ({model_to_use}, {e.status}): {error_message}"
             )
@@ -1127,35 +1176,52 @@ class OpenRouterProvider(BaseProvider):
                 exc_info=True,
             )
             return f"Ошибка генерации: {str(e)}"
+        # Removed finally block: session closing handled by __aexit__
+
+    async def get_available_models(self) -> List[str]:
+        # OpenRouter has many models, fetching them dynamically is best
+        api_url = f"{self.endpoint}/models"
+        try:
+            session = await self.get_client_session()
+            # OpenRouter requires API Key for listing models too
+            headers = {"Authorization": f"Bearer {self.api_key}"}
+            async with session.get(api_url, headers=headers) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    return [
+                        model.get("id")
+                        for model in data.get("data", [])
+                        if model.get("id")
+                    ]
+                else:
+                    logger.error(
+                        f"Ошибка при получении списка моделей OpenRouter ({response.status}): {await response.text()}"
+                    )
+                    return super().get_available_models() # Fallback to configured model
+        except Exception as e:
+            logger.error(f"Ошибка при получении списка моделей OpenRouter: {e}")
+            return super().get_available_models() # Fallback to configured model
 
 
 class CohereProvider(BaseProvider):
     """Провайдер для Cohere."""
-
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         super().__init__(config)
         self.name = "cohere"
         self._client = None
 
     def setup(self) -> None:
-        try:
-            import cohere
-
-            self.cohere = cohere
-            self.api_key = self.config.get("api_key") or os.environ.get(
-                "COHERE_API_KEY"
-            )
-            if not self.api_key:
-                logger.error(
-                    "API ключ Cohere не найден ни в конфигурации, ни в COHERE_API_KEY."
-                )
-            else:
-                logger.info("Cohere настроен успешно")
-        except ImportError:
-            logger.error(
-                "Модуль cohere не установлен. Установите его с помощью 'pip install cohere'"
-            )
+        if not cohere:
+            logger.error("Модуль cohere не установлен. Установите его с помощью 'pip install cohere'")
             self.cohere = None
+            return
+
+        self.cohere = cohere
+        self.api_key = self.config.get("api_key") or os.environ.get("COHERE_API_KEY")
+        if not self.api_key:
+            logger.warning("API ключ Cohere не найден ни в конфигурации, ни в COHERE_API_KEY.")
+        else:
+            logger.info("Cohere настроен успешно")
 
     def get_client(self) -> Any:
         if not self.cohere:
@@ -1163,13 +1229,14 @@ class CohereProvider(BaseProvider):
         if not self.api_key:
             raise ValueError("API ключ Cohere не установлен.")
         if self._client is None:
-            self._client = self.cohere.AsyncClient(api_key=self.api_key)
+            # Use AsyncClient for asynchronous operations
+            self._client = self.cohere.AsyncClient(self.api_key)
         return self._client
 
     async def generate(
         self,
         prompt: str,
-        system_prompt: Optional[str] = None,
+        system_prompt: Optional[str] = None, # Cohere uses 'preamble'
         model: Optional[str] = None,
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
@@ -1177,35 +1244,34 @@ class CohereProvider(BaseProvider):
         if not self.cohere or not self.api_key:
             return "Ошибка генерации: провайдер Cohere не настроен."
 
-        model_to_use = model or self.get_default_model() or "command-r"
+        model_to_use = model or self.get_default_model() or "command-r" # Default to command-r
         max_tokens_to_use = max_tokens or self.config.get("max_tokens") or 4096
         temperature_to_use = (
-            temperature
-            if temperature is not None
-            else self.config.get("temperature", 0.3)
+            temperature if temperature is not None else self.config.get("temperature", 0.7)
         )
 
         try:
             client = self.get_client()
+            # Use chat method for conversational generation
             response = await client.chat(
-                model=model_to_use,
                 message=prompt,
-                preamble=system_prompt,
+                model=model_to_use,
+                preamble=system_prompt, # Use preamble for system context
                 max_tokens=max_tokens_to_use,
                 temperature=temperature_to_use,
+                # Cohere might have different parameter names or capabilities
             )
-            if response and hasattr(response, "text"):
+            if response and hasattr(response, 'text'):
                 return response.text
             else:
-                logger.warning(
-                    f"Ответ от Cohere ({model_to_use}) не содержит ожидаемых данных: {response}"
-                )
-                return "Ошибка генерации: Не получен корректный ответ от Cohere API."
-        except self.cohere.CohereAPIError as e:
-            logger.error(
-                f"Cohere API Error ({model_to_use}): Status={e.http_status}, Message={e.message}"
-            )
-            return f"Ошибка генерации (Cohere API {e.http_status}): {e.message}"
+                 logger.warning(f"Ответ от Cohere не содержит ожидаемых данных: {response}")
+                 return "Ошибка генерации: Не получен корректный ответ от Cohere API."
+
+        except self.cohere.CohereAPIError as e: # Catch specific Cohere API errors
+            logger.error(f"Cohere API Error ({model_to_use}): {e}")
+            # Attempt to get status code if available
+            status_code = getattr(e, 'http_status', 'N/A')
+            return f"Ошибка генерации (Cohere API {status_code}): {e}"
         except Exception as e:
             logger.error(
                 f"Ошибка при генерации ответа с помощью Cohere ({model_to_use}): {e}",
@@ -1214,7 +1280,8 @@ class CohereProvider(BaseProvider):
             return f"Ошибка генерации: {str(e)}"
 
     def get_available_models(self) -> List[str]:
-        known = ["command-r", "command-r-plus", "command", "command-light"]
+        # List known Cohere models
+        known = ["command-r-plus", "command-r", "command", "command-light"]
         default_model = self.get_default_model()
         if default_model and default_model not in known:
             known.append(default_model)
@@ -1222,149 +1289,149 @@ class CohereProvider(BaseProvider):
 
 
 class GeminiProvider(BaseProvider):
-    """Провайдер для Google Gemini."""
-
+    """Провайдер для Google Gemini (используя SDK)."""
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         super().__init__(config)
         self.name = "gemini"
-        self._model_client = None
+        self._model_instance = None
 
     def setup(self) -> None:
-        try:
-            import google.generativeai as genai
-
-            self.genai = genai
-            self.api_key = self.config.get("api_key") or os.environ.get(
-                "GEMINI_API_KEY"
-            )
-            if not self.api_key:
-                logger.error(
-                    "API ключ Gemini не найден ни в конфигурации, ни в GEMINI_API_KEY."
-                )
-            else:
-                try:
-                    self.genai.configure(api_key=self.api_key)
-                    logger.info("Gemini настроен успешно")
-                except Exception as config_e:
-                    logger.error(f"Ошибка конфигурации Gemini SDK: {config_e}")
-                    self.genai = None
-        except ImportError:
-            logger.error(
-                "Модуль google-generativeai не установлен. Установите его с помощью 'pip install google-generativeai'"
-            )
+        if not genai:
+            logger.error("Модуль google-generativeai не установлен. Установите его: pip install google-generativeai")
             self.genai = None
+            return
 
-    def get_client(self, model_name: str) -> Any:
+        self.genai = genai
+        self.api_key = self.config.get("api_key") or os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+        if not self.api_key:
+            logger.warning("API ключ Gemini/Google не найден ни в конфигурации, ни в GEMINI_API_KEY/GOOGLE_API_KEY.")
+        else:
+            try:
+                self.genai.configure(api_key=self.api_key)
+                logger.info("Gemini SDK настроен успешно")
+            except Exception as e:
+                logger.error(f"Ошибка конфигурации Gemini SDK: {e}")
+                self.genai = None # Mark as unusable if config fails
+
+    def get_model(self, model_name: str) -> Any:
         if not self.genai:
-            raise ValueError(
-                "Модуль google.generativeai не импортирован или не настроен."
-            )
+            raise ValueError("Модуль google-generativeai не импортирован или не настроен.")
+
+        # Cache the model instance? For now, create new each time.
+        # Consider safety config from self.config if needed
+        safety_settings = self.config.get("safety_settings") # Example: {"HARASSMENT": "BLOCK_NONE"}
+        generation_config = self.config.get("generation_config") # Example: {"temperature": 0.7}
+
         try:
-            model_client = self.genai.GenerativeModel(model_name)
-            return model_client
+             # Combine generation_config from instance config and method args
+             combined_gen_config = self.config.get("generation_config", {}).copy()
+             # Method args like temperature/max_tokens override instance config
+             # Note: SDK uses different names (e.g., max_output_tokens)
+
+             model_instance = self.genai.GenerativeModel(
+                 model_name=model_name,
+                 safety_settings=safety_settings,
+                 generation_config=generation_config # Pass base config here
+             )
+             return model_instance
         except Exception as e:
-            logger.error(
-                f"Не удалось создать Gemini GenerativeModel для '{model_name}': {e}"
-            )
-            raise ValueError(f"Не удалось создать Gemini GenerativeModel: {e}")
+             logger.error(f"Не удалось создать экземпляр модели Gemini '{model_name}': {e}")
+             raise ValueError(f"Не удалось создать экземпляр модели Gemini '{model_name}': {e}")
+
 
     async def generate(
         self,
         prompt: str,
-        system_prompt: Optional[str] = None,
+        system_prompt: Optional[str] = None, # Gemini uses system_instruction in start_chat or generate_content
         model: Optional[str] = None,
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
     ) -> str:
-        if not self.genai:
+        if not self.genai or not self.api_key:
             return "Ошибка генерации: провайдер Gemini не настроен."
 
-        model_to_use = model or self.get_default_model() or "gemini-1.5-flash"
-        max_tokens_to_use = max_tokens or self.config.get("max_tokens")
-        temperature_to_use = (
-            temperature if temperature is not None else self.config.get("temperature")
-        )
-
-        generation_config = {}
-        if max_tokens_to_use is not None:
-            generation_config["max_output_tokens"] = max_tokens_to_use
-        if temperature_to_use is not None:
-            generation_config["temperature"] = temperature_to_use
-
-        contents = []
-        if system_prompt:
-            contents.append(system_prompt)
-        contents.append(prompt)
+        # Default to gemini-1.5-flash-latest if no model specified
+        model_to_use = model or self.get_default_model() or "gemini-1.5-flash-latest"
 
         try:
-            model_client = self.get_client(model_to_use)
-            response = await model_client.generate_content_async(
+            model_instance = self.get_model(model_to_use)
+
+            # Prepare generation config, overriding defaults with method args
+            gen_config_overrides = {}
+            if temperature is not None:
+                gen_config_overrides["temperature"] = temperature
+            if max_tokens is not None:
+                gen_config_overrides["max_output_tokens"] = max_tokens
+
+            # Combine system prompt and user prompt
+            # Gemini SDK can take system instruction directly in generate_content
+            contents = [prompt] # User prompt is the main content
+            system_instruction_param = self.genai.types.Content(
+                 parts=[self.genai.types.Part(text=system_prompt)],
+                 role="system" # Role might not be needed if using system_instruction param
+            ) if system_prompt else None
+
+
+            # Use generate_content_async for async operation
+            response = await model_instance.generate_content_async(
                 contents=contents,
-                generation_config=(
-                    self.genai.types.GenerationConfig(**generation_config)
-                    if generation_config
-                    else None
-                ),
+                generation_config=self.genai.types.GenerationConfig(**gen_config_overrides) if gen_config_overrides else None,
+                system_instruction=system_instruction_param
             )
 
-            if response and hasattr(response, "text"):
+            # Extract text, handling potential blocks or errors
+            if response and hasattr(response, 'text'):
                 return response.text
-            elif (
-                response
-                and response.candidates
-                and response.candidates[0].content.parts
-            ):
-                return "".join(
-                    part.text
-                    for part in response.candidates[0].content.parts
-                    if hasattr(part, "text")
-                )
+            elif response and hasattr(response, 'parts'):
+                 # If response has parts, concatenate their text
+                 return "".join(part.text for part in response.parts if hasattr(part, 'text'))
+            elif response and response.prompt_feedback and response.prompt_feedback.block_reason:
+                 # Handle blocked prompts
+                 reason = response.prompt_feedback.block_reason
+                 logger.warning(f"Запрос к Gemini ({model_to_use}) был заблокирован: {reason}")
+                 return f"Ошибка генерации: Запрос заблокирован ({reason})."
             else:
-                block_reason = ""
-                if (
-                    response
-                    and response.prompt_feedback
-                    and hasattr(response.prompt_feedback, "block_reason")
-                ):
-                    block_reason = (
-                        f" Block Reason: {response.prompt_feedback.block_reason}"
-                    )
-                logger.warning(
-                    f"Response from Gemini ({model_to_use}) does not contain expected text.{block_reason} Response: {response}"
-                )
-                return (
-                    f"Error: No text received from Gemini API.{block_reason}"
-                )
-        except self.genai.types.generation_types.StopCandidateException as e:
-            logger.error(f"Gemini Generation Stopped ({model_to_use}): {e}")
-            return f"Error (Gemini Stop): {e}"
-        except TypeError as e:
-            logger.error(
-                f"TypeError in Gemini API call ({model_to_use}): {e}", exc_info=True
-            )
-            return f"Error (TypeError): {e}"
+                logger.warning(f"Ответ от Gemini ({model_to_use}) не содержит ожидаемого текста: {response}")
+                return "Ошибка генерации: Не получен корректный текстовый ответ от Gemini API."
+
         except Exception as e:
-            error_detail = str(e)
-            if hasattr(e, "message"):
-                error_detail = e.message
+            # Catch potential API errors or other issues
             logger.error(
-                f"Error generating response with Gemini ({model_to_use}): {error_detail}",
+                f"Ошибка при генерации ответа с помощью Gemini ({model_to_use}): {e}",
                 exc_info=True,
             )
-            # Return a specific error code that can be used to trigger fallback
-            return f"ERROR_QUOTA_EXCEEDED: {error_detail}" if "quota" in error_detail.lower() else f"Error: {error_detail}"
+            # Try to provide more specific feedback if possible (e.g., API key issues)
+            if "API key not valid" in str(e):
+                 return "Ошибка генерации: Недействительный API ключ Gemini/Google."
+            return f"Ошибка генерации: {str(e)}"
 
     def get_available_models(self) -> List[str]:
-        known = ["gemini-1.5-pro-latest", "gemini-1.5-flash-latest", "gemini-pro"]
+        # List known/common Gemini models
+        known = [
+            "gemini-1.5-pro-latest",
+            "gemini-1.5-flash-latest",
+            "gemini-1.0-pro",
+            "gemini-pro", # Alias for 1.0 pro?
+        ]
+        # Add configured model if not already listed
         default_model = self.get_default_model()
         if default_model and default_model not in known:
             known.append(default_model)
+
+        # Optionally, try to list models via SDK if configured
+        # if self.genai:
+        #     try:
+        #         # This is synchronous, might block async flow if called often
+        #         sdk_models = [m.name for m in self.genai.list_models() if 'generateContent' in m.supported_generation_methods]
+        #         known = list(set(known + sdk_models)) # Combine and deduplicate
+        #     except Exception as e:
+        #         logger.warning(f"Не удалось получить список моделей через Gemini SDK: {e}")
+
         return known
 
 
 class TogetherProvider(BaseProvider):
-    """Провайдер для Together AI (использует официальный SDK)."""
-
+    """Провайдер для Together AI."""
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         super().__init__(config)
         self.name = "together"
@@ -1372,30 +1439,25 @@ class TogetherProvider(BaseProvider):
 
     def setup(self) -> None:
         if not Together:
-            logger.error(
-                "Библиотека 'together' не установлена. TogetherProvider не может быть настроен."
-            )
+            logger.error("Модуль 'together' не установлен. Установите его: pip install together")
+            self.together_sdk = None
             return
 
+        self.together_sdk = Together # Assign the imported class
         self.api_key = self.config.get("api_key") or os.environ.get("TOGETHER_API_KEY")
         if not self.api_key:
-            logger.error(
-                "API ключ для Together AI не найден ни в конфигурации, ни в TOGETHER_API_KEY."
-            )
+            logger.warning("API ключ Together не найден ни в конфигурации, ни в TOGETHER_API_KEY.")
         else:
-            logger.info("API ключ для Together AI найден.")
             try:
-                self._client = Together(api_key=self.api_key)
-                logger.info("Together AI SDK настроен успешно.")
-            except Exception as e:
-                logger.error(f"Ошибка инициализации клиента Together AI SDK: {e}")
+                self._client = self.together_sdk(api_key=self.api_key)
+                logger.info("Together SDK настроен успешно")
+            except TogetherError as e:
+                logger.error(f"Ошибка инициализации Together SDK: {e}")
                 self._client = None
 
     def get_client(self) -> Any:
         if not self._client:
-            raise ValueError(
-                "Клиент Together AI SDK не инициализирован (проверьте API ключ и установку библиотеки)."
-            )
+            raise ValueError("Клиент Together SDK не инициализирован.")
         return self._client
 
     async def generate(
@@ -1407,17 +1469,12 @@ class TogetherProvider(BaseProvider):
         temperature: Optional[float] = None,
     ) -> str:
         if not self._client:
-            return "Ошибка генерации: Клиент Together AI SDK не инициализирован."
+            return "Ошибка генерации: Together SDK не инициализирован."
 
-        model_to_use = model or self.get_default_model()
-        if not model_to_use:
-            return "Ошибка генерации: Модель для Together AI не указана."
-
+        model_to_use = model or self.get_default_model() or "together-gpt-3.5-turbo"
         max_tokens_to_use = max_tokens or self.config.get("max_tokens") or 4096
         temperature_to_use = (
-            temperature
-            if temperature is not None
-            else self.config.get("temperature", 0.7)
+            temperature if temperature is not None else self.config.get("temperature", 0.7)
         )
 
         messages = []
@@ -1427,49 +1484,35 @@ class TogetherProvider(BaseProvider):
 
         try:
             client = self.get_client()
-            loop = asyncio.get_running_loop()
-            response = await loop.run_in_executor(
-                None,
-                lambda: client.chat.completions.create(
-                    model=model_to_use,
-                    messages=messages,
-                    max_tokens=max_tokens_to_use,
-                    temperature=temperature_to_use,
-                ),
+            response = await client.chat.completions.create(
+                model=model_to_use,
+                messages=messages,
+                max_tokens=max_tokens_to_use,
+                temperature=temperature_to_use,
             )
-
-            if response and response.choices and response.choices[0].message:
+            if response.choices and response.choices[0].message:
                 return response.choices[0].message.content or ""
             else:
-                logger.warning(
-                    f"Ответ от Together AI SDK ({model_to_use}) не содержит ожидаемых данных: {response}"
-                )
-                return (
-                    "Ошибка генерации: Не получен корректный ответ от Together AI SDK."
-                )
+                logger.warning(f"Ответ от Together SDK ({model_to_use}) не содержит ожидаемых данных: {response}")
+                return "Ошибка генерации: Не получен корректный ответ от Together SDK."
 
         except TogetherError as e:
-            logger.error(f"Ошибка API Together AI ({model_to_use}): {e}")
+            logger.error(f"Together API Error ({model_to_use}): {e}")
             return f"Ошибка генерации (Together API): {e}"
         except Exception as e:
-            logger.error(
-                f"Неожиданная ошибка при генерации ответа с Together AI SDK ({model_to_use}): {e}",
-                exc_info=True,
-            )
+            logger.error(f"Ошибка при генерации ответа с Together SDK ({model_to_use}): {e}", exc_info=True)
             return f"Ошибка генерации: {str(e)}"
 
     def get_available_models(self) -> List[str]:
         if not self._client:
-            logger.warning(
-                "Невозможно получить список моделей: клиент Together AI не инициализирован."
-            )
+            logger.warning("Невозможно получить список моделей: Together SDK не инициализирован.")
             return super().get_available_models()
 
         try:
             models_list = self._client.models.list()
             return [model.id for model in models_list if hasattr(model, "id")]
         except Exception as e:
-            logger.error(f"Ошибка при получении списка моделей Together AI: {e}")
+            logger.error(f"Ошибка при получении списка моделей Together: {e}")
             return super().get_available_models()
 
 
