@@ -1249,20 +1249,24 @@ class TaskProcessor:
     async def process_task(self, task):
         """Process a testing task."""
         task_id = task.get('id')
-        file_path = task.get('file_path')
-        
-        if not file_path:
-            logger.error(f"No file path specified in task: {task}")
+        # --- CHANGE: Use 'filename' instead of 'file_path' ---
+        filename = task.get('filename')
+        # --- END CHANGE ---
+
+        if not filename:
+            # --- CHANGE: Update error message to reflect 'filename' ---
+            logger.error(f"No filename specified in task: {task}")
+            # --- END CHANGE ---
             return
         
-        logger.info(f"Received task: ID={task_id}, File={file_path}")
+        logger.info(f"Received task: ID={task_id}, File={filename}")
         
         try:
-            file_ext = os.path.splitext(file_path)[1].lower()
+            file_ext = os.path.splitext(filename)[1].lower()
             file_type = self.get_file_type(file_ext)
             
             if file_type:
-                log_message(f"[AI2-TESTER] Generating tests for {file_type} file: {file_path}")
+                log_message(f"[AI2-TESTER] Generating tests for {file_type} file: {filename}")
                 
                 # Select provider
                 provider = None
@@ -1277,27 +1281,35 @@ class TaskProcessor:
                             # Use ProviderFactory instead of create_provider
                             provider = ProviderFactory.create_provider(provider_name)
                             
+                            # --- CHANGE: Get code content from task dictionary --- 
                             # Read the file content
-                            with open(file_path, 'r', encoding='utf-8') as f:
-                                file_content = f.read()
+                            # with open(file_path, 'r', encoding='utf-8') as f:
+                            #     file_content = f.read()
+                            file_content = task.get('code') # Get code from task
+                            if file_content is None:
+                                logger.error(f"Missing 'code' content in tester task: {task}")
+                                # Optionally, try reading from file as fallback?
+                                # For now, raise error to indicate missing data.
+                                raise ValueError(f"Missing 'code' content in tester task for {filename}")
+                            # --- END CHANGE ---
                             
                             # Generate tests based on file type
                             if file_ext in ['.html', '.htm']:
-                                test_content = await self.generate_html_tests(provider, file_content, file_path)
+                                test_content = await self.generate_html_tests(provider, file_content, filename)
                             elif file_ext == '.css':
-                                test_content = await self.generate_css_tests(provider, file_content, file_path)
+                                test_content = await self.generate_css_tests(provider, file_content, filename)
                             elif file_ext == '.py':
-                                test_content = await self.generate_python_tests(provider, file_content, file_path)
+                                test_content = await self.generate_python_tests(provider, file_content, filename)
                             elif file_ext == '.js':
-                                test_content = await self.generate_js_tests(provider, file_content, file_path)
+                                test_content = await self.generate_js_tests(provider, file_content, filename)
                             elif file_ext == '.ts':
-                                test_content = await self.generate_ts_tests(provider, file_content, file_path)
+                                test_content = await self.generate_ts_tests(provider, file_content, filename)
                             else:
-                                test_content = await self.generate_generic_tests(provider, file_content, file_path)
+                                test_content = await self.generate_generic_tests(provider, file_content, filename)
                             
                             if test_content and len(test_content.strip()) > 0:
                                 # Write tests to file
-                                test_file_path = self.get_test_file_path(file_path)
+                                test_file_path = self.get_test_file_path(filename)
                                 os.makedirs(os.path.dirname(test_file_path), exist_ok=True)
                                 with open(test_file_path, 'w', encoding='utf-8') as f:
                                     f.write(test_content)
@@ -1323,9 +1335,9 @@ class TaskProcessor:
                 
                 # Send the report
                 report_data = {
-                    "message": f"Task processing successfully completed for {file_path} (tester)",
+                    "message": f"Task processing successfully completed for {filename} (tester)",
                     "role": "tester",
-                    "file": file_path,
+                    "file": filename,
                     "status": "success",
                     "processing_time": 5.0,  # Placeholder
                     "report_type": "test_result"
@@ -1338,9 +1350,9 @@ class TaskProcessor:
         except Exception as e:
             logger.error(f"Error processing task: {str(e)}", exc_info=True)
             report_data = {
-                "message": f"Task processing failed for {file_path} (tester)",
+                "message": f"Task processing failed for {filename} (tester)",
                 "role": "tester",
-                "file": file_path,
+                "file": filename,
                 "status": "error",
                 "error_message": str(e),
                 "report_type": "error"

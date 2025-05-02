@@ -222,7 +222,7 @@
         "fallback_enabled": true
     },
     "desired_active_buffer": 20,
-    "ai1_desired_active_buffer": 15,
+    "ai1_desired_active_buffer": 10,
     "ai1_active_sleep_interval": 3,
     "ai1_pending_sleep_interval": 5,
     "ai1_idle_sleep_interval": 10,

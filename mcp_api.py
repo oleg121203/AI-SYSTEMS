@@ -508,13 +508,112 @@ async def _trigger_repository_dispatch(commit_successful: bool, adjusted_rel_pat
         logger.error(f"[API-GitHub] Unexpected error during repository_dispatch: {e}")
 
 
+async def create_follow_up_tasks(filename: str, original_executor_subtask_id: str):
+    """Creates and queues tester and documenter tasks after executor finishes."""
+    logger.info(f"[API-FollowUp] Creating follow-up tasks for {filename} (Original: {original_executor_subtask_id})")
+
+    # --- CHANGE: Read file content --- 
+    file_content = None
+    full_path = repo_path / filename # Construct full path
+    try:
+        if (full_path).is_file():
+            async with aiofiles.open(full_path, "r", encoding="utf-8") as f:
+                file_content = await f.read()
+            logger.info(f"[API-FollowUp] Successfully read content for {filename}")
+        else:
+            logger.warning(f"[API-FollowUp] File not found or is a directory, cannot read content: {full_path}")
+    except Exception as e:
+        logger.error(f"[API-FollowUp] Error reading file content for {filename}: {e}")
+    # --- END CHANGE ---
+
+    # Determine if testing is applicable (simple check based on common extensions)
+    testable_extensions = (
+        ".py", ".js", ".ts", ".java", ".cpp", ".go", ".rs", ".php",
+        ".html", ".css", ".scss", ".jsx", ".tsx", ".vue"
+    )
+    needs_testing = filename.lower().endswith(testable_extensions)
+
+    tasks_to_add = []
+
+    # --- Create Tester Task (if applicable) ---
+    if needs_testing:
+        tester_subtask_id = str(uuid4())
+        tester_prompt = f"Generate unit tests for the code in file: {filename}."
+        tester_subtask = {
+            "id": tester_subtask_id,
+            "text": tester_prompt,
+            "role": "tester",
+            "filename": filename,
+            # --- CHANGE: Add file content --- 
+            "code": file_content, # Add the read content
+            # --- END CHANGE ---
+            "is_rework": False, # Assuming initial test generation is not rework
+            "originating_subtask_id": original_executor_subtask_id # Link to original task
+        }
+        # Only add if content was read successfully
+        if file_content is not None:
+            tasks_to_add.append(("tester", tester_subtask_id, tester_subtask))
+        else:
+            logger.warning(f"[API-FollowUp] Skipping tester task for {filename} due to missing content.")
+    else:
+        logger.info(f"[API-FollowUp] Skipping tester task for non-testable file: {filename}")
+
+
+    # --- Create Documenter Task ---
+    documenter_subtask_id = str(uuid4())
+    documenter_prompt = f"Generate documentation (e.g., docstrings, comments) for the code in file: {filename}."
+    documenter_subtask = {
+        "id": documenter_subtask_id,
+        "text": documenter_prompt,
+        "role": "documenter",
+        "filename": filename,
+        # --- CHANGE: Add file content --- 
+        "code": file_content, # Add the read content
+        # --- END CHANGE ---
+        "is_rework": False,
+        "originating_subtask_id": original_executor_subtask_id # Link to original task
+    }
+    # Only add if content was read successfully
+    if file_content is not None:
+        tasks_to_add.append(("documenter", documenter_subtask_id, documenter_subtask))
+    else:
+        logger.warning(f"[API-FollowUp] Skipping documenter task for {filename} due to missing content.")
+
+    # --- Add tasks to queues and update status ---
+    subtask_updates = {}
+    queue_updates = {"executor": [], "tester": [], "documenter": []} # Initialize structure
+
+    for role, subtask_id, subtask_data in tasks_to_add:
+        if role == "tester":
+            await tester_queue.put(subtask_data)
+            subtask_status[subtask_id] = "pending"
+            subtask_updates[subtask_id] = "pending"
+            queue_updates["tester"] = [t for t in tester_queue._queue] # Get current queue state
+            logger.info(f"[API-FollowUp] Queued tester task {subtask_id} for {filename}")
+        elif role == "documenter":
+            await documenter_queue.put(subtask_data)
+            subtask_status[subtask_id] = "pending"
+            subtask_updates[subtask_id] = "pending"
+            queue_updates["documenter"] = [t for t in documenter_queue._queue] # Get current queue state
+            logger.info(f"[API-FollowUp] Queued documenter task {subtask_id} for {filename}")
+
+    # --- Broadcast updates ---
+    if subtask_updates:
+        await broadcast_specific_update({
+            "subtasks": subtask_updates,
+            "queues": queue_updates # Send updated queue states
+        })
+        await broadcast_monitoring_stats() # Update total/completed counts
+
+
 async def write_and_commit_code(
-    file_rel_path: str, content: str, subtask_id: Optional[str]
+    file_rel_path: str, content: str, subtask_id: Optional[str], background_tasks: BackgroundTasks # Add background_tasks
 ) -> bool:
-    """Helper function to write file content, commit changes, and trigger dispatch."""
+    """Helper function to write file content, commit changes, trigger dispatch, and create follow-up tasks."""
     adjusted_rel_path = await _determine_adjusted_path(repo_path, file_rel_path, repo_dir)
 
     async with file_write_lock:
+        # ... (rest of the path safety check) ...
         if not is_safe_path(repo_path, adjusted_rel_path):
             logger.error(f"[API-Write] Attempt to write to unsafe adjusted path denied: {adjusted_rel_path} (original: {file_rel_path})")
             return False
@@ -535,6 +634,14 @@ async def write_and_commit_code(
             return False # Cannot commit if repo init fails
 
         commit_successful = await _commit_changes(current_repo, adjusted_rel_path, subtask_id)
+
+        # --- ADDED: Trigger follow-up tasks on successful commit ---
+        if commit_successful and subtask_id: # Ensure commit was ok and we have the original ID
+             logger.info(f"[API-Write] Commit successful for {adjusted_rel_path}. Scheduling follow-up tasks.")
+             background_tasks.add_task(create_follow_up_tasks, adjusted_rel_path, subtask_id)
+        elif not commit_successful:
+             logger.warning(f"[API-Write] Commit failed or no changes for {adjusted_rel_path}. Skipping follow-up tasks.")
+        # --- END ADDED ---
 
         # Trigger dispatch regardless of commit success *if writing succeeded*?
         # Current logic triggers only if commit_successful is True (which includes "no changes staged")
@@ -627,9 +734,10 @@ def get_progress_stats():
     stats["tasks_total"] = len(subtask_status) # Загальна кількість відомих завдань
 
     # Temporary sets to track files based on subtask_status
-    # --- CHANGE: Implement logic for tested/accepted files --- 
-    temp_accepted_files = set()
-    temp_rejected_files = set()
+    # --- CHANGE: Remove unused variables --- 
+    # temp_accepted_files = set()
+    # temp_rejected_files = set()
+    # --- END CHANGE ---
     # We might need the original `tasks` dict if file info isn't in subtask_status
     # This part needs review based on what `subtask_status` actually contains.
     # For now, focus on counting completed tasks from subtask_status.
@@ -1006,11 +1114,13 @@ async def receive_report(
             if report.type == "code":
                 new_status = "code_received"
                 if report.file and report.content:
+                    # Pass background_tasks to write_and_commit_code
                     background_tasks.add_task(
                         write_and_commit_code,
                         report.file,
                         report.content,
                         report.subtask_id,
+                        background_tasks=background_tasks # Pass it here
                     )
             elif report.type == "test_result":
                 new_status = "tested"
@@ -1019,10 +1129,8 @@ async def receive_report(
                     report_metrics[report.subtask_id] = process_test_results(
                         report, report.subtask_id
                     )
-                # --- ADDED: TODO for follow-up tasks ---
-                # TODO: Implement create_follow_up_tasks or similar logic here
-                # await create_follow_up_tasks(report.subtask_id)
-                # --- END TODO ---
+                # --- REMOVED TODO for follow-up tasks ---
+                # --- END REMOVED ---
             elif report.type == "status_update":
                 new_status = report.message or "updated"
                 if hasattr(report, "status") and report.status:
@@ -1459,7 +1567,9 @@ async def clear_state(): # Removed background_tasks as we await commands now
 
     # Clear repo contents (preserves repo/ directory itself)
     # Ensure repo_path is correctly used for the working directory
-    repo_clear_cmd = f"find . -mindepth 1 -delete" # Command to run inside repo_dir
+    # --- CHANGE: Use regular string ---
+    repo_clear_cmd = "find . -mindepth 1 -delete" # Command to run inside repo_dir
+    # --- END CHANGE ---
     if not await run_shell_command(repo_clear_cmd, "Clear repository contents", working_dir=repo_path):
          logger.error("Failed to clear repository contents. Continuing cleanup...")
 
@@ -1467,7 +1577,9 @@ async def clear_state(): # Removed background_tasks as we await commands now
     logger.info(f"Re-initializing Git repository at {repo_path}")
     try:
         # Use git init command via shell, ensure it runs in repo_path
-        init_cmd = f"git init" # Command to run inside repo_dir
+        # --- CHANGE: Use regular string ---
+        init_cmd = "git init" # Command to run inside repo_dir
+        # --- END CHANGE ---
         if not await run_shell_command(init_cmd, "Initialize Git repository", working_dir=repo_path):
              logger.error("Failed to re-initialize Git repository via command.")
              repo = None # Mark as unavailable
@@ -1490,7 +1602,9 @@ async def clear_state(): # Removed background_tasks as we await commands now
         repo = None
 
     # Clear logs (run from workspace root)
-    log_clear_cmd = f"rm -f logs/*.log"
+    # --- CHANGE: Use regular string ---
+    log_clear_cmd = "rm -f logs/*.log"
+    # --- END CHANGE ---
     await run_shell_command(log_clear_cmd, "Clear log files") # Don't abort if fails
 
     # Clear Python cache (run from workspace root)
