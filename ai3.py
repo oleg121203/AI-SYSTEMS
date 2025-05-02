@@ -1,28 +1,48 @@
 import asyncio
-import importlib
 import json
 import logging
 import os
 import re
-import subprocess
 import time
-from datetime import datetime
-from pathlib import Path
 import shutil
-import aiofiles
-from typing import Dict, Optional, List, Tuple
 import requests
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from pathlib import Path
+
 import aiohttp
-from git import GitCommandError, Repo
+import git
+from git import Repo, GitCommandError
 
 from config import load_config
-from providers import BaseProvider, ProviderFactory
-from utils import (
-    apply_request_delay,
-    setup_service_logger,
-    wait_for_service,
-    call_llm_provider, # Import the new utility function
+import ai_communication as ai_comm
+from utils import log_message, apply_request_delay, setup_service_logger, wait_for_service
+from providers import BaseProvider, ProviderFactory  # Adding missing provider imports
+import aiofiles
+
+# Load configuration and set up logging
+config = load_config()
+MCP_API_URL = config.get("mcp_api", "http://localhost:7860")
+LOG_FILE = "logs/ai3.log"
+
+# Define constants
+DEFAULT_REPO_DIR = "repo"
+DEFAULT_MCP_API_URL = "http://localhost:7860"
+REPO_PREFIX = "repo/" # All relative paths should be relative to repo dir
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.FileHandler("logs/ai3.log"),
+        logging.StreamHandler()
+    ]
 )
+logger = logging.getLogger("AI3")
+
+# Load configuration
+config = load_config()
 
 # Constants
 DEFAULT_MCP_API_URL = "http://localhost:7860"
@@ -37,6 +57,39 @@ logger = setup_service_logger("ai3")
 config = load_config()
 MCP_API_URL = config.get("mcp_api", DEFAULT_MCP_API_URL)
 REPO_DIR = config.get("repo_dir", DEFAULT_REPO_DIR)
+
+# Define wait_for_service function before it's used
+async def wait_for_service(service_url: str, timeout: int = 60) -> bool:
+    """Wait for a service to become available by polling its URL.
+    
+    Args:
+        service_url: The URL of the service to check
+        timeout: Maximum time to wait in seconds
+        
+    Returns:
+        bool: True if service became available, False if timeout occurred
+    """
+    logger.info(f"[AI3] Waiting for service at {service_url} (timeout: {timeout}s)")
+    start_time = time.time()
+    async with aiohttp.ClientSession() as session:
+        while time.time() - start_time < timeout:
+            try:
+                async with session.get(service_url, timeout=5) as response:
+                    if response.status == 200:
+                        logger.info(f"[AI3] Service at {service_url} is available")
+                        return True
+                    else:
+                        logger.debug(f"[AI3] Service check: Status {response.status} from {service_url}")
+            except (aiohttp.ClientConnectorError, aiohttp.ClientError, asyncio.TimeoutError):
+                pass  # Expected during startup, don't log each failure
+            except Exception as e:
+                logger.debug(f"[AI3] Error checking service: {e}")
+            
+            # Check every second
+            await asyncio.sleep(1)
+    
+    logger.warning(f"[AI3] Timeout waiting for service at {service_url} after {timeout}s")
+    return False
 
 
 def _init_or_open_repo(repo_path: str) -> Repo:
@@ -386,7 +439,7 @@ async def create_files_from_structure(structure_obj: dict, repo: Repo) -> Tuple[
 
             try:
                 parent_dir = os.path.dirname(full_path)
-                if parent_dir != base_path and not os.path.exists(parent_dir):
+                if (parent_dir != base_path and not os.path.exists(parent_dir)):
                     os.makedirs(parent_dir, exist_ok=True)
                     logger.info(f"[AI3] Created parent directory: {os.path.relpath(parent_dir, base_path)}")
 
@@ -511,11 +564,21 @@ class AI3:
                 shutil.rmtree(self.repo_dir)
                 logger.info(f"[AI3-Git] Removed existing repository: {self.repo_dir}")
 
+            # Create the directory before initializing Git repository
             logger.info(f"[AI3-Git] Creating new repository directory: {self.repo_dir}")
             os.makedirs(self.repo_dir, exist_ok=True)
-
-            self.repo = Repo.init(self.repo_dir)
-            logger.info(f"[AI3-Git] Successfully initialized new repository at: {self.repo_dir}")
+            
+            # Змінемо поточний каталог на self.repo_dir перед викликом Repo.init
+            # щоб уникнути помилки "unable to get current working directory"
+            current_dir = os.getcwd()
+            os.chdir(self.repo_dir)
+            
+            try:
+                self.repo = Repo.init('.')  # Ініціалізація в поточному каталозі
+                logger.info(f"[AI3-Git] Successfully initialized new repository at: {self.repo_dir}")
+            finally:
+                # Повернення до попереднього робочого каталогу
+                os.chdir(current_dir)
 
             gitignore_path = os.path.join(self.repo_dir, GITIGNORE_FILENAME)
             with open(gitignore_path, "w", encoding="utf-8") as f:
@@ -755,44 +818,21 @@ class AI3:
         except Exception as e:
             logger.error(f"[AI3] Error scanning logs with Ollama: {e}", exc_info=True)
 
-    async def request_error_fix(self, error_summary: List[Tuple[str, str, str]]):
-        self.monitoring_stats["error_fixes_requested"] += 1
-        await self.create_session()
-        mcp_api_url = self.config.get("mcp_api_url", DEFAULT_MCP_API_URL)
-        try:
-            error_report = "\n".join([f"File: {f}\nContext:\n{ctx}\nError: {err}" for f, err, ctx in error_summary[:3]])
-            prompt = f"Fix errors detected in logs:\n```\n{error_report}\n```\nAnalyze these errors and provide the corrected code or necessary actions."
-
-            payload = {
-                "role": "executor",
-                "prompt": prompt,
-                "priority": 1,
-                "context": {"source": "AI3 Error Detection"}
-            }
-            logger.info("[AI3 -> MCP] Requesting high-priority task for error fixing.")
-            async with self.session.post(f"{mcp_api_url}/task", json=payload, timeout=20) as resp:
-                if resp.status == 200:
-                    logger.info("[AI3 -> MCP] Successfully requested error fix task.")
-                    self.monitoring_stats["successful_requests"] += 1
-                else:
-                    logger.error(f"[AI3 -> MCP] Error requesting error fix task: {resp.status} - {await resp.text()}")
-        except asyncio.TimeoutError:
-            logger.warning("[AI3 -> MCP] Timeout requesting error fix task.")
-        except aiohttp.ClientError as e:
-            logger.error(f"[AI3 -> MCP] Connection error requesting error fix task: {e}")
-        except Exception as e:
-            logger.error(f"[AI3 -> MCP] Error requesting error fix task: {e}", exc_info=True)
-
     async def update_file_and_commit(self, file_path_relative: str, content: str):
+        """Updates a file in the repository and commits the change."""
         full_path = os.path.join(self.repo_dir, file_path_relative)
         try:
+            # Ensure parent directory exists
             os.makedirs(os.path.dirname(full_path), exist_ok=True)
+            # Write the file content
             async with aiofiles.open(full_path, "w", encoding="utf-8") as f:
                 await f.write(content)
+            # Log and commit the changes
             logger.info(f"[AI3-Git] Updated file content: {full_path}")
             commit_message = f"AI3: Updated {file_path_relative}"
             _commit_changes(self.repo, [full_path], commit_message)
         except Exception as e:
+            # Log error and initiate collaboration if update/commit fails
             logger.error(f"[AI3-Git] Failed to update or commit file {file_path_relative}: {e}", exc_info=True)
             await initiate_collaboration(f"Failed to update/commit {file_path_relative}: {e}", f"Content length: {len(content)}")
 
@@ -1021,34 +1061,19 @@ class AI3:
             logger.error(f"[AI3] Error checking logs for idle workers: {e}", exc_info=True)
 
     async def _report_system_error_to_ai1(self, log_file: str, error_line: str, context: str) -> bool:
-        mcp_api_url = self.config.get("mcp_api_url", DEFAULT_MCP_API_URL)
+        """Reports a system error to AI1 using the standardized communication protocol"""
         try:
-            await self.create_session()
-            payload = {
-                "source": "AI3",
-                "type": "system_error_report",
-                "details": {
-                    "log_file": log_file,
-                    "error_line": error_line,
-                    "context": context,
-                    "timestamp": datetime.now().isoformat()
-                }
-            }
-            logger.info(f"[AI3 -> AI1] Preparing to report system error to AI1 from {log_file}: {error_line[:100]}...")
-            logger.debug(f"[AI3 -> AI1] Error context: {context[:200]}{'...' if len(context) > 200 else ''}")
-            async with self.session.post(f"{mcp_api_url}/ai_collaboration", json=payload, timeout=15) as response:
-                if response.status == 200:
-                    logger.info(f"[AI3 -> AI1] Successfully reported system error to AI1 from {log_file}")
-                    return True
-                else:
-                    logger.error(f"[AI3 -> AI1] Failed to send system error report: {response.status} - {await response.text()}")
-                    return False
-        except asyncio.TimeoutError:
-            logger.warning("[AI3 -> AI1] Timeout sending system error report.")
-            return False
-        except aiohttp.ClientError as e:
-            logger.error(f"[AI3 -> AI1] Connection error sending system error report: {e}")
-            return False
+            # Use the new communication module instead of direct API calls
+            await ai_comm.send_error_report(
+                sender="ai3",
+                error_type="system_error",
+                message=error_line,
+                file_path=log_file,
+                stack_trace=context,
+                severity=ai_comm.Priority.HIGH
+            )
+            logger.info(f"[AI3 -> AI1] Successfully reported system error to AI1 from {log_file}")
+            return True
         except Exception as e:
             logger.error(f"[AI3 -> AI1] Failed to send system error report: {e}", exc_info=True)
             return False
@@ -1126,7 +1151,7 @@ class AI3:
                 
                 # Check queue sizes for imbalances
                 executor_queue_size, all_queue_sizes = await self.check_worker_status()
-                if executor_queue_size > 20 and all_queue_sizes.get("tester", 0) < 5:
+                if (executor_queue_size > 20 and all_queue_sizes.get("tester", 0) < 5):
                     logger.warning(f"[AI3] Queue imbalance detected: executor={executor_queue_size}, tester={all_queue_sizes.get('tester', 0)}")
                     await self.send_queue_info_to_ai1(all_queue_sizes)
                 
@@ -1488,6 +1513,16 @@ class AI3:
         await asyncio.sleep(0.1) # Allow tasks to potentially start up/log messages
         logger.info(f"[AI3] Total background tasks started: {len(self.background_tasks)}")
 
+    async def ensure_session(self):
+        """Ensures an active aiohttp session exists and is available."""
+        if self.session is None or self.session.closed:
+            self.session = aiohttp.ClientSession()
+            logger.info("[AI3] Created new aiohttp ClientSession.")
+        
+        # Also ensure we have a message bus instance ready
+        self.message_bus = await ai_comm.get_message_bus()
+        return self.session
+
 async def main():
     config_data = load_config()
     ai3 = AI3(config_data)
@@ -1542,3 +1577,36 @@ async def call_ollama(prompt: str, endpoint: str, model: str, max_tokens: int = 
     except Exception as e:
         logger.error(f"[AI3-Ollama] Unexpected error calling Ollama: {e}", exc_info=True)
         return ""
+
+# Add the missing wait_for_service function
+async def wait_for_service(service_url: str, timeout: int = 60) -> bool:
+    """Wait for a service to become available by polling its URL.
+    
+    Args:
+        service_url: The URL of the service to check
+        timeout: Maximum time to wait in seconds
+        
+    Returns:
+        bool: True if service became available, False if timeout occurred
+    """
+    logger.info(f"[AI3] Waiting for service at {service_url} (timeout: {timeout}s)")
+    start_time = time.time()
+    async with aiohttp.ClientSession() as session:
+        while time.time() - start_time < timeout:
+            try:
+                async with session.get(service_url, timeout=5) as response:
+                    if response.status == 200:
+                        logger.info(f"[AI3] Service at {service_url} is available")
+                        return True
+                    else:
+                        logger.debug(f"[AI3] Service check: Status {response.status} from {service_url}")
+            except (aiohttp.ClientConnectorError, aiohttp.ClientError, asyncio.TimeoutError):
+                pass  # Expected during startup, don't log each failure
+            except Exception as e:
+                logger.debug(f"[AI3] Error checking service: {e}")
+            
+            # Check every second
+            await asyncio.sleep(1)
+    
+    logger.warning(f"[AI3] Timeout waiting for service at {service_url} after {timeout}s")
+    return False

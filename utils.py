@@ -240,7 +240,7 @@ def setup_logging():
 
     logging.basicConfig(
         level=logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        format="%(asctime)s - %(name)s - %(levellevel)s - %(message)s",
         handlers=[logging.StreamHandler(), logging.FileHandler("logs/mcp.log")],
     )
 
@@ -323,21 +323,31 @@ from providers import BaseProvider, ProviderFactory # Ensure these are imported
 
 # ... existing code ...
 
-async def apply_request_delay(ai_identifier: str, role: Optional[str] = None):
-    """Applies a random delay based on configuration before making an API request."""
+# --- CHANGE: Modify apply_request_delay signature and logic ---
+async def apply_request_delay(identifier: str):
+    """Applies a random delay based on configuration before making an API request.
+    Identifier format: 'ai1', 'ai3', 'ai2_executor', 'ai2_tester', 'ai2_documenter'.
+    """
     try:
         # Load fresh config inside function to get latest values
-        # Assuming load_config is robust enough or default config exists
-        from config import load_config
+        from config import load_config # Keep import local if config can change
 
         config = load_config()
         delay_config = config.get("request_delays", {})
 
         delay_range = None
-        if ai_identifier == "ai2" and role:
-            delay_range = delay_config.get("ai2", {}).get(role)
-        elif ai_identifier in delay_config:
-            delay_range = delay_config.get(ai_identifier)
+        role = None
+        ai_base = identifier # Default to the full identifier
+
+        # Check if it's an AI2 identifier and extract role
+        if identifier.startswith("ai2_"):
+            parts = identifier.split("_", 1)
+            if len(parts) == 2:
+                ai_base = parts[0] # Should be 'ai2'
+                role = parts[1]
+                delay_range = delay_config.get(ai_base, {}).get(role)
+        elif identifier in delay_config: # Handle 'ai1', 'ai3'
+             delay_range = delay_config.get(identifier)
 
         if (
             delay_range
@@ -349,23 +359,24 @@ async def apply_request_delay(ai_identifier: str, role: Optional[str] = None):
             if min_delay <= max_delay and min_delay >= 0:  # Ensure valid range
                 delay = random.uniform(min_delay, max_delay)
                 logger.debug(
-                    f"Applying delay for {ai_identifier}{f' ({role})' if role else ''}: {delay:.2f}s"
+                    f"Applying delay for {identifier}: {delay:.2f}s"
                 )
                 await asyncio.sleep(delay)
             else:
                 logger.warning(
-                    f"Invalid delay range for {ai_identifier}{f' ({role})' if role else ''}: min={min_delay}, max={max_delay}. Skipping delay."
+                    f"Invalid delay range for {identifier}: min={min_delay}, max={max_delay}. Skipping delay."
                 )
         else:
             # Log only if delays are expected but not configured correctly
             if delay_config:  # Only warn if request_delays section exists
                 logger.debug(
-                    f"No valid delay configured for {ai_identifier}{f' ({role})' if role else ''}. Skipping delay."
+                    f"No valid delay configured for {identifier}. Skipping delay."
                 )
     except Exception as e:
         logger.error(
-            f"Error applying request delay: {e}"
+            f"Error applying request delay for {identifier}: {e}"
         )  # Log error but don't block execution
+# --- END CHANGE ---
 
 # --- NEW: Add call_llm_provider function ---
 async def call_llm_provider(
@@ -374,7 +385,7 @@ async def call_llm_provider(
     system_prompt: Optional[str],
     config: Dict,
     ai_config: Dict,
-    service_name: str,
+    service_name: str, # e.g., 'ai1', 'ai2_executor'
     max_tokens_override: Optional[int] = None,
     temperature_override: Optional[float] = None,
 ) -> Optional[str]:
@@ -384,7 +395,9 @@ async def call_llm_provider(
         logger.info(f"[{service_name.upper()}] Calling provider {provider_name}...")
         # Pass the global config to the factory
         provider_instance: BaseProvider = ProviderFactory.create_provider(provider_name, config=config)
-        await apply_request_delay(service_name) # Apply delay based on service
+        # --- CHANGE: Pass single identifier to apply_request_delay ---
+        await apply_request_delay(service_name) # Apply delay based on service identifier
+        # --- END CHANGE ---
 
         # Determine max_tokens and temperature, allowing overrides
         max_tokens = max_tokens_override if max_tokens_override is not None else ai_config.get("max_tokens", 4000)
@@ -1158,3 +1171,629 @@ def get_original_file_from_test(test_file: str) -> Optional[str]:
             return os.path.join(dir_name, original_name)
     
     return None
+
+import os
+import re
+import time
+import logging
+import json
+import subprocess
+import asyncio
+from typing import Dict, List, Tuple, Optional, Any, Set, Union
+from dataclasses import dataclass
+from datetime import datetime
+import traceback
+
+# Налаштування логування
+logger = logging.getLogger("utils")
+
+# Додавання класу для аналізу результатів тестування
+@dataclass
+class TestResult:
+    success: bool
+    failures: List[str]
+    output: str
+    file_path: str
+    coverage: Optional[float] = None
+    execution_time: float = 0.0
+    retry_count: int = 0
+    
+    def get_failure_summary(self) -> str:
+        """Повертає стислий опис помилок"""
+        if not self.failures:
+            return "No failures"
+        
+        return "\n".join(self.failures[:5]) + (
+            f"\n... and {len(self.failures) - 5} more issues" if len(self.failures) > 5 else ""
+        )
+    
+    def to_dict(self) -> dict:
+        """Конвертує результат у словник для серіалізації"""
+        return {
+            "success": self.success,
+            "failures": self.failures,
+            "output_length": len(self.output),
+            "file_path": self.file_path,
+            "coverage": self.coverage,
+            "execution_time": self.execution_time,
+            "retry_count": self.retry_count
+        }
+
+class TestRunner:
+    """Клас для автоматичного запуску та аналізу результатів тестування"""
+    
+    def __init__(self, repo_dir: str):
+        self.repo_dir = repo_dir
+        self.test_files_map = {}  # Кеш відповідності між файлами коду та тестами
+        self.test_history = {}    # Історія запусків тестів
+        self.max_retries = 3      # Максимальна кількість повторних спроб
+        
+    def find_test_files(self) -> List[str]:
+        """Знаходить всі файли тестів у репозиторії"""
+        test_files = []
+        
+        for root, _, files in os.walk(self.repo_dir):
+            for file in files:
+                if self._is_test_file(file):
+                    rel_path = os.path.relpath(os.path.join(root, file), self.repo_dir)
+                    test_files.append(rel_path)
+                    
+        logger.info(f"[TestRunner] Found {len(test_files)} test files")
+        return test_files
+    
+    def find_implementation_files(self) -> List[str]:
+        """Знаходить всі файли з кодом реалізації у репозиторії"""
+        impl_files = []
+        
+        excluded_dirs = {'__pycache__', 'node_modules', '.git', 'venv', 'env', '.env'}
+        
+        for root, dirs, files in os.walk(self.repo_dir):
+            # Пропускаємо виключені директорії
+            dirs[:] = [d for d in dirs if d not in excluded_dirs]
+            
+            for file in files:
+                if self._is_implementation_file(file) and not self._is_test_file(file):
+                    rel_path = os.path.relpath(os.path.join(root, file), self.repo_dir)
+                    impl_files.append(rel_path)
+        
+        logger.info(f"[TestRunner] Found {len(impl_files)} implementation files")
+        return impl_files
+    
+    def map_tests_to_implementation(self) -> Dict[str, List[str]]:
+        """Створює відображення між файлами реалізації та тестами"""
+        if self.test_files_map:
+            return self.test_files_map
+            
+        test_files = self.find_test_files()
+        impl_files = self.find_implementation_files()
+        
+        result = {}
+        
+        for impl_file in impl_files:
+            impl_name = os.path.basename(impl_file)
+            impl_name_no_ext = os.path.splitext(impl_name)[0]
+            impl_dir = os.path.dirname(impl_file)
+            
+            matching_tests = []
+            
+            # Пошук тестів за різними патернами
+            for test_file in test_files:
+                test_name = os.path.basename(test_file)
+                test_dir = os.path.dirname(test_file)
+                
+                # Паттерн 1: test_file.py або file_test.py
+                if test_name.startswith(f"test_{impl_name}") or test_name.startswith(f"{impl_name_no_ext}_test"):
+                    matching_tests.append(test_file)
+                    
+                # Паттерн 2: tests/file.py для impl/file.py
+                elif test_name == impl_name and ("test" in test_dir.lower() or "spec" in test_dir.lower()):
+                    matching_tests.append(test_file)
+                    
+                # Паттерн 3: tests/prefix/file_test.py для prefix/file.py
+                elif test_dir.endswith("tests") and impl_dir not in ["tests", "test"]:
+                    if impl_name_no_ext in test_name:
+                        matching_tests.append(test_file)
+            
+            # Якщо знайдено відповідні тести, додаємо запис
+            if matching_tests:
+                result[impl_file] = matching_tests
+        
+        self.test_files_map = result
+        logger.info(f"[TestRunner] Created test-to-implementation map with {len(result)} entries")
+        return result
+    
+    def run_tests(self, specific_files: List[str] = None, retry_failed: bool = True) -> Dict[str, TestResult]:
+        """Запускає всі або вказані тести і повертає результати"""
+        test_files = specific_files if specific_files else self.find_test_files()
+        results = {}
+        
+        for test_file in test_files:
+            # Пропускаємо файли, що не є тестами
+            if not self._is_test_file(os.path.basename(test_file)):
+                continue
+                
+            abs_path = os.path.join(self.repo_dir, test_file)
+            if not os.path.exists(abs_path):
+                logger.warning(f"[TestRunner] Test file does not exist: {abs_path}")
+                continue
+                
+            # Запускаємо тест з можливими повторними спробами
+            result = self._run_single_test(test_file, retry_count=0, max_retries=self.max_retries if retry_failed else 0)
+            results[test_file] = result
+            
+            # Зберігаємо в історії
+            if test_file not in self.test_history:
+                self.test_history[test_file] = []
+            self.test_history[test_file].append({
+                "timestamp": datetime.now().isoformat(),
+                "result": result.to_dict()
+            })
+            
+        return results
+    
+    def _run_single_test(self, test_file: str, retry_count: int = 0, max_retries: int = 3) -> TestResult:
+        """Запускає один тест з можливими повторними спробами при помилках"""
+        start_time = time.time()
+        abs_path = os.path.join(self.repo_dir, test_file)
+        ext = os.path.splitext(test_file)[1].lower()
+        
+        try:
+            # Вибір команди залежно від типу файлу
+            command = self._get_test_command(test_file)
+            
+            # Запуск команди
+            logger.info(f"[TestRunner] Running test: {test_file} with command: {command}")
+            process = subprocess.run(
+                command,
+                shell=True,
+                cwd=self.repo_dir,
+                capture_output=True,
+                text=True,
+                timeout=300  # 5 хвилин максимум
+            )
+            
+            execution_time = time.time() - start_time
+            output = process.stdout + "\n" + process.stderr
+            
+            # Аналіз результатів
+            success = process.returncode == 0
+            failures = []
+            
+            # Якщо тест не пройшов, витягаємо інформацію про помилки
+            if not success:
+                failures = self._extract_failures(output, test_file)
+                logger.warning(f"[TestRunner] Test {test_file} failed with {len(failures)} failures")
+                
+                # Спроба запустити ще раз, якщо дозволено
+                if retry_count < max_retries:
+                    logger.info(f"[TestRunner] Retrying test {test_file}, attempt {retry_count + 1}/{max_retries}")
+                    return self._run_single_test(test_file, retry_count + 1, max_retries)
+            
+            # Отримання покриття тестами, якщо можливо
+            coverage = self._extract_coverage(output)
+                
+            return TestResult(
+                success=success,
+                failures=failures,
+                output=output,
+                file_path=test_file,
+                coverage=coverage,
+                execution_time=execution_time,
+                retry_count=retry_count
+            )
+            
+        except subprocess.TimeoutExpired:
+            logger.error(f"[TestRunner] Test {test_file} timed out after 300 seconds")
+            return TestResult(
+                success=False,
+                failures=["Test execution timed out after 300 seconds"],
+                output="TIMEOUT",
+                file_path=test_file,
+                execution_time=300.0,
+                retry_count=retry_count
+            )
+        except Exception as e:
+            logger.error(f"[TestRunner] Error running test {test_file}: {e}", exc_info=True)
+            return TestResult(
+                success=False,
+                failures=[f"Error executing test: {str(e)}"],
+                output=traceback.format_exc(),
+                file_path=test_file,
+                execution_time=time.time() - start_time,
+                retry_count=retry_count
+            )
+    
+    def run_linters(self, specific_files: List[str] = None) -> Dict[str, TestResult]:
+        """Запускає лінтинг для всіх або вказаних файлів"""
+        impl_files = specific_files if specific_files else self.find_implementation_files()
+        results = {}
+        
+        for file_path in impl_files:
+            abs_path = os.path.join(self.repo_dir, file_path)
+            if not os.path.exists(abs_path):
+                logger.warning(f"[TestRunner] File does not exist: {abs_path}")
+                continue
+                
+            ext = os.path.splitext(file_path)[1].lower()
+            
+            # Вибір лінтера за типом файлу
+            lint_command = None
+            if ext == '.py':
+                lint_command = f"flake8 {abs_path}"
+            elif ext in ['.js', '.jsx', '.ts', '.tsx']:
+                lint_command = f"npx eslint {abs_path}"
+            elif ext in ['.go']:
+                lint_command = f"golint {abs_path}"
+            elif ext in ['.rs']:
+                lint_command = f"cargo clippy --manifest-path={os.path.join(self.repo_dir, 'Cargo.toml')} -- -D warnings"
+            
+            if not lint_command:
+                logger.info(f"[TestRunner] No linter available for {file_path}")
+                continue
+                
+            try:
+                # Запуск лінтера
+                logger.info(f"[TestRunner] Running linter: {lint_command}")
+                start_time = time.time()
+                process = subprocess.run(
+                    lint_command,
+                    shell=True,
+                    cwd=self.repo_dir,
+                    capture_output=True,
+                    text=True,
+                    timeout=60
+                )
+                
+                execution_time = time.time() - start_time
+                output = process.stdout + "\n" + process.stderr
+                
+                # Аналіз результатів
+                success = process.returncode == 0
+                failures = []
+                
+                # Якщо лінтинг знайшов проблеми
+                if not success:
+                    failures = self._extract_lint_failures(output, file_path)
+                    logger.warning(f"[TestRunner] Linting {file_path} found {len(failures)} issues")
+                
+                results[file_path] = TestResult(
+                    success=success,
+                    failures=failures,
+                    output=output,
+                    file_path=file_path,
+                    execution_time=execution_time
+                )
+                
+            except subprocess.TimeoutExpired:
+                logger.error(f"[TestRunner] Linting {file_path} timed out after 60 seconds")
+                results[file_path] = TestResult(
+                    success=False,
+                    failures=["Linting timed out after 60 seconds"],
+                    output="TIMEOUT",
+                    file_path=file_path,
+                    execution_time=60.0
+                )
+            except Exception as e:
+                logger.error(f"[TestRunner] Error running linter for {file_path}: {e}")
+                results[file_path] = TestResult(
+                    success=False,
+                    failures=[f"Error running linter: {str(e)}"],
+                    output=traceback.format_exc(),
+                    file_path=file_path,
+                    execution_time=time.time() - start_time
+                )
+                
+        return results
+    
+    def generate_test_report(self, test_results: Dict[str, TestResult]) -> Dict[str, Any]:
+        """Генерує детальний звіт про результати тестування"""
+        total_tests = len(test_results)
+        passed_tests = sum(1 for result in test_results.values() if result.success)
+        failed_tests = total_tests - passed_tests
+        
+        total_execution_time = sum(result.execution_time for result in test_results.values())
+        avg_coverage = 0
+        coverage_count = 0
+        
+        for result in test_results.values():
+            if result.coverage is not None:
+                avg_coverage += result.coverage
+                coverage_count += 1
+                
+        if coverage_count > 0:
+            avg_coverage /= coverage_count
+            
+        # Збір інсайтів
+        insights = []
+        
+        # Інсайт: Проблемні модулі (найбільше невдач)
+        if failed_tests > 0:
+            failed_modules = {}
+            for file_path, result in test_results.items():
+                if not result.success:
+                    module = os.path.dirname(file_path) or "root"
+                    failed_modules[module] = failed_modules.get(module, 0) + 1
+                    
+            most_problematic = sorted(failed_modules.items(), key=lambda x: x[1], reverse=True)[:3]
+            if most_problematic:
+                insights.append(f"Most problematic modules: " + 
+                               ", ".join([f"{module} ({count} failed tests)" for module, count in most_problematic]))
+        
+        # Інсайт: Низьке покриття коду
+        if avg_coverage < 50 and coverage_count > 0:
+            insights.append(f"Low test coverage detected: {avg_coverage:.2f}%. Consider adding more tests.")
+            
+        # Інсайт: Повільні тести
+        slow_tests = [
+            (path, result.execution_time) 
+            for path, result in test_results.items() 
+            if result.execution_time > 5.0
+        ]
+        if slow_tests:
+            slow_tests.sort(key=lambda x: x[1], reverse=True)
+            insights.append(f"Slow tests detected: " + 
+                           ", ".join([f"{path} ({time:.2f}s)" for path, time in slow_tests[:3]]))
+        
+        # Інсайт: Часті повторні спроби
+        tests_with_retries = [
+            (path, result.retry_count) 
+            for path, result in test_results.items() 
+            if result.retry_count > 0
+        ]
+        if tests_with_retries:
+            insights.append(f"Unstable tests (required retries): " + 
+                           ", ".join([f"{path} ({retries} retries)" for path, retries in tests_with_retries[:3]]))
+        
+        # Загальний звіт
+        return {
+            "summary": {
+                "total_tests": total_tests,
+                "passed_tests": passed_tests,
+                "failed_tests": failed_tests,
+                "pass_rate": (passed_tests / total_tests * 100) if total_tests > 0 else 0,
+                "total_execution_time": total_execution_time,
+                "average_coverage": avg_coverage if coverage_count > 0 else None
+            },
+            "tests": {
+                path: result.to_dict() for path, result in test_results.items()
+            },
+            "insights": insights,
+            "timestamp": datetime.now().isoformat()
+        }
+    
+    def _is_test_file(self, filename: str) -> bool:
+        """Визначає, чи є файл тестовим"""
+        filename_lower = filename.lower()
+        return (
+            filename_lower.startswith("test_") or
+            filename_lower.endswith("_test.py") or
+            filename_lower.endswith(".test.js") or
+            filename_lower.endswith("_test.go") or
+            filename_lower.endswith("_test.rs") or
+            filename_lower.endswith("test.cpp") or
+            filename_lower.endswith("test.java") or
+            "test" in filename_lower and (
+                filename_lower.endswith(".py") or
+                filename_lower.endswith(".js") or
+                filename_lower.endswith(".jsx") or
+                filename_lower.endswith(".ts") or
+                filename_lower.endswith(".tsx") or
+                filename_lower.endswith(".go") or
+                filename_lower.endswith(".rs") or
+                filename_lower.endswith(".cpp") or
+                filename_lower.endswith(".java")
+            )
+        )
+    
+    def _is_implementation_file(self, filename: str) -> bool:
+        """Визначає, чи є файл файлом з кодом реалізації"""
+        filename_lower = filename.lower()
+        return (
+            filename_lower.endswith(".py") or
+            filename_lower.endswith(".js") or
+            filename_lower.endswith(".jsx") or
+            filename_lower.endswith(".ts") or
+            filename_lower.endswith(".tsx") or
+            filename_lower.endswith(".go") or
+            filename_lower.endswith(".rs") or
+            filename_lower.endswith(".cpp") or
+            filename_lower.endswith(".hpp") or
+            filename_lower.endswith(".c") or
+            filename_lower.endswith(".h") or
+            filename_lower.endswith(".java") or
+            filename_lower.endswith(".php")
+        )
+    
+    def _get_test_command(self, test_file: str) -> str:
+        """Повертає відповідну команду для запуску тесту"""
+        abs_path = os.path.join(self.repo_dir, test_file)
+        ext = os.path.splitext(test_file)[1].lower()
+        
+        if ext == '.py':
+            return f"cd {self.repo_dir} && python -m pytest {test_file} -v"
+        elif ext in ['.js', '.jsx']:
+            if os.path.exists(os.path.join(self.repo_dir, 'package.json')):
+                # Спробуємо виявити фреймворк з package.json
+                with open(os.path.join(self.repo_dir, 'package.json'), 'r') as f:
+                    try:
+                        package_data = json.load(f)
+                        deps = {**package_data.get('dependencies', {}), **package_data.get('devDependencies', {})}
+                        
+                        if 'jest' in deps:
+                            return f"cd {self.repo_dir} && npx jest {test_file}"
+                        elif 'mocha' in deps:
+                            return f"cd {self.repo_dir} && npx mocha {test_file}"
+                    except json.JSONDecodeError:
+                        pass
+            
+            # За замовчуванням
+            return f"cd {self.repo_dir} && npx jest {test_file}"
+        elif ext in ['.ts', '.tsx']:
+            return f"cd {self.repo_dir} && npx jest {test_file} --testTimeout=10000"
+        elif ext == '.go':
+            return f"cd {os.path.dirname(abs_path)} && go test -v"
+        elif ext == '.rs':
+            return f"cd {self.repo_dir} && cargo test --test {os.path.basename(test_file).split('.')[0]}"
+        
+        # Якщо тип файлу не визначено, використовуємо універсальний підхід
+        return f"cd {os.path.dirname(abs_path)} && ./{os.path.basename(abs_path)}"
+    
+    def _extract_failures(self, output: str, test_file: str) -> List[str]:
+        """Вилучає детальну інформацію про помилки з виводу тесту"""
+        ext = os.path.splitext(test_file)[1].lower()
+        failures = []
+        
+        if ext == '.py':
+            # Для pytest
+            for line in output.split('\n'):
+                if 'FAILED' in line or 'Error' in line:
+                    failures.append(line.strip())
+                elif 'E       ' in line:  # Рядки очікуваних/фактичних значень у pytest
+                    failures.append(line.strip())
+        
+        elif ext in ['.js', '.jsx', '.ts', '.tsx']:
+            # Для Jest/Mocha
+            error_block = False
+            for line in output.split('\n'):
+                if '● ' in line and ('fail' in line.lower() or 'error' in line.lower()):
+                    error_block = True
+                    failures.append(line.strip())
+                elif error_block and line.strip().startswith('Expected') or line.strip().startswith('Received'):
+                    failures.append(line.strip())
+                elif error_block and line.strip() == '':
+                    error_block = False
+        
+        elif ext == '.go':
+            # Для Go tests
+            for line in output.split('\n'):
+                if 'FAIL:' in line or 'panic:' in line:
+                    failures.append(line.strip())
+        
+        elif ext == '.rs':
+            # Для Rust tests
+            for line in output.split('\n'):
+                if 'thread' in line and 'panicked' in line:
+                    failures.append(line.strip())
+        
+        # Якщо жодних специфічних помилок не знайдено, додаємо загальну
+        if not failures and "error" in output.lower():
+            # Шукаємо рядки з помилками
+            for line in output.split('\n'):
+                if 'error' in line.lower() or 'exception' in line.lower() or 'fail' in line.lower():
+                    failures.append(line.strip())
+                    if len(failures) >= 10:  # Обмежуємо кількість
+                        break
+        
+        return failures
+    
+    def _extract_lint_failures(self, output: str, file_path: str) -> List[str]:
+        """Вилучає детальну інформацію про проблеми лінтингу"""
+        ext = os.path.splitext(file_path)[1].lower()
+        failures = []
+        
+        if ext == '.py':
+            # Для flake8
+            for line in output.split('\n'):
+                if file_path in line and ':' in line:
+                    failures.append(line.strip())
+        
+        elif ext in ['.js', '.jsx', '.ts', '.tsx']:
+            # Для ESLint
+            for line in output.split('\n'):
+                if file_path in line and ('error' in line.lower() or 'warning' in line.lower()):
+                    failures.append(line.strip())
+        
+        elif ext == '.go':
+            # Для golint
+            for line in output.split('\n'):
+                if file_path in line:
+                    failures.append(line.strip())
+        
+        elif ext == '.rs':
+            # Для clippy
+            in_file_section = False
+            for line in output.split('\n'):
+                if file_path in line:
+                    in_file_section = True
+                    failures.append(line.strip())
+                elif in_file_section and (line.strip().startswith('warning:') or line.strip().startswith('error:')):
+                    failures.append(line.strip())
+                elif in_file_section and line.strip() == '':
+                    in_file_section = False
+        
+        return failures
+    
+    def _extract_coverage(self, output: str) -> Optional[float]:
+        """Спроба вилучити інформацію про покриття тестами з виводу"""
+        coverage_patterns = [
+            r'coverage: (\d+\.\d+)%',  # pytest-cov формат
+            r'All files[^\n]+\|[^\n]+\|[^\n]+\|[^\n]+\|[^\n]+\| (\d+\.\d+)',  # jest формат
+            r'total:\s+\(statements\)\s+(\d+\.\d+)%',  # інший формат
+        ]
+        
+        for pattern in coverage_patterns:
+            match = re.search(pattern, output)
+            if match:
+                try:
+                    return float(match.group(1))
+                except (ValueError, IndexError):
+                    pass
+        
+        return None
+
+# Функція для затримки запитів до API
+async def apply_request_delay(system_id: str):
+    """Applies configured delay between API requests to avoid rate limiting."""
+    from config import load_config
+    config = load_config()
+    delay_key = f"{system_id}_api_request_delay"
+    delay = config.get(delay_key, 0)
+    
+    if delay > 0:
+        await asyncio.sleep(delay)
+
+# Функція для запису в лог
+def log_message(msg: str):
+    """Logs a message with a timestamp."""
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}")
+    logging.info(msg)
+
+# --- NEW: Add wait_for_service function ---
+async def wait_for_service(service_url: str, timeout: int = 60) -> bool:
+    """Wait for a service to become available by polling its URL.
+    
+    Args:
+        service_url: The URL of the service to check
+        timeout: Maximum time to wait in seconds
+        
+    Returns:
+        bool: True if service became available, False if timeout occurred
+    """
+    import logging
+    import time
+    import asyncio
+    import aiohttp
+    
+    logger = logging.getLogger("AI3")
+    logger.info(f"[AI3] Waiting for service at {service_url} (timeout: {timeout}s)")
+    start_time = time.time()
+    async with aiohttp.ClientSession() as session:
+        while time.time() - start_time < timeout:
+            try:
+                async with session.get(service_url, timeout=5) as response:
+                    if response.status == 200:
+                        logger.info(f"[AI3] Service at {service_url} is available")
+                        return True
+                    else:
+                        logger.debug(f"[AI3] Service check: Status {response.status} from {service_url}")
+            except (aiohttp.ClientConnectorError, aiohttp.ClientError, asyncio.TimeoutError):
+                pass  # Expected during startup, don't log each failure
+            except Exception as e:
+                logger.debug(f"[AI3] Error checking service: {e}")
+            
+            # Check every second
+            await asyncio.sleep(1)
+    
+    logger.warning(f"[AI3] Timeout waiting for service at {service_url} after {timeout}s")
+    return False
+# --- END NEW ---

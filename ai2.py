@@ -14,7 +14,8 @@ import aiohttp
 from config import load_config
 # Fix import statement - use ProviderFactory.create_provider instead of separate create_provider
 from providers import BaseProvider, ProviderFactory
-from utils import apply_request_delay, log_message  # Import apply_request_delay
+# Fix import by importing apply_request_delay from utils module directly
+from utils import apply_request_delay, log_message  # Import apply_request_delay correctly
 
 # Configure logging
 logging.basicConfig(
@@ -238,7 +239,8 @@ class AI2:
 
                 # Add delay to avoid overloading the API (only for non-primary providers)
                 if provider_idx > 0:
-                    await apply_request_delay("ai2", self.role)
+                    # FIXED: Use combined identifier instead of passing two arguments
+                    await apply_request_delay(f"ai2_{self.role}")
 
                 # Generate with the current provider
                 result = await current_provider.generate(
@@ -303,7 +305,8 @@ class AI2:
         base_prompt = self.base_prompts[0].format(filename=filename)
         system_prompt = base_prompt + self.system_instructions
         user_prompt = f"Task Description: {task}\n\nPlease generate the content for the file '{filename}' based on this task."
-        await apply_request_delay("ai2", self.role)
+        # FIXED: Use combined identifier instead of passing two arguments
+        await apply_request_delay(f"ai2_{self.role}")
         return await self._generate_with_fallback(
             system_prompt=system_prompt, user_prompt=user_prompt
         )
@@ -315,7 +318,8 @@ class AI2:
         base_prompt = self.base_prompts[1].format(filename=filename)
         system_prompt = base_prompt + self.system_instructions.replace("file content", "test code") # Adjust instruction slightly
         user_prompt = f"Code for file '{filename}':\n```\n{code}\n```\n\nPlease generate unit tests for this code."
-        await apply_request_delay("ai2", self.role)
+        # FIXED: Use combined identifier instead of passing two arguments
+        await apply_request_delay(f"ai2_{self.role}")
         test_content = await self._generate_with_fallback(
             system_prompt=system_prompt, user_prompt=user_prompt
         )
@@ -369,7 +373,8 @@ Please generate documentation (e.g., docstrings, comments) for this code. {instr
             # Set is_markdown=False for _generate_with_fallback
             is_markdown_output = False
 
-        await apply_request_delay("ai2", self.role)
+        # FIXED: Use combined identifier instead of passing two arguments
+        await apply_request_delay(f"ai2_{self.role}")
         return await self._generate_with_fallback(
             system_prompt=system_prompt,
             user_prompt=user_prompt,

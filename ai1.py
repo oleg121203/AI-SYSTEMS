@@ -2,18 +2,20 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
-import uuid  # Import uuid
+import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import aiohttp
 
-# Use load_config function from config.py
 from config import load_config
-from providers import BaseProvider, ProviderFactory
-from utils import apply_request_delay, log_message  # Import apply_request_delay
+import ai_communication as ai_comm
+from utils import log_message, apply_request_delay
+from providers import BaseProvider, ProviderFactory  # Add the missing import
 
+# Load configuration and set up logging
 config = load_config()
 MCP_API_URL = config.get("mcp_api", "http://localhost:7860")
 
@@ -190,7 +192,7 @@ class AI1:
         """Fetches the initial content of idea.md."""
         log_message(f"[AI1] Attempting to fetch initial content for: {self.idea_md_path}")
         content = await self.get_file_content(self.idea_md_path)
-        if content is not None:
+        if (content is not None):
             self.idea_content = content
             log_message(f"[AI1] Successfully fetched initial idea.md content (Length: {len(self.idea_content)}).")
         else:

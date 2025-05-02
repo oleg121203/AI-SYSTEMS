@@ -1,159 +1,159 @@
 # AI-SYSTEMS
 
-## Суть програми AI-SYSTEMS
+## Purpose of AI-SYSTEMS
 
-AI-SYSTEMS — це комплексна система, розроблена для автоматизації процесу розробки програмного забезпечення за допомогою взаємодії кількох спеціалізованих AI-агентів. Основна мета — взяти на вхід опис цілі проекту (target) і згенерувати відповідну структуру проекту, написати код, створити тести, написати документацію та забезпечити ітеративне покращення коду на основі результатів тестування.
+AI-SYSTEMS is a comprehensive system designed to automate the software development process through the interaction of multiple specialized AI agents. The main goal is to take a project description (target) as input and generate an appropriate project structure, write code, create tests, write documentation, and ensure iterative code improvement based on test results.
 
-## Архітектура системи
+## System Architecture
 
-Система складається з наступних основних компонентів:
+The system consists of the following main components:
 
-- **AI1 (Координатор)**: Планує та координує задачі, приймає рішення на основі результатів тестування. Використовує LLM для гнучкого прийняття рішень, пріоритезації задач та аналізу звітів.
-- **AI2 (Виконавці)**: Генерують код (executor), тести (tester) та документацію (documenter).
-- **AI3 (Дозор/Менеджер структури)**: Створює структуру проекту, проактивно моніторить систему, надає консультації, виявляє проблеми, ініціює їх вирішення та самостійно виправляє помилки тестування.
-- **MCP API**: Центральне API для взаємодії між компонентами, керує чергами завдань.
-- **Веб-інтерфейс**: Візуалізація процесу розробки та управління системою.
-- **GitHub Actions**: Автоматизоване тестування коду.
+- **AI1 (Coordinator)**: Plans and coordinates tasks, makes decisions based on test results. Uses LLM for flexible decision-making, task prioritization, and report analysis.
+- **AI2 (Executors)**: Generate code (executor), tests (tester), and documentation (documenter).
+- **AI3 (Monitor/Structure Manager)**: Creates the project structure, proactively monitors the system, provides consultations, identifies problems, initiates their resolution, and independently fixes testing errors.
+- **MCP API**: Central API for interaction between components, manages task queues.
+- **Web Interface**: Visualization of the development process and system management.
+- **GitHub Actions**: Automated code testing.
 
-## Структура репозиторіїв
+## Repository Structure
 
-Система використовує два репозиторії:
+The system uses two repositories:
 
-1. **Основний репозиторій (AI-SYSTEMS)**: 
-   - Містить код самої системи (AI-агенти, API, веб-інтерфейс)
+1. **Main Repository (AI-SYSTEMS)**:
+   - Contains the code of the system itself (AI agents, API, web interface)
    - URL: `https://github.com/oleg121203/AI-SYSTEMS.git`
 
-2. **Репозиторій проекту (repo/)**: 
-   - Вкладений репозиторій, де зберігається згенерований проект
-   - AI3 автоматично створює файли та робить коміти
+2. **Project Repository (repo/)**:
+   - Nested repository where the generated project is stored
+   - AI3 automatically creates files and makes commits
    - URL: `https://github.com/oleg121203/AI-SYSTEMS-REPO.git`
 
-## Конфігурація системи промптів
+## System Prompt Configuration
 
-Система використовує гібридний підхід до управління промптами:
+The system uses a hybrid approach to prompt management:
 
-1. **Базові промпти в config.json**:
-   - `ai1_prompt`: Базова інструкція для AI1-координатора. Описує цілі та повноваження AI1.
-   - `ai2_prompts`: Масив базових інструкцій для AI2 (executor, tester, documenter).
-   - `ai3_prompt`: Базова інструкція для AI3 щодо генерації структури проекту.
+1. **Base prompts in config.json**:
+   - `ai1_prompt`: Basic instruction for the AI1 coordinator. Describes the goals and capabilities of AI1.
+   - `ai2_prompts`: Array of basic instructions for AI2 (executor, tester, documenter).
+   - `ai3_prompt`: Basic instruction for AI3 regarding project structure generation.
 
-2. **Системні інструкції в коді**:
-   - Кожен AI-агент доповнює базовий промпт системними інструкціями (наприклад, використання латиниці, формат JSON).
-   - Це забезпечує гнучкість (основний промпт можна змінювати через конфігурацію) та надійність (критичні інструкції захищені в коді).
+2. **System instructions in code**:
+   - Each AI agent supplements the basic prompt with system instructions (e.g., use of Latin characters, JSON format).
+   - This provides flexibility (the main prompt can be changed through configuration) and reliability (critical instructions are protected in the code).
 
-## Генерація структури проекту з двома циклами
+## Project Structure Generation with Two Cycles
 
-Система AI3 використовує двоетапний підхід до генерації структури проекту:
+The AI3 system uses a two-stage approach to project structure generation:
 
-1. **Перший цикл**: Початкова генерація структури
-   - Використовує провайдер зі списку `structure_providers` у конфігурації
-   - Генерує базову структуру каталогів і файлів у форматі JSON
+1. **First Cycle**: Initial structure generation
+   - Uses a provider from the `structure_providers` list in the configuration
+   - Generates a basic directory and file structure in JSON format
 
-2. **Другий цикл**: Доопрацювання структури
-   - Використовує той самий провайдер, що і для першого циклу
-   - Аналізує початкову структуру на предмет повноти і логічності
-   - Вносить покращення, додає відсутні файли/каталоги
-   - Оптимізує відповідно до кращих практик для цільового типу проекту
+2. **Second Cycle**: Structure refinement
+   - Uses the same provider as for the first cycle
+   - Analyzes the initial structure for completeness and logic
+   - Makes improvements, adds missing files/directories
+   - Optimizes according to best practices for the target project type
 
-## Алгоритм роботи системи
+## System Operation Algorithm
 
-1. **Ініціалізація (AI3):**
-   * AI3 отримує ціль проекту (`target`) з конфігурації.
-   * Генерує початкову JSON-структуру файлів та директорій проекту за допомогою LLM.
-   * Створює ці файли та директорії у локальному репозиторії (repo).
-   * Генерує початковий файл idea.md з описом проекту.
-   * Відправляє згенеровану структуру в MCP API.
-   * Запускає фонові процеси моніторингу:
-     * **Моніторинг воркерів**: Перевіряє стан AI2-воркерів та запитує нові завдання при простої.
-     * **Моніторинг логів і тестів**: Сканує логи на наявність помилок та автоматично запускає і аналізує тести.
-     * **Моніторинг GitHub Actions**: Аналізує результати запусків CI/CD тестів.
-     * **Моніторинг черг**: Відстежує розміри черг завдань і повідомляє AI1 для перерозподілу.
+1. **Initialization (AI3):**
+   * AI3 receives the project goal (`target`) from the configuration.
+   * Generates initial JSON structure of files and directories for the project using LLM.
+   * Creates these files and directories in the local repository (repo).
+   * Generates the initial idea.md file with a project description.
+   * Sends the generated structure to the MCP API.
+   * Launches background monitoring processes:
+     * **Worker Monitoring**: Checks the status of AI2 workers and requests new tasks when idle.
+     * **Log and Test Monitoring**: Scans logs for errors and automatically runs and analyzes tests.
+     * **GitHub Actions Monitoring**: Analyzes the results of CI/CD test runs.
+     * **Queue Monitoring**: Tracks the sizes of task queues and notifies AI1 for redistribution.
 
-2. **Планування та координація (AI1):**
-   * AI1 отримує структуру проекту та вміст idea.md від MCP API.
-   * Використовує idea.md як контекст для всіх завдань.
-   * Визначає пріоритети різних типів завдань за допомогою LLM.
-   * Приймає рішення щодо результатів тестів на основі рекомендацій AI3 та власного аналізу.
+2. **Planning and Coordination (AI1):**
+   * AI1 receives the project structure and idea.md content from the MCP API.
+   * Uses idea.md as context for all tasks.
+   * Determines priorities of different task types using LLM.
+   * Makes decisions regarding test results based on AI3 recommendations and its own analysis.
 
-3. **Виконання завдань (AI2):**
-   * Генерує код, тести та документацію з використанням різних провайдерів LLM.
-   * Має механізм автоматичного форматування кодових блоків та логіку для спеціалізованих завдань.
-   * Обробляє idea.md окремо від звичайних файлів з кодом.
+3. **Task Execution (AI2):**
+   * Generates code, tests, and documentation using various LLM providers.
+   * Has a mechanism for automatic code block formatting and logic for specialized tasks.
+   * Processes idea.md separately from regular code files.
 
-4. **Автоматичний запуск та виправлення тестів (AI3):**
-   * Запускає тести без втручання користувача.
-   * Аналізує результати та визначає точні причини помилок.
-   * Самостійно виправляє прості помилки тестування та лінтингу.
-   * Відправляє складні проблеми AI1 для глибшого аналізу.
+4. **Automatic Test Execution and Fixing (AI3):**
+   * Runs tests without user intervention.
+   * Analyzes results and determines the exact causes of errors.
+   * Independently fixes simple testing and linting errors.
+   * Sends complex issues to AI1 for deeper analysis.
 
-5. **Обробка результатів та доопрацювання (AI1):**
-   * Отримує та аналізує статуси всіх завдань.
-   * Приймає рішення про повторне завдання при помилках.
-   * Відстежує кількість спроб доопрацювання та визначає, коли потрібне ручне втручання.
+5. **Result Processing and Refinement (AI1):**
+   * Receives and analyzes the status of all tasks.
+   * Makes decisions about task reassignment in case of errors.
+   * Tracks the number of refinement attempts and determines when manual intervention is needed.
 
-## Нові автономні функції системи
+## New Autonomous System Features
 
-### Самовиправлення коду та тестів (AI3)
-* **Автоматичне виявлення та виправлення помилок**: AI3 тепер має компонент TestRunner, який запускає всі тести та може автоматично виправляти помилки.
-* **Аналіз вихідного коду та тестів**: AI3 аналізує код та тести для визначення точного джерела помилок.
-* **Автономне виправлення помилок лінтингу**: AI3 автоматично виправляє помилки форматування та стилю без втручання користувача.
-* **Самоперевірка виправлень**: Після внесення виправлень AI3 повторно запускає тести, щоб переконатися в успішності змін.
+### Self-Correction of Code and Tests (AI3)
+* **Automatic Detection and Correction of Errors**: AI3 now has a TestRunner component that runs all tests and can automatically fix errors.
+* **Source Code and Test Analysis**: AI3 analyzes code and tests to determine the exact source of errors.
+* **Autonomous Linting Error Correction**: AI3 automatically fixes formatting and style errors without user intervention.
+* **Self-Verification of Fixes**: After making fixes, AI3 reruns tests to ensure the changes were successful.
 
-### Розширені можливості тестування
-* **Комплексний аналіз результатів тестів**: TestRunner збирає детальну інформацію про результати та генерує звіти.
-* **Покриття коду тестами**: Система відстежує і звітує про рівень покриття коду тестами.
-* **Прогнозування помилок**: Система аналізує патерни помилок для передбачення потенційних проблем.
+### Enhanced Testing Capabilities
+* **Comprehensive Test Result Analysis**: TestRunner collects detailed information about results and generates reports.
+* **Code Test Coverage**: The system tracks and reports on code test coverage.
+* **Error Prediction**: The system analyzes error patterns to predict potential problems.
 
-### Покращене прийняття рішень (AI1)
-* **LLM-базована оцінка тестових результатів**: AI1 використовує моделі LLM для прийняття рішень щодо результатів тестування.
-* **Відстеження історії виправлень**: AI1 відстежує попередні спроби виправлення для прийняття кращих рішень.
-* **Пріоритезація критичних помилок**: Система виявляє і пріоритезує найважливіші помилки.
+### Improved Decision Making (AI1)
+* **LLM-Based Evaluation of Test Results**: AI1 uses LLM models to make decisions regarding test results.
+* **Fix History Tracking**: AI1 tracks previous fix attempts to make better decisions.
+* **Critical Error Prioritization**: The system identifies and prioritizes the most important errors.
 
-### Поліпшена взаємодія між AI-агентами
-* **Розширений обмін контекстом**: AI-агенти діляться розширеним контекстом для більш узгодженої роботи.
-* **Колаборативне вирішення проблем**: AI3 і AI1 спільно аналізують і вирішують складні проблеми.
-* **Структуровані звіти про помилки**: Стандартизовані деталізовані звіти про помилки для ефективного прийняття рішень.
+### Enhanced Interaction Between AI Agents
+* **Extended Context Exchange**: AI agents share extended context for more coordinated work.
+* **Collaborative Problem Solving**: AI3 and AI1 jointly analyze and solve complex problems.
+* **Structured Error Reports**: Standardized detailed error reports for effective decision making.
 
-## Налаштування та запуск
+## Setup and Launch
 
-### Вимоги до системи
+### System Requirements
 * Docker
 * Git
 * Python 3.10+
 * Node.js 18+
-* Змінна середовища `GITHUB_TOKEN` (з правами `repo` та `workflow`) для запуску GitHub Actions.
+* Environment variable `GITHUB_TOKEN` (with `repo` and `workflow` permissions) for running GitHub Actions.
 
-### Швидкий старт
+### Quick Start
 ```bash
-# Клонування репозиторію
+# Clone the repository
 git clone https://github.com/oleg121203/AI-SYSTEMS.git
 cd AI-SYSTEMS
 
-# Створіть файл .env та додайте ваш GITHUB_TOKEN
+# Create a .env file and add your GITHUB_TOKEN
 echo "GITHUB_TOKEN=ghp_YourGitHubPersonalAccessToken" > .env
 
-# Запуск системи
-./run_async_services.sh --target "Опис вашого проекту"
+# Start the system
+./run_async_services.sh --target "Description of your project"
 ```
 
-## Оцінка системи
+## System Evaluation
 
-### Сильні сторони
-* **Повна автономність**: Система здатна створювати програмне забезпечення від ідеї до робочого продукту без втручання людини.
-* **Самовиправлення**: Автоматичне виявлення та виправлення помилок тестування та лінтингу.
-* **Глибокий аналіз проблем**: Використання LLM для розуміння складних помилок та їх виправлення.
-* **Гнучка архітектура**: Модульна структура дозволяє легко розширювати функціональність системи.
-* **Багаторівнева колаборація**: Ефективна взаємодія між AI-агентами для вирішення складних завдань.
+### Strengths
+* **Full Autonomy**: The system is capable of creating software from idea to working product without human intervention.
+* **Self-Correction**: Automatic detection and correction of testing and linting errors.
+* **Deep Problem Analysis**: Use of LLM to understand complex errors and fix them.
+* **Flexible Architecture**: Modular structure allows easy extension of system functionality.
+* **Multi-Level Collaboration**: Effective interaction between AI agents to solve complex tasks.
 
-### Області для подальшого вдосконалення
-* **Обробка надскладних помилок**: Подальше вдосконалення здатності системи виправляти складні логічні помилки.
-* **Оптимізація використання ресурсів**: Балансування обчислювальних ресурсів між різними компонентами системи.
-* **Розширення підтримуваних технологій**: Додавання більшої кількості мов програмування та фреймворків.
+### Areas for Further Improvement
+* **Handling Super Complex Errors**: Further improving the system's ability to fix complex logical errors.
+* **Resource Usage Optimization**: Balancing computational resources between different system components.
+* **Expanding Supported Technologies**: Adding more programming languages and frameworks.
 
-## Внесок у проект
+## Contributing to the Project
 
-Ми раді будь-якому внеску в проект! Можна надсилати пропозиції або повідомляти про виявлені проблеми через систему Issue на GitHub.
+We welcome any contribution to the project! You can send suggestions or report issues through the GitHub Issue system.
 
-## Ліцензія
+## License
 
-Проект розповсюджується під ліцензією MIT. Детальну інформацію можна знайти в файлі LICENSE.
+The project is distributed under the MIT License. Detailed information can be found in the LICENSE file.
