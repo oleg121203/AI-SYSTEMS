@@ -298,9 +298,15 @@ class AI2:
         logger.error(error_msg)
         return error_msg
 
-    async def generate_code(self, task: str, filename: str) -> str:
-        """Generate code based on task description with enhanced context and quality checks."""
-        logger.info(f"[AI2-EXECUTOR] Generating code for file: {filename}")
+    async def generate_code(self, task_description: str, filename: str) -> str:
+        """Generate code with enhanced pattern matching and language capabilities."""
+        logger.info(f"[AI2-EXECUTOR] Generating code for: {filename}")
+        
+        # Get file extension and determine language
+        file_ext = os.path.splitext(filename)[1].lower()
+        
+        # Get language-specific patterns and best practices
+        code_patterns = self._get_code_patterns(file_ext)
         
         # Get project context from idea.md if available
         project_context = ""
@@ -310,43 +316,39 @@ class AI2:
         except FileNotFoundError:
             logger.warning("[AI2-EXECUTOR] idea.md not found. Proceeding without project context.")
         
-        # Analyze file type and add language-specific context
-        file_ext = os.path.splitext(filename)[1].lower()
-        language_specific_instructions = self._get_language_specific_instructions(file_ext)
-        
-        # Enhanced system prompt with context and best practices
+        # Enhanced system prompt for code generation
         base_prompt = self.base_prompts[0].format(filename=filename)
         system_prompt = f"""{base_prompt}
-        You are an expert programmer focused on writing high-quality, maintainable code.
-        Follow these guidelines:
-        1. Use modern best practices for the target language/framework
-        2. Include proper error handling and input validation
-        3. Write clean, self-documenting code with clear names
-        4. Add brief comments for complex logic
-        5. Consider performance implications
-        6. Follow the project's architectural patterns
-        {language_specific_instructions}
+        You are an expert software developer. Follow these guidelines:
+        1. Write clean, maintainable code
+        2. Include proper error handling
+        3. Add comprehensive comments
+        4. Follow language-specific conventions
+        5. Consider performance and security
+        {code_patterns}
         {self.system_instructions}"""
         
         # Enhanced user prompt with project context
         user_prompt = f"""Project Context:
     {project_context[:1000] if project_context else 'No project context available'}
     
-    Task Description: {task}
+    Task Description:
+    {task_description}
     
-    Generate production-quality code for the file '{filename}' that:
-    - Implements the required functionality
-    - Handles errors appropriately
-    - Is well-structured and maintainable
-    - Follows best practices for the language/framework
-    - Is ready for testing
+    Requirements:
+    1. Generate complete, production-ready code
+    2. Include error handling and input validation
+    3. Add comprehensive comments and docstrings
+    4. Follow {self._get_language_name(file_ext)} best practices
+    5. Consider edge cases and security
+    6. Use efficient algorithms and data structures
     
-    The code should be complete and ready to use."""
-    
+    Generate the complete implementation for '{filename}'."""
+
         # Apply rate limiting
         await apply_request_delay(f"ai2_{self.role}")
         
-        # Generate with quality validation
+        # Generate with validation
         code = await self._generate_with_fallback(
             system_prompt=system_prompt,
             user_prompt=user_prompt
@@ -359,98 +361,160 @@ class AI2:
                 return code
             else:
                 logger.warning(f"[AI2-EXECUTOR] Generated code failed validation for {filename}. Retrying...")
-                # Retry once with stricter quality requirements
-                user_prompt += "\nPlease fix any quality issues in the code and ensure it meets all requirements."
+                # Retry with stricter requirements
+                user_prompt += "\nPlease fix code quality issues and ensure all validation checks pass."
                 code = await self._generate_with_fallback(
                     system_prompt=system_prompt,
                     user_prompt=user_prompt
                 )
-                
+        
         return code
 
-    def _get_language_specific_instructions(self, file_ext: str) -> str:
-        """Get language-specific coding guidelines and best practices."""
-        instructions = {
+    def _get_code_patterns(self, file_ext: str) -> str:
+        """Get language-specific coding patterns and best practices."""
+        patterns = {
             '.py': """
-    - Use type hints for function parameters and return values
-    - Follow PEP 8 style guidelines
-    - Use context managers for resource handling
-    - Prefer composition over inheritance
-    - Use descriptive variable names
-    - Include docstrings for public interfaces""",
+        Python Coding Patterns:
+        - Use type hints for function parameters and returns
+        - Use context managers (with) for resource handling
+        - Implement proper exception handling with specific exceptions
+        - Follow PEP 8 style guidelines
+        - Use descriptive variable names and docstrings
+        - Implement logging for important operations
+        - Use dataclasses or named tuples where appropriate""",
             
             '.js': """
-    - Use modern ES6+ features appropriately
-    - Handle async operations with Promises/async-await
-    - Use const/let instead of var
-    - Include proper error boundaries
-    - Consider browser compatibility
-    - Use proper module imports/exports""",
+        JavaScript Coding Patterns:
+        - Use ES6+ features appropriately
+        - Implement proper error handling with try/catch
+        - Use async/await for asynchronous operations
+        - Follow module pattern for code organization
+        - Use meaningful variable and function names
+        - Add JSDoc comments for documentation
+        - Implement proper event handling""",
             
             '.ts': """
-    - Use strict TypeScript types
-    - Avoid any type when possible
-    - Use interfaces for object shapes
-    - Handle null/undefined properly
-    - Use type guards when needed
-    - Follow TSLint/ESLint rules""",
+        TypeScript Coding Patterns:
+        - Use strict type checking
+        - Implement interfaces and type definitions
+        - Use enums for constants
+        - Follow SOLID principles
+        - Use generics where appropriate
+        - Add TSDoc comments
+        - Implement proper error handling""",
             
             '.go': """
-    - Follow Go idioms and conventions
-    - Use proper error handling patterns
-    - Implement interfaces implicitly
-    - Use goroutines and channels appropriately
-    - Follow standard project layout
-    - Use meaningful package names""",
+        Go Coding Patterns:
+        - Follow Go idioms and conventions
+        - Use proper error handling (if err != nil)
+        - Implement interfaces where appropriate
+        - Use goroutines and channels correctly
+        - Follow standard package layout
+        - Add godoc comments
+        - Use meaningful names and structures""",
             
             '.java': """
-    - Follow Java coding conventions
-    - Use appropriate design patterns
-    - Handle exceptions properly
-    - Use interfaces where appropriate
-    - Follow SOLID principles
-    - Consider thread safety""",
+        Java Coding Patterns:
+        - Follow OOP principles
+        - Use proper exception handling
+        - Implement interfaces appropriately
+        - Follow Java naming conventions
+        - Use generics where appropriate
+        - Add Javadoc comments
+        - Follow design patterns""",
             
             '.cpp': """
-    - Use modern C++ features
-    - Follow RAII principles
-    - Handle memory management properly
-    - Use smart pointers
-    - Consider const correctness
-    - Handle exceptions appropriately"""
+        C++ Coding Patterns:
+        - Use RAII for resource management
+        - Implement proper error handling
+        - Use smart pointers
+        - Follow const correctness
+        - Use STL appropriately
+        - Add doxygen comments
+        - Consider memory management"""
         }
         
-        return instructions.get(file_ext, """
-    - Use consistent naming conventions
-    - Handle errors appropriately
-    - Write maintainable, self-documenting code
-    - Include necessary comments
-    - Follow language best practices""")
+        return patterns.get(file_ext, """
+        General Coding Patterns:
+        - Use clear and consistent formatting
+        - Implement proper error handling
+        - Add comprehensive comments
+        - Use meaningful names
+        - Follow language conventions
+        - Consider security implications
+        - Write maintainable code""")
+
+    def _get_language_name(self, file_ext: str) -> str:
+        """Get the formal name of the programming language."""
+        languages = {
+            '.py': 'Python',
+            '.js': 'JavaScript',
+            '.jsx': 'React JavaScript',
+            '.ts': 'TypeScript',
+            '.tsx': 'React TypeScript',
+            '.go': 'Go',
+            '.java': 'Java',
+            '.cpp': 'C++',
+            '.hpp': 'C++',
+            '.rb': 'Ruby',
+            '.php': 'PHP'
+        }
+        return languages.get(file_ext, 'the target language')
 
     def _validate_generated_code(self, code: str, file_ext: str) -> bool:
-        """Validate generated code for common quality issues."""
+        """Validate generated code for quality and best practices."""
         try:
             if not code or len(code.strip()) < 10:
                 return False
                 
             # Check for basic code structure
             if 'import' not in code and 'package' not in code and 'include' not in code:
-                logging.warning("[AI2-EXECUTOR] Generated code missing imports/includes")
-                
-            # Check for error handling
+                logger.warning("[AI2-EXECUTOR] Generated code missing imports/includes")
+            
+            # Check for error handling patterns
             error_patterns = {
-                '.py': ['try:', 'except', 'raise'],
-                '.js': ['try {', 'catch', 'throw'],
-                '.ts': ['try {', 'catch', 'throw'],
-                '.go': ['if err != nil', 'error'],
-                '.java': ['try {', 'catch', 'throws'],
-                '.cpp': ['try {', 'catch', 'throw']
+                '.py': [
+                    'try:', 'except', 'raise',
+                    'with', 'finally',
+                    'if not', 'if None',
+                    'isinstance'
+                ],
+                '.js': [
+                    'try {', 'catch', 'throw',
+                    'if (', 'else',
+                    'undefined', 'null',
+                    'typeof'
+                ],
+                '.ts': [
+                    'try {', 'catch', 'throw',
+                    'if (', 'else',
+                    'undefined', 'null',
+                    'instanceof'
+                ],
+                '.go': [
+                    'if err != nil',
+                    'return err',
+                    'error',
+                    'panic',
+                    'recover'
+                ],
+                '.java': [
+                    'try {', 'catch', 'throw',
+                    'Exception',
+                    'null',
+                    'instanceof'
+                ],
+                '.cpp': [
+                    'try {', 'catch', 'throw',
+                    'nullptr',
+                    'std::exception'
+                ]
             }
             
             patterns = error_patterns.get(file_ext, ['try', 'catch', 'throw', 'error'])
             has_error_handling = any(pattern in code for pattern in patterns)
             if not has_error_handling:
-                logging.warning("[AI2-EXECUTOR] Generated code missing error handling")
+                logger.warning("[AI2-EXECUTOR] Generated code missing error handling")
                 
             # Check for comments/documentation
             comment_patterns = {
@@ -465,20 +529,48 @@ class AI2:
             patterns = comment_patterns.get(file_ext, ['//', '/*', '#'])
             has_comments = any(pattern in code for pattern in patterns)
             if not has_comments:
-                logging.warning("[AI2-EXECUTOR] Generated code missing documentation")
+                logger.warning("[AI2-EXECUTOR] Generated code missing documentation")
                 
-            # Additional language-specific checks
+            # Language-specific checks
             if file_ext == '.py':
                 if 'def ' in code and 'typing' not in code:
-                    logging.warning("[AI2-EXECUTOR] Python code missing type hints")
-            elif file_ext in ['.ts', '.tsx']:
-                if 'interface' not in code and 'type' not in code:
-                    logging.warning("[AI2-EXECUTOR] TypeScript code missing type definitions")
+                    logger.warning("[AI2-EXECUTOR] Python code missing type hints")
+                if 'class ' in code and not re.search(r'class \w+\(.*\):', code):
+                    logger.warning("[AI2-EXECUTOR] Python class missing explicit inheritance")
+                    
+            elif file_ext in ['.js', '.ts']:
+                if 'async ' in code and 'try ' not in code:
+                    logger.warning("[AI2-EXECUTOR] Async code missing try/catch")
+                if file_ext == '.ts' and 'interface ' not in code and 'type ' not in code:
+                    logger.warning("[AI2-EXECUTOR] TypeScript code missing type definitions")
+                    
+            elif file_ext == '.go':
+                if 'func ' in code and 'error)' in code and 'if err != nil' not in code:
+                    logger.warning("[AI2-EXECUTOR] Go code missing error handling")
+                    
+            elif file_ext == '.java':
+                if 'class ' in code and 'public ' not in code:
+                    logger.warning("[AI2-EXECUTOR] Java code missing access modifiers")
+                if 'throws ' in code and 'try ' not in code:
+                    logger.warning("[AI2-EXECUTOR] Java code missing exception handling")
+                    
+            # Security checks
+            security_patterns = [
+                'exec(', 'eval(', # Code execution
+                'input(', 'prompt(', # User input
+                'SELECT ', 'INSERT ', # SQL
+                'password', 'secret', # Sensitive data
+                'http:', 'https:' # URLs
+            ]
+            
+            for pattern in security_patterns:
+                if pattern.lower() in code.lower():
+                    logger.warning(f"[AI2-EXECUTOR] Security: Found potentially sensitive pattern: {pattern}")
                     
             return True  # Return true but log warnings for monitoring
             
         except Exception as e:
-            logging.error(f"[AI2-EXECUTOR] Error validating generated code: {e}")
+            logger.error(f"[AI2-EXECUTOR] Error validating generated code: {e}")
             return False
 
     async def generate_tests(self, code: str, filename: str) -> str:
@@ -2309,3 +2401,330 @@ if __name__ == "__main__":
             )
         finally:
             asyncio.run(ai2_worker.close_session())
+
+class CodeValidator:
+    """Advanced code validation and pattern matching for AI2"""
+    def __init__(self):
+        self.test_generators = {
+            'python': self._generate_python_tests,
+            'javascript': self._generate_js_tests,
+            'typescript': self._generate_ts_tests,
+            'go': self._generate_go_tests,
+            'java': self._generate_java_tests,
+            'rust': self._generate_rust_tests
+        }
+        self.validators = {
+            'python': self._validate_python,
+            'javascript': self._validate_javascript,
+            'typescript': self._validate_typescript,
+            'go': self._validate_go,
+            'java': self._validate_java,
+            'rust': self._validate_rust
+        }
+        self.code_metrics = CodeQualityAnalyzer()
+
+    async def validate_code(self, code: str, language: str, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate generated code against multiple criteria"""
+        if language not in self.validators:
+            logger.error(f"Unsupported language for validation: {language}")
+            return {"valid": False, "errors": [f"Unsupported language: {language}"]}
+
+        results = {
+            "valid": True,
+            "errors": [],
+            "warnings": [],
+            "suggestions": [],
+            "metrics": {},
+            "test_coverage": 0.0
+        }
+
+        # Run language-specific validation
+        validation_result = await self.validators[language](code, context)
+        results.update(validation_result)
+
+        # Generate and run tests
+        test_result = await self.generate_and_run_tests(code, language, context)
+        results["test_coverage"] = test_result.get("coverage", 0.0)
+        results["test_results"] = test_result.get("results", [])
+
+        # Calculate code quality metrics
+        metrics = await self.code_metrics.analyze(code, language)
+        results["metrics"] = metrics
+
+        # Check for potential security issues
+        security_issues = await self._check_security(code, language)
+        if security_issues:
+            results["warnings"].extend(security_issues)
+
+        # Check for performance concerns
+        perf_issues = await self._check_performance(code, language)
+        if perf_issues:
+            results["warnings"].extend(perf_issues)
+
+        return results
+
+    async def _validate_python(self, code: str, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Python-specific validation"""
+        result = {"valid": True, "errors": [], "warnings": []}
+        
+        try:
+            # Check syntax
+            compile(code, '<string>', 'exec')
+            
+            # Check type hints if enabled in context
+            if context.get('type_checking', True):
+                await self._check_python_types(code, result)
+            
+            # Check style (PEP 8)
+            style_issues = await self._check_python_style(code)
+            if style_issues:
+                result["warnings"].extend(style_issues)
+            
+            # Check imports
+            import_issues = await self._check_python_imports(code, context)
+            if import_issues:
+                result["warnings"].extend(import_issues)
+                
+        except SyntaxError as e:
+            result["valid"] = False
+            result["errors"].append(f"Syntax error: {str(e)}")
+        except Exception as e:
+            result["valid"] = False
+            result["errors"].append(f"Validation error: {str(e)}")
+            
+        return result
+
+    async def _generate_python_tests(self, code: str, context: Dict[str, Any]) -> str:
+        """Generate Python unit tests for the given code"""
+        test_code = []
+        
+        # Extract classes and functions
+        tree = ast.parse(code)
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.ClassDef, ast.FunctionDef)):
+                test_cases = await self._generate_test_cases(node, code)
+                test_code.extend(test_cases)
+                
+        return "\n".join(test_code)
+
+    async def _generate_test_cases(self, node: ast.AST, code: str) -> List[str]:
+        """Generate test cases for a Python class or function"""
+        test_cases = []
+        
+        if isinstance(node, ast.ClassDef):
+            # Generate class test cases
+            test_cases.extend(await self._generate_class_tests(node))
+        elif isinstance(node, ast.FunctionDef):
+            # Generate function test cases
+            test_cases.extend(await self._generate_function_tests(node))
+            
+        return test_cases
+
+    async def _generate_class_tests(self, node: ast.ClassDef) -> List[str]:
+        """Generate test cases for a Python class"""
+        test_cases = []
+        
+        # Generate class setup
+        test_cases.append(f"""
+class Test{node.name}(unittest.TestCase):
+    def setUp(self):
+        self.instance = {node.name}()
+""")
+        
+        # Generate method tests
+        for method in [n for n in node.body if isinstance(n, ast.FunctionDef)]:
+            if not method.name.startswith('_'):  # Skip private methods
+                test_cases.extend(await self._generate_method_test(method))
+                
+        return test_cases
+
+    async def _generate_method_test(self, node: ast.FunctionDef) -> List[str]:
+        """Generate test cases for a class method"""
+        test_cases = []
+        
+        # Generate positive test case
+        test_cases.append(f"""
+    def test_{node.name}_valid(self):
+        # TODO: Add test implementation
+        pass
+""")
+        
+        # Generate negative test case
+        test_cases.append(f"""
+    def test_{node.name}_invalid(self):
+        # TODO: Add test implementation
+        pass
+""")
+        
+        return test_cases
+
+    async def _generate_function_tests(self, node: ast.FunctionDef) -> List[str]:
+        """Generate test cases for a standalone function"""
+        test_cases = []
+        
+        # Generate test function
+        test_cases.append(f"""
+def test_{node.name}():
+    # TODO: Add test implementation
+    pass
+""")
+        
+        return test_cases
+
+    async def _check_security(self, code: str, language: str) -> List[str]:
+        """Check for security vulnerabilities in the code"""
+        security_issues = []
+        
+        # Common security patterns to check
+        patterns = {
+            'sql_injection': r'execute\s*\(\s*[\'"].*?\%.*?[\'"]\s*\)',
+            'command_injection': r'exec\s*\(\s*.*?\+.*?\s*\)',
+            'xss': r'innerHTML\s*=',
+            'hardcoded_secrets': r'password\s*=\s*[\'"][^\'"]+[\'"]'
+        }
+        
+        for issue_type, pattern in patterns.items():
+            if re.search(pattern, code):
+                security_issues.append(f"Potential {issue_type} vulnerability detected")
+                
+        return security_issues
+
+    async def _check_performance(self, code: str, language: str) -> List[str]:
+        """Check for performance issues in the code"""
+        performance_issues = []
+        
+        # Check for nested loops
+        if re.search(r'for.*?\{.*?for.*?\{.*?\}', code, re.DOTALL):
+            performance_issues.append("Nested loops detected - consider optimization")
+            
+        # Check for large object creation in loops
+        if re.search(r'for.*?\{.*?new\s+\w+.*?\}', code, re.DOTALL):
+            performance_issues.append("Object creation inside loop - consider moving outside")
+            
+        return performance_issues
+
+    async def _check_python_types(self, code: str, result: Dict[str, Any]) -> None:
+        """Check Python type hints"""
+        try:
+            import mypy.api
+            out, err, exit_code = mypy.api.run(['-c', code])
+            if exit_code != 0:
+                result["warnings"].append(f"Type checking issues: {out}")
+        except ImportError:
+            result["warnings"].append("mypy not available for type checking")
+
+    async def _check_python_style(self, code: str) -> List[str]:
+        """Check Python code style (PEP 8)"""
+        style_issues = []
+        try:
+            import pycodestyle
+            style_guide = pycodestyle.StyleGuide(quiet=True)
+            result = style_guide.input_file(io.StringIO(code))
+            if result.total_errors > 0:
+                style_issues.append(f"Found {result.total_errors} style issues")
+        except ImportError:
+            style_issues.append("pycodestyle not available for style checking")
+        return style_issues
+
+    async def _check_python_imports(self, code: str, context: Dict[str, Any]) -> List[str]:
+        """Check Python imports"""
+        import_issues = []
+        allowed_imports = context.get('allowed_imports', set())
+        tree = ast.parse(code)
+        
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for name in node.names:
+                    if name.name not in allowed_imports:
+                        import_issues.append(f"Unauthorized import: {name.name}")
+            elif isinstance(node, ast.ImportFrom):
+                if node.module not in allowed_imports:
+                    import_issues.append(f"Unauthorized import: {node.module}")
+                    
+        return import_issues
+
+class CodeQualityAnalyzer:
+    """Analyzes code quality metrics"""
+    def __init__(self):
+        self.metrics = {
+            'cyclomatic_complexity': self._calculate_cyclomatic_complexity,
+            'maintainability_index': self._calculate_maintainability_index,
+            'code_duplication': self._detect_code_duplication
+        }
+
+    async def analyze(self, code: str, language: str) -> Dict[str, Any]:
+        """Analyze code quality metrics"""
+        results = {}
+        
+        for metric_name, calculator in self.metrics.items():
+            try:
+                results[metric_name] = await calculator(code, language)
+            except Exception as e:
+                logger.error(f"Error calculating {metric_name}: {e}")
+                results[metric_name] = None
+                
+        return results
+
+    async def _calculate_cyclomatic_complexity(self, code: str, language: str) -> int:
+        """Calculate cyclomatic complexity"""
+        complexity = 1  # Base complexity
+        
+        # Count decision points
+        decision_patterns = [
+            r'\bif\b',
+            r'\belse\b',
+            r'\bfor\b',
+            r'\bwhile\b',
+            r'\bcase\b',
+            r'\bcatch\b'
+        ]
+        
+        for pattern in decision_patterns:
+            complexity += len(re.findall(pattern, code))
+            
+        return complexity
+
+    async def _calculate_maintainability_index(self, code: str, language: str) -> float:
+        """Calculate maintainability index"""
+        # Halstead Volume calculation (simplified)
+        operators = len(re.findall(r'[+\-*/=<>!&|]', code))
+        operands = len(re.findall(r'\b[a-zA-Z_]\w*\b', code))
+        
+        # Lines of code
+        loc = len(code.splitlines())
+        
+        # Cyclomatic complexity
+        cc = await self._calculate_cyclomatic_complexity(code, language)
+        
+        # Maintainability Index formula
+        mi = 171 - 5.2 * math.log(operators + operands) - 0.23 * cc - 16.2 * math.log(loc)
+        return max(0, min(100, mi))
+
+    async def _detect_code_duplication(self, code: str, language: str) -> Dict[str, Any]:
+        """Detect code duplication"""
+        MIN_DUPLICATE_LENGTH = 5  # Minimum lines to consider as duplication
+        
+        lines = code.splitlines()
+        duplicates = []
+        
+        for i in range(len(lines)):
+            for j in range(i + MIN_DUPLICATE_LENGTH, len(lines)):
+                # Compare sequence of lines
+                sequence_length = 0
+                while (i + sequence_length < len(lines) and 
+                       j + sequence_length < len(lines) and 
+                       lines[i + sequence_length] == lines[j + sequence_length]):
+                    sequence_length += 1
+                
+                if sequence_length >= MIN_DUPLICATE_LENGTH:
+                    duplicates.append({
+                        'start1': i,
+                        'start2': j,
+                        'length': sequence_length,
+                        'content': '\n'.join(lines[i:i+sequence_length])
+                    })
+                    
+        return {
+            'duplicate_blocks': len(duplicates),
+            'details': duplicates
+        }

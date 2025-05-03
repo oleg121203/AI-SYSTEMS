@@ -1188,325 +1188,186 @@ class AI3:
                 await asyncio.sleep(300)  # Wait longer after an error
 
     async def _run_automated_tests(self):
-        """Run automated tests and analyze results"""
+        """Run automated tests and analyze results with enhanced error recovery"""
         from utils import TestRunner
         
         logger.info("[AI3] Starting automated test execution...")
         try:
-            # Initialize the test runner
+            # Initialize the test runner with retries
             test_runner = TestRunner(repo_dir=self.repo_dir)
+            test_results = None
+            max_retries = 3
+            retry_count = 0
             
-            # Run tests and collect results
-            test_results = test_runner.run_tests()
+            while retry_count < max_retries and not test_results:
+                try:
+                    test_results = test_runner.run_tests()
+                    break
+                except Exception as e:
+                    retry_count += 1
+                    logger.warning(f"[AI3] Test run attempt {retry_count} failed: {e}")
+                    await asyncio.sleep(5)  # Wait before retry
             
-            # Check if we have any failing tests
+            if not test_results:
+                logger.error("[AI3] All test run attempts failed")
+                return False
+                
+            # Check for failing tests
             failing_tests = {path: result for path, result in test_results.items() if not result.success}
             
             if failing_tests:
                 logger.info(f"[AI3] Found {len(failing_tests)} failing tests. Starting self-healing process...")
                 await self._attempt_test_fixes(failing_tests)
+                
+                # Re-run failed tests after fixes
+                retest_results = test_runner.run_specific_tests(list(failing_tests.keys()))
+                still_failing = {path: result for path, result in retest_results.items() if not result.success}
+                
+                if still_failing:
+                    logger.warning(f"[AI3] {len(still_failing)} tests still failing after fixes")
+                    # Send to AI1 for deeper analysis
+                    await self._send_test_insights_to_ai1({
+                        "failing_tests": still_failing,
+                        "fix_attempted": True,
+                        "initial_failures": len(failing_tests),
+                        "remaining_failures": len(still_failing)
+                    })
+                else:
+                    logger.info("[AI3] All failing tests successfully fixed!")
             else:
                 logger.info("[AI3] All tests passed successfully.")
-                
-            # Run linters to check code quality
+            
+            # Run linters with pattern analysis
             lint_results = test_runner.run_linters()
             failing_lints = {path: result for path, result in lint_results.items() if not result.success}
             
             if failing_lints:
-                logger.info(f"[AI3] Found {len(failing_lints)} files with linting issues. Attempting to fix...")
-                await self._attempt_lint_fixes(failing_lints)
+                logger.info(f"[AI3] Found {len(failing_lints)} files with linting issues. Starting pattern analysis...")
+                lint_patterns = self._analyze_lint_patterns(failing_lints)
+                await self._attempt_lint_fixes(failing_lints, lint_patterns)
+                
+                # Re-run linting after fixes
+                recheck_results = test_runner.run_specific_lints(list(failing_lints.keys()))
+                still_failing_lints = {path: result for path, result in recheck_results.items() if not result.success}
+                
+                if still_failing_lints:
+                    logger.warning(f"[AI3] {len(still_failing_lints)} files still have linting issues after fixes")
+                else:
+                    logger.info("[AI3] All linting issues successfully fixed!")
             else:
                 logger.info("[AI3] All files pass linting checks.")
-                
-            # Generate and save comprehensive test report
-            report = test_runner.generate_test_report(test_results)
+            
+            # Generate comprehensive test report with insights
+            report = {
+                "test_results": {
+                    "total_tests": len(test_results),
+                    "failing_tests": len(failing_tests),
+                    "fixed_tests": len(failing_tests) - len(still_failing) if failing_tests else 0,
+                    "remaining_failures": len(still_failing) if failing_tests else 0
+                },
+                "lint_results": {
+                    "total_files": len(lint_results),
+                    "failing_files": len(failing_lints),
+                    "fixed_files": len(failing_lints) - len(still_failing_lints) if failing_lints else 0,
+                    "remaining_issues": len(still_failing_lints) if failing_lints else 0
+                },
+                "insights": self._generate_test_insights(test_results, lint_results)
+            }
             
             # Send insights to AI1 for planning if needed
             if report["insights"]:
                 await self._send_test_insights_to_ai1(report["insights"])
                 
             return True
+            
         except Exception as e:
             logger.error(f"[AI3] Error running automated tests: {e}", exc_info=True)
             return False
-            
-    async def _attempt_test_fixes(self, failing_tests):
-        """Attempt to fix failing tests automatically"""
-        # Get an Ollama provider for fixing tests
+
+    def _analyze_lint_patterns(self, failing_lints):
+        """Analyze patterns in linting failures to guide fixes"""
+        patterns = {}
         try:
-            ollama_config = self.config.get("ai_config", {}).get("ai3", {}).get("providers", ["ollama1"])[0]
-            endpoint = self.config.get("providers", {}).get(ollama_config, {}).get("endpoint")
-            model = self.config.get("providers", {}).get(ollama_config, {}).get("model")
+            for file_path, result in failing_lints.items():
+                for failure in result.failures:
+                    pattern_key = self._extract_lint_pattern(failure)
+                    if pattern_key:
+                        if pattern_key not in patterns:
+                            patterns[pattern_key] = {
+                                "count": 0,
+                                "files": set(),
+                                "example": failure
+                            }
+                        patterns[pattern_key]["count"] += 1
+                        patterns[pattern_key]["files"].add(file_path)
             
-            if not endpoint or not model:
-                logger.error("[AI3] Ollama configuration not found. Cannot attempt test fixes.")
-                return
-                
-            # Process each failing test
-            for test_path, test_result in failing_tests.items():
-                # Find the original file being tested
-                original_file = self._get_original_file_from_test(test_path)
-                if not original_file:
-                    logger.warning(f"[AI3] Could not determine original file for test: {test_path}")
-                    continue
-                    
-                # Get content of both files
-                try:
-                    with open(os.path.join(self.repo_dir, test_path), 'r', encoding='utf-8') as f:
-                        test_content = f.read()
-                        
-                    original_path = os.path.join(self.repo_dir, original_file)
-                    if not os.path.exists(original_path):
-                        logger.warning(f"[AI3] Original file not found: {original_file}")
-                        continue
-                        
-                    with open(original_path, 'r', encoding='utf-8') as f:
-                        original_content = f.read()
-                    
-                    # Prepare context for fixing
-                    failures_text = "\n".join(test_result.failures[:5])  # Limit to first 5 failures for clarity
-                    
-                    # Use Ollama to fix the code
-                    prompt = f"""
-                    I need to fix a failing test. Below are:
-                    1. The original implementation file
-                    2. The test file that's failing
-                    3. The specific test failures
-                    
-                    Please analyze and fix the ORIGINAL code so the tests pass. Return ONLY the fixed implementation without explanation.
-                    
-                    ORIGINAL IMPLEMENTATION ({original_file}):
-                    ```
-                    {original_content}
-                    ```
-                    
-                    TEST FILE ({test_path}):
-                    ```
-                    {test_content}
-                    ```
-                    
-                    TEST FAILURES:
-                    ```
-                    {failures_text}
-                    ```
-                    
-                    FIXED IMPLEMENTATION:
-                    """
-                    
-                    logger.info(f"[AI3] Requesting fix for failing test: {test_path}")
-                    fixed_code = await call_ollama(prompt, endpoint, model, max_tokens=4000)
-                    
-                    if fixed_code:
-                        # Extract just the code (remove any markdown or explanations)
-                        code_pattern = r"```(?:.*?)\n([\s\S]*?)\n```"
-                        code_match = re.search(code_pattern, fixed_code)
-                        if code_match:
-                            fixed_code = code_match.group(1)
-                        
-                        # Remove any explanations before or after the code
-                        if "```" not in fixed_code:
-                            lines = fixed_code.split("\n")
-                            # Find where the actual code might begin (skip explanatory text)
-                            start_idx = 0
-                            for i, line in enumerate(lines):
-                                if line.strip().startswith("import ") or line.strip().startswith("class ") or line.strip().startswith("def "):
-                                    start_idx = i
-                                    break
-                            fixed_code = "\n".join(lines[start_idx:])
-                        
-                        # Apply fix if code was generated
-                        if fixed_code.strip():
-                            logger.info(f"[AI3] Applying fix to: {original_file}")
-                            await self.update_file_and_commit(original_file, fixed_code)
-                            
-                            # Re-run the specific test to verify fix
-                            await self._verify_test_fix(test_path)
-                        else:
-                            logger.warning(f"[AI3] Generated fix was empty for {original_file}")
-                            
-                except Exception as e:
-                    logger.error(f"[AI3] Error attempting to fix test {test_path}: {e}", exc_info=True)
-        
-        except Exception as e:
-            logger.error(f"[AI3] Error in test fix process: {e}", exc_info=True)
-    
-    async def _verify_test_fix(self, test_path):
-        """Verify if a test fix was successful by running the test again"""
-        try:
-            # Detect test type and run appropriate command
-            if test_path.endswith('.py'):
-                # Run Python test
-                test_cmd = ["python", "-m", "pytest", test_path, "-v"]
-            elif test_path.endswith('.js') or test_path.endswith('.jsx') or test_path.endswith('.tsx'):
-                # Run JavaScript test
-                test_cmd = ["npx", "jest", test_path, "--no-cache"]
-            else:
-                logger.warning(f"[AI3] Unsupported test file type for verification: {test_path}")
-                return False
-                
-            # Run the test
-            orig_dir = os.getcwd()
-            os.chdir(self.repo_dir)
-            try:
-                process = subprocess.run(test_cmd, capture_output=True, text=True)
-                success = process.returncode == 0
-                
-                if success:
-                    logger.info(f"[AI3] Test fix verified successfully: {test_path}")
-                    # Generate a success report
-                    await self._report_fix_success_to_ai1(test_path)
-                else:
-                    logger.warning(f"[AI3] Test fix was not successful: {test_path}")
-                    output = process.stdout + process.stderr
-                    # Possibly send for another round of fixing if needed
-                    await self._report_fix_failure_to_ai1(test_path, output)
-                    
-                return success
-            finally:
-                os.chdir(orig_dir)
-                
-        except Exception as e:
-            logger.error(f"[AI3] Error verifying test fix: {e}", exc_info=True)
-            return False
-    
-    async def _attempt_lint_fixes(self, failing_lints):
-        """Attempt to fix linting issues automatically"""
-        # Similar to test fixes but for linting issues
-        try:
-            ollama_config = self.config.get("ai_config", {}).get("ai3", {}).get("providers", ["ollama1"])[0]
-            endpoint = self.config.get("providers", {}).get(ollama_config, {}).get("endpoint")
-            model = self.config.get("providers", {}).get(ollama_config, {}).get("model")
+            # Sort patterns by frequency
+            sorted_patterns = sorted(patterns.items(), key=lambda x: x[1]["count"], reverse=True)
+            return {k: v for k, v in sorted_patterns}
             
-            if not endpoint or not model:
-                logger.error("[AI3] Ollama configuration not found. Cannot attempt lint fixes.")
-                return
-                
-            # Process each file with lint errors
-            for file_path, lint_result in failing_lints.items():
-                try:
-                    with open(os.path.join(self.repo_dir, file_path), 'r', encoding='utf-8') as f:
-                        file_content = f.read()
-                    
-                    # Prepare context for fixing
-                    failures_text = "\n".join(lint_result.failures[:10])
-                    
-                    # Use Ollama to fix the code
-                    prompt = f"""
-                    Fix the following linting issues in this file. Return ONLY the fixed implementation without explanation.
-                    
-                    FILE ({file_path}):
-                    ```
-                    {file_content}
-                    ```
-                    
-                    LINTING ERRORS:
-                    ```
-                    {failures_text}
-                    ```
-                    
-                    FIXED IMPLEMENTATION:
-                    """
-                    
-                    logger.info(f"[AI3] Requesting fix for linting issues: {file_path}")
-                    fixed_code = await call_ollama(prompt, endpoint, model)
-                    
-                    if fixed_code:
-                        # Extract just the code (remove any markdown or explanations)
-                        code_pattern = r"```(?:.*?)\n([\s\S]*?)\n```"
-                        code_match = re.search(code_pattern, fixed_code)
-                        if code_match:
-                            fixed_code = code_match.group(1)
-                        
-                        # Apply fix if code was generated
-                        if fixed_code.strip():
-                            logger.info(f"[AI3] Applying lint fix to: {file_path}")
-                            await self.update_file_and_commit(file_path, fixed_code)
-                        else:
-                            logger.warning(f"[AI3] Generated lint fix was empty for {file_path}")
-                except Exception as e:
-                    logger.error(f"[AI3] Error attempting to fix lint issues for {file_path}: {e}", exc_info=True)
-                    
         except Exception as e:
-            logger.error(f"[AI3] Error in lint fix process: {e}", exc_info=True)
-    
-    async def _send_test_insights_to_ai1(self, insights):
-        """Send test insights to AI1 for planning and decision making"""
+            logger.error(f"[AI3] Error analyzing lint patterns: {e}", exc_info=True)
+            return {}
+
+    def _extract_lint_pattern(self, failure_text):
+        """Extract a pattern key from a linting failure"""
         try:
-            insights_text = "\n".join([f"- {insight}" for insight in insights])
-            payload = {
-                "source": "AI3",
-                "type": "test_insights",
-                "details": {
-                    "insights": insights_text,
-                    "timestamp": datetime.now().isoformat()
-                }
-            }
+            # Common linting error patterns
+            patterns = [
+                (r"missing type annotation", "missing_type"),
+                (r"unused (variable|import)", "unused_code"),
+                (r"line too long", "line_length"),
+                (r"indentation", "indentation"),
+                (r"missing docstring", "missing_docs"),
+                (r"trailing whitespace", "whitespace"),
+                (r"undefined name", "undefined_name")
+            ]
             
-            logger.info(f"[AI3 -> AI1] Sending test insights to AI1")
-            await self.create_session()
-            async with self.session.post(f"{MCP_API_URL}/ai_collaboration", json=payload, timeout=15) as response:
-                if response.status == 200:
-                    logger.info("[AI3 -> AI1] Successfully sent test insights to AI1")
-                else:
-                    logger.error(f"[AI3 -> AI1] Failed to send test insights: {response.status} - {await response.text()}")
+            for pattern, key in patterns:
+                if re.search(pattern, failure_text, re.IGNORECASE):
+                    return key
+                    
+            return "other"
+            
         except Exception as e:
-            logger.error(f"[AI3 -> AI1] Error sending test insights to AI1: {e}", exc_info=True)
-    
-    async def _report_fix_success_to_ai1(self, file_path):
-        """Report successful test fix to AI1"""
+            logger.error(f"[AI3] Error extracting lint pattern: {e}", exc_info=True)
+            return None
+
+    def _generate_test_insights(self, test_results, lint_results):
+        """Generate insights from test and lint results"""
+        insights = []
         try:
-            payload = {
-                "source": "AI3",
-                "type": "test_fix_success",
-                "details": {
-                    "file_path": file_path,
-                    "message": f"Successfully fixed and verified test: {file_path}",
-                    "timestamp": datetime.now().isoformat()
-                }
-            }
+            # Analyze test patterns
+            if test_results:
+                test_patterns = self._analyze_test_failure_patterns(test_results)
+                for pattern, data in test_patterns.items():
+                    if data["count"] >= 2:  # Pattern occurs multiple times
+                        insights.append({
+                            "type": "test_pattern",
+                            "pattern": pattern,
+                            "frequency": data["count"],
+                            "affected_files": list(data["files"]),
+                            "priority": "high" if data["count"] > 3 else "medium"
+                        })
             
-            logger.info(f"[AI3 -> AI1] Reporting successful test fix for {file_path}")
-            await self.create_session()
-            async with self.session.post(f"{MCP_API_URL}/ai_collaboration", json=payload, timeout=15) as response:
-                if response.status == 200:
-                    logger.info(f"[AI3 -> AI1] Successfully reported test fix for {file_path}")
-                else:
-                    logger.error(f"[AI3 -> AI1] Failed to report test fix: {response.status} - {await response.text()}")
-        except Exception as e:
-            logger.error(f"[AI3 -> AI1] Error reporting test fix to AI1: {e}", exc_info=True)
-    
-    async def _report_fix_failure_to_ai1(self, file_path, output):
-        """Report failed test fix attempt to AI1"""
-        try:
-            # Limit output size to avoid huge payloads
-            if len(output) > 2000:
-                output = output[:2000] + "... [truncated]"
-                
-            payload = {
-                "source": "AI3",
-                "type": "test_fix_failure",
-                "details": {
-                    "file_path": file_path,
-                    "message": f"Failed to fix test: {file_path}",
-                    "output": output,
-                    "timestamp": datetime.now().isoformat()
-                }
-            }
+            # Analyze lint patterns
+            if lint_results:
+                lint_patterns = self._analyze_lint_patterns(lint_results)
+                for pattern, data in lint_patterns.items():
+                    if data["count"] >= 3:  # Common linting issue
+                        insights.append({
+                            "type": "lint_pattern",
+                            "pattern": pattern,
+                            "frequency": data["count"],
+                            "affected_files": list(data["files"]),
+                            "priority": "high" if data["count"] > 5 else "medium"
+                        })
             
-            logger.info(f"[AI3 -> AI1] Reporting failed test fix for {file_path}")
-            await self.create_session()
-            async with self.session.post(f"{MCP_API_URL}/ai_collaboration", json=payload, timeout=15) as response:
-                if response.status == 200:
-                    logger.info(f"[AI3 -> AI1] Successfully reported test fix failure for {file_path}")
-                else:
-                    logger.error(f"[AI3 -> AI1] Failed to report test fix failure: {response.status} - {await response.text()}")
+            return insights
+            
         except Exception as e:
-            logger.error(f"[AI3 -> AI1] Error reporting test fix failure to AI1: {e}", exc_info=True)
-    
-    def _get_original_file_from_test(self, test_file):
-        """Determine the original file that is being tested"""
-        from utils import get_original_file_from_test
-        return get_original_file_from_test(test_file)
+            logger.error(f"[AI3] Error generating test insights: {e}", exc_info=True)
+            return []
 
     async def start_background_tasks(self):
         """Starts all background monitoring tasks."""
@@ -1634,3 +1495,614 @@ async def wait_for_service(service_url: str, timeout: int = 60) -> bool:
     
     logger.warning(f"[AI3] Timeout waiting for service at {service_url} after {timeout}s")
     return False
+
+class CodeAnalyzer:
+    """Advanced code analysis and pattern recognition for AI3"""
+    def __init__(self):
+        self.pattern_detectors = {
+            'security': self._detect_security_patterns,
+            'performance': self._detect_performance_patterns,
+            'maintainability': self._detect_maintainability_patterns,
+            'reliability': self._detect_reliability_patterns,
+            'testability': self._detect_testability_patterns
+        }
+        self.quality_metrics = {
+            'complexity': self._calculate_complexity,
+            'cohesion': self._calculate_cohesion,
+            'coupling': self._calculate_coupling,
+            'test_coverage': self._calculate_test_coverage
+        }
+        self.language_specific = {
+            '.py': self._analyze_python,
+            '.js': self._analyze_javascript,
+            '.ts': self._analyze_typescript,
+            '.go': self._analyze_go,
+            '.java': self._analyze_java,
+            '.cpp': self._analyze_cpp,
+            '.rs': self._analyze_rust
+        }
+
+    async def analyze_code(self, file_path: str, content: str) -> Dict[str, Any]:
+        """Perform comprehensive code analysis"""
+        try:
+            ext = os.path.splitext(file_path)[1].lower()
+            
+            # Run all pattern detectors
+            patterns = {}
+            for pattern_type, detector in self.pattern_detectors.items():
+                patterns[pattern_type] = await detector(content, ext)
+            
+            # Calculate quality metrics
+            metrics = {}
+            for metric_name, calculator in self.quality_metrics.items():
+                metrics[metric_name] = await calculator(content, ext)
+            
+            # Run language-specific analysis
+            language_analysis = {}
+            if ext in self.language_specific:
+                language_analysis = await self.language_specific[ext](content)
+            
+            return {
+                'patterns': patterns,
+                'metrics': metrics,
+                'language_analysis': language_analysis,
+                'recommendations': await self._generate_recommendations(patterns, metrics, language_analysis)
+            }
+        except Exception as e:
+            logger.error(f"Error analyzing code: {e}")
+            return {}
+
+    async def _detect_security_patterns(self, content: str, ext: str) -> List[Dict[str, Any]]:
+        """Detect security-related patterns and potential vulnerabilities"""
+        findings = []
+        
+        # SQL Injection patterns
+        sql_patterns = [
+            r'execute\s*\(\s*[\'"].*?\%.*?[\'"]\s*\)',
+            r'cursor\.execute\s*\(\s*[\'"].*?\+.*?[\'"]\s*\)',
+            r'db\.query\s*\(\s*[\'"].*?\+.*?[\'"]\s*\)'
+        ]
+        
+        # Command Injection patterns
+        cmd_patterns = [
+            r'exec\s*\(\s*.*?\+.*?\s*\)',
+            r'spawn\s*\(\s*.*?\+.*?\s*\)',
+            r'system\s*\(\s*.*?\+.*?\s*\)'
+        ]
+        
+        # XSS patterns
+        xss_patterns = [
+            r'innerHTML\s*=',
+            r'document\.write\s*\(',
+            r'eval\s*\('
+        ]
+        
+        # Check for hardcoded secrets
+        secret_patterns = [
+            r'password\s*=\s*[\'"][^\'"]+[\'"]',
+            r'secret\s*=\s*[\'"][^\'"]+[\'"]',
+            r'api[_-]?key\s*=\s*[\'"][^\'"]+[\'"]'
+        ]
+        
+        for pattern in sql_patterns:
+            matches = re.finditer(pattern, content, re.IGNORECASE)
+            for match in matches:
+                findings.append({
+                    'type': 'security',
+                    'subtype': 'sql_injection',
+                    'severity': 'high',
+                    'line': content.count('\n', 0, match.start()) + 1,
+                    'description': 'Potential SQL injection vulnerability detected'
+                })
+        
+        for pattern in cmd_patterns:
+            matches = re.finditer(pattern, content, re.IGNORECASE)
+            for match in matches:
+                findings.append({
+                    'type': 'security',
+                    'subtype': 'command_injection',
+                    'severity': 'high',
+                    'line': content.count('\n', 0, match.start()) + 1,
+                    'description': 'Potential command injection vulnerability detected'
+                })
+        
+        for pattern in xss_patterns:
+            matches = re.finditer(pattern, content, re.IGNORECASE)
+            for match in matches:
+                findings.append({
+                    'type': 'security',
+                    'subtype': 'xss',
+                    'severity': 'medium',
+                    'line': content.count('\n', 0, match.start()) + 1,
+                    'description': 'Potential XSS vulnerability detected'
+                })
+        
+        for pattern in secret_patterns:
+            matches = re.finditer(pattern, content, re.IGNORECASE)
+            for match in matches:
+                findings.append({
+                    'type': 'security',
+                    'subtype': 'hardcoded_secret',
+                    'severity': 'high',
+                    'line': content.count('\n', 0, match.start()) + 1,
+                    'description': 'Hardcoded secret detected'
+                })
+        
+        return findings
+
+    async def _detect_performance_patterns(self, content: str, ext: str) -> List[Dict[str, Any]]:
+        """Detect performance-related patterns and potential issues"""
+        findings = []
+        
+        # Nested loop patterns
+        nested_loop_pattern = r'for.*?\{.*?for.*?\{.*?\}'
+        matches = re.finditer(nested_loop_pattern, content, re.DOTALL)
+        for match in matches:
+            findings.append({
+                'type': 'performance',
+                'subtype': 'nested_loops',
+                'severity': 'medium',
+                'line': content.count('\n', 0, match.start()) + 1,
+                'description': 'Nested loops detected - potential O(n²) complexity'
+            })
+        
+        # Memory leak patterns (language specific)
+        if ext == '.cpp':
+            memory_patterns = [
+                r'new\s+\w+(?!\s*delete)',
+                r'malloc\s*\((?!\s*free)'
+            ]
+            for pattern in memory_patterns:
+                matches = re.finditer(pattern, content)
+                for match in matches:
+                    findings.append({
+                        'type': 'performance',
+                        'subtype': 'memory_leak',
+                        'severity': 'high',
+                        'line': content.count('\n', 0, match.start()) + 1,
+                        'description': 'Potential memory leak detected'
+                    })
+        
+        # Large object creation in loops
+        object_creation_pattern = r'for.*?\{.*?new\s+\w+.*?\}'
+        matches = re.finditer(object_creation_pattern, content, re.DOTALL)
+        for match in matches:
+            findings.append({
+                'type': 'performance',
+                'subtype': 'object_creation_in_loop',
+                'severity': 'low',
+                'line': content.count('\n', 0, match.start()) + 1,
+                'description': 'Object creation inside loop - consider moving outside if possible'
+            })
+        
+        return findings
+
+    async def _detect_maintainability_patterns(self, content: str, ext: str) -> List[Dict[str, Any]]:
+        """Detect maintainability-related patterns and issues"""
+        findings = []
+        
+        # Long method detection
+        method_pattern = r'(def|function|func)\s+\w+\s*\([^)]*\)\s*\{?[^\}]*\}?'
+        matches = re.finditer(method_pattern, content, re.DOTALL)
+        for match in matches:
+            method_content = match.group(0)
+            lines = method_content.count('\n')
+            if lines > 30:
+                findings.append({
+                    'type': 'maintainability',
+                    'subtype': 'long_method',
+                    'severity': 'medium',
+                    'line': content.count('\n', 0, match.start()) + 1,
+                    'description': f'Long method detected ({lines} lines) - consider breaking down'
+                })
+        
+        # High parameter count
+        param_pattern = r'(def|function|func)\s+\w+\s*\(([^)]*)\)'
+        matches = re.finditer(param_pattern, content)
+        for match in matches:
+            params = match.group(2).split(',')
+            if len(params) > 5:
+                findings.append({
+                    'type': 'maintainability',
+                    'subtype': 'high_parameter_count',
+                    'severity': 'low',
+                    'line': content.count('\n', 0, match.start()) + 1,
+                    'description': f'Method has {len(params)} parameters - consider using parameter object'
+                })
+        
+        # Duplicate code blocks
+        code_blocks = re.findall(r'\{[^\}]+\}', content)
+        for i, block1 in enumerate(code_blocks):
+            for block2 in code_blocks[i+1:]:
+                if len(block1) > 50 and block1 == block2:
+                    findings.append({
+                        'type': 'maintainability',
+                        'subtype': 'duplicate_code',
+                        'severity': 'medium',
+                        'line': content.count('\n', 0, content.find(block1)) + 1,
+                        'description': 'Duplicate code block detected'
+                    })
+        
+        return findings
+
+    async def _detect_reliability_patterns(self, content: str, ext: str) -> List[Dict[str, Any]]:
+        """Detect reliability-related patterns and issues"""
+        findings = []
+        
+        # Empty catch blocks
+        catch_pattern = r'catch\s*\([^)]*\)\s*\{\s*\}'
+        matches = re.finditer(catch_pattern, content)
+        for match in matches:
+            findings.append({
+                'type': 'reliability',
+                'subtype': 'empty_catch',
+                'severity': 'high',
+                'line': content.count('\n', 0, match.start()) + 1,
+                'description': 'Empty catch block detected'
+            })
+        
+        # Resource handling patterns
+        if ext in ['.py', '.js', '.ts']:
+            resource_patterns = [
+                r'open\s*\([^)]+\)(?!\s*with)',
+                r'connect\s*\([^)]+\)(?!\s*with)'
+            ]
+            for pattern in resource_patterns:
+                matches = re.finditer(pattern, content)
+                for match in matches:
+                    findings.append({
+                        'type': 'reliability',
+                        'subtype': 'resource_leak',
+                        'severity': 'medium',
+                        'line': content.count('\n', 0, match.start()) + 1,
+                        'description': 'Resource not properly managed - consider using context manager'
+                    })
+        
+        # Null checks missing
+        if ext in ['.java', '.ts', '.cpp']:
+            null_patterns = [
+                r'(\w+)\s*\.\s*\w+\s*\([^)]*\)(?!\s*\?)'
+            ]
+            for pattern in null_patterns:
+                matches = re.finditer(pattern, content)
+                for match in matches:
+                    findings.append({
+                        'type': 'reliability',
+                        'subtype': 'missing_null_check',
+                        'severity': 'medium',
+                        'line': content.count('\n', 0, match.start()) + 1,
+                        'description': f'Consider adding null check for {match.group(1)}'
+                    })
+        
+        return findings
+
+    async def _detect_testability_patterns(self, content: str, ext: str) -> List[Dict[str, Any]]:
+        """Detect patterns affecting code testability"""
+        findings = []
+        
+        # Direct static method calls
+        static_call_pattern = r'\b[A-Z][a-zA-Z]*\.[a-zA-Z]+\s*\('
+        matches = re.finditer(static_call_pattern, content)
+        for match in matches:
+            findings.append({
+                'type': 'testability',
+                'subtype': 'static_call',
+                'severity': 'low',
+                'line': content.count('\n', 0, match.start()) + 1,
+                'description': 'Static method call may hinder testability - consider dependency injection'
+            })
+        
+        # Global state usage
+        global_patterns = [
+            r'global\s+\w+',
+            r'static\s+\w+\s*=',
+            r'window\.',
+            r'document\.'
+        ]
+        for pattern in global_patterns:
+            matches = re.finditer(pattern, content)
+            for match in matches:
+                findings.append({
+                    'type': 'testability',
+                    'subtype': 'global_state',
+                    'severity': 'medium',
+                    'line': content.count('\n', 0, match.start()) + 1,
+                    'description': 'Global state usage detected - consider dependency injection'
+                })
+        
+        # Hard-coded dependencies
+        new_instance_pattern = r'new\s+[A-Z][a-zA-Z]*\s*\('
+        matches = re.finditer(new_instance_pattern, content)
+        for match in matches:
+            findings.append({
+                'type': 'testability',
+                'subtype': 'hard_coded_dependency',
+                'severity': 'low',
+                'line': content.count('\n', 0, match.start()) + 1,
+                'description': 'Hard-coded dependency - consider dependency injection'
+            })
+        
+        return findings
+
+    async def _calculate_complexity(self, content: str, ext: str) -> Dict[str, Any]:
+        """Calculate various complexity metrics"""
+        metrics = {
+            'cyclomatic': 0,
+            'cognitive': 0,
+            'halstead': {
+                'vocabulary': 0,
+                'length': 0,
+                'difficulty': 0
+            }
+        }
+        
+        # Cyclomatic complexity
+        decision_patterns = [
+            r'\bif\b',
+            r'\belse\b',
+            r'\bfor\b',
+            r'\bwhile\b',
+            r'\bcase\b',
+            r'\bcatch\b',
+            r'\b\|\|\b',
+            r'\b&&\b'
+        ]
+        
+        for pattern in decision_patterns:
+            metrics['cyclomatic'] += len(re.findall(pattern, content))
+        
+        # Cognitive complexity
+        nesting_level = 0
+        lines = content.split('\n')
+        for line in lines:
+            if re.search(r'\b(if|for|while|switch)\b', line):
+                metrics['cognitive'] += nesting_level + 1
+                nesting_level += 1
+            elif re.search(r'\}', line):
+                nesting_level = max(0, nesting_level - 1)
+        
+        # Halstead metrics (simplified)
+        operators = set(re.findall(r'[+\-*/=<>!&|]', content))
+        operands = set(re.findall(r'\b[a-zA-Z_]\w*\b', content))
+        
+        metrics['halstead']['vocabulary'] = len(operators) + len(operands)
+        metrics['halstead']['length'] = len(re.findall(r'[+\-*/=<>!&|]', content)) + len(re.findall(r'\b[a-zA-Z_]\w*\b', content))
+        metrics['halstead']['difficulty'] = (len(operators) / 2) * (metrics['halstead']['length'] / len(operands) if len(operands) > 0 else 1)
+        
+        return metrics
+
+    async def _calculate_cohesion(self, content: str, ext: str) -> float:
+        """Calculate code cohesion metrics"""
+        # Simplified LCOM (Lack of Cohesion of Methods) calculation
+        methods = re.finditer(r'(def|function|func)\s+(\w+)\s*\([^)]*\)\s*\{?[^\}]*\}?', content, re.DOTALL)
+        
+        # Extract method bodies and the instance variables they use
+        method_vars = {}
+        instance_vars = set()
+        
+        for method in methods:
+            method_name = method.group(2)
+            method_body = method.group(0)
+            
+            # Find instance variable usage (simplified for example)
+            if ext == '.py':
+                vars_used = set(re.findall(r'self\.(\w+)', method_body))
+            else:
+                vars_used = set(re.findall(r'this\.(\w+)', method_body))
+            
+            method_vars[method_name] = vars_used
+            instance_vars.update(vars_used)
+        
+        if not method_vars or not instance_vars:
+            return 1.0  # Perfect cohesion for empty/simple files
+        
+        # Calculate pairs of methods that share variables
+        shared_pairs = 0
+        total_pairs = 0
+        
+        methods_list = list(method_vars.keys())
+        for i in range(len(methods_list)):
+            for j in range(i + 1, len(methods_list)):
+                total_pairs += 1
+                if method_vars[methods_list[i]] & method_vars[methods_list[j]]:
+                    shared_pairs += 1
+        
+        if total_pairs == 0:
+            return 1.0
+            
+        return shared_pairs / total_pairs
+
+    async def _calculate_coupling(self, content: str, ext: str) -> Dict[str, Any]:
+        """Calculate coupling metrics"""
+        metrics = {
+            'incoming': 0,
+            'outgoing': 0,
+            'external_deps': set()
+        }
+        
+        # Detect import statements
+        if ext == '.py':
+            imports = re.findall(r'(?:from|import)\s+([\w.]+)', content)
+        elif ext in ['.js', '.ts']:
+            imports = re.findall(r'(?:import.*?from\s+[\'"](.+?)[\'"]|require\s*\([\'"](.+?)[\'"]\))', content)
+        elif ext == '.java':
+            imports = re.findall(r'import\s+([\w.]+);', content)
+        else:
+            imports = []
+        
+        metrics['outgoing'] = len(imports)
+        metrics['external_deps'].update(imports)
+        
+        # Detect usage of external classes/functions
+        external_usage = re.findall(r'[A-Z][a-zA-Z]*\.[a-zA-Z]+', content)
+        metrics['outgoing'] += len(external_usage)
+        
+        return metrics
+
+    async def _calculate_test_coverage(self, content: str, ext: str) -> Dict[str, Any]:
+        """Calculate test coverage metrics"""
+        metrics = {
+            'line_coverage': 0.0,
+            'branch_coverage': 0.0,
+            'test_count': 0
+        }
+        
+        # Count test cases
+        if ext == '.py':
+            test_patterns = [
+                r'def\s+test_\w+',
+                r'@pytest\.mark\.parametrize'
+            ]
+        elif ext in ['.js', '.ts']:
+            test_patterns = [
+                r'it\s*\(',
+                r'test\s*\(',
+                r'describe\s*\('
+            ]
+        elif ext == '.java':
+            test_patterns = [
+                r'@Test',
+                r'public.*?test\w+'
+            ]
+        else:
+            test_patterns = []
+        
+        for pattern in test_patterns:
+            metrics['test_count'] += len(re.findall(pattern, content))
+        
+        # Estimate coverage (simplified)
+        total_lines = len(content.split('\n'))
+        testable_lines = total_lines - len(re.findall(r'^\s*(?:#|//|/\*|\*)', content, re.MULTILINE))
+        
+        if testable_lines > 0:
+            # Estimate line coverage based on assertion density
+            assertions = len(re.findall(r'assert|expect|should|must', content))
+            metrics['line_coverage'] = min(1.0, assertions / testable_lines)
+            
+            # Estimate branch coverage
+            branches = len(re.findall(r'\b(if|else|for|while|switch)\b', content))
+            tested_branches = len(re.findall(r'assert.*?(if|else|for|while|switch)', content, re.DOTALL))
+            metrics['branch_coverage'] = tested_branches / branches if branches > 0 else 1.0
+        
+        return metrics
+
+    async def _analyze_python(self, content: str) -> Dict[str, Any]:
+        """Python-specific code analysis"""
+        analysis = {
+            'type_hints': False,
+            'async_code': False,
+            'docstring_coverage': 0.0,
+            'best_practices': []
+        }
+        
+        # Check for type hints
+        type_hint_patterns = [
+            r'def\s+\w+\s*\([^)]*:\s*\w+[^)]*\)\s*->\s*\w+',
+            r'\w+\s*:\s*\w+'
+        ]
+        for pattern in type_hint_patterns:
+            if re.search(pattern, content):
+                analysis['type_hints'] = True
+                break
+        
+        # Check for async code
+        if re.search(r'\basync\s+def\b|\bawait\b|\bcoroutine\b', content):
+            analysis['async_code'] = True
+        
+        # Calculate docstring coverage
+        functions = re.finditer(r'def\s+\w+\s*\([^)]*\):', content)
+        total_funcs = 0
+        documented_funcs = 0
+        for func in functions:
+            total_funcs += 1
+            # Look for docstring after function definition
+            if re.search(r'"""[\s\S]*?"""|\'\'\'\s[\s\S]*?\'\'\'', content[func.end():func.end()+200]):
+                documented_funcs += 1
+        
+        if total_funcs > 0:
+            analysis['docstring_coverage'] = documented_funcs / total_funcs
+        
+        # Check Python best practices
+        if not re.search(r'if\s+__name__\s*==\s*[\'"]__main__[\'"]\s*:', content):
+            analysis['best_practices'].append('Missing __main__ guard')
+        
+        if re.search(r'except\s*:', content):
+            analysis['best_practices'].append('Bare except clause found')
+        
+        if re.search(r'import\s+\*', content):
+            analysis['best_practices'].append('Wildcard import found')
+        
+        return analysis
+
+    async def _analyze_javascript(self, content: str) -> Dict[str, Any]:
+        """JavaScript-specific code analysis"""
+        analysis = {
+            'es_version': 5,
+            'module_type': 'unknown',
+            'best_practices': []
+        }
+        
+        # Detect ES version
+        if re.search(r'\bconst\b|\blet\b|\btemplate literal\b|\barrow function\b', content):
+            analysis['es_version'] = 6
+        if re.search(r'\basync\b|\bawait\b', content):
+            analysis['es_version'] = 8
+        
+        # Detect module system
+        if re.search(r'import\s+.*\s+from\s+[\'"]', content):
+            analysis['module_type'] = 'esm'
+        elif re.search(r'require\s*\(', content):
+            analysis['module_type'] = 'commonjs'
+        
+        # Check JavaScript best practices
+        if not re.search(r'use strict', content):
+            analysis['best_practices'].append('Missing "use strict" directive')
+        
+        if re.search(r'==(?!=)', content):
+            analysis['best_practices'].append('Using loose equality comparison')
+        
+        if re.search(r'var\s+', content):
+            analysis['best_practices'].append('Using var instead of const/let')
+        
+        return analysis
+
+    async def _generate_recommendations(self, patterns: Dict, metrics: Dict, language_analysis: Dict) -> List[str]:
+        """Generate recommendations based on analysis results"""
+        recommendations = []
+        
+        # Security recommendations
+        security_findings = patterns.get('security', [])
+        if security_findings:
+            for finding in security_findings:
+                recommendations.append(f"Security: {finding['description']} at line {finding['line']}")
+        
+        # Performance recommendations
+        if metrics.get('complexity', {}).get('cyclomatic', 0) > 10:
+            recommendations.append("Consider breaking down complex methods to improve maintainability")
+        
+        if patterns.get('performance', []):
+            for finding in patterns['performance']:
+                recommendations.append(f"Performance: {finding['description']} at line {finding['line']}")
+        
+        # Maintainability recommendations
+        if metrics.get('cohesion', 1.0) < 0.5:
+            recommendations.append("Low cohesion detected - consider reorganizing class responsibilities")
+        
+        if metrics.get('coupling', {}).get('outgoing', 0) > 10:
+            recommendations.append("High coupling detected - consider reducing dependencies")
+        
+        # Testing recommendations
+        test_metrics = metrics.get('test_coverage', {})
+        if test_metrics.get('line_coverage', 0) < 0.7:
+            recommendations.append("Increase test coverage to at least 70%")
+        
+        if test_metrics.get('branch_coverage', 0) < 0.5:
+            recommendations.append("Improve branch coverage in tests")
+        
+        # Language-specific recommendations
+        if language_analysis:
+            if language_analysis.get('best_practices'):
+                for practice in language_analysis['best_practices']:
+                    recommendations.append(f"Best Practice: {practice}")
+        
+        return recommendations

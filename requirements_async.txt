@@ -26,3 +26,4 @@ asyncio
 gitpython
 aiohttp
 pytest
+async-timeout==5.0.1

@@ -1797,3 +1797,539 @@ async def wait_for_service(service_url: str, timeout: int = 60) -> bool:
     logger.warning(f"[AI3] Timeout waiting for service at {service_url} after {timeout}s")
     return False
 # --- END NEW ---
+
+import asyncio
+import json
+import logging
+import os
+import re
+import signal
+import sys
+import time
+from typing import Dict, List, Optional, Union, Any
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler("mcp.log"),
+    ],
+)
+logger = logging.getLogger("utils")
+
+# Global delay settings and timing tracking
+last_api_request = {}
+delay_settings = {}
+
+def log_message(message: str):
+    """Log a message with timestamp."""
+    print(f"{time.strftime('%Y-%m-%d %H:%M:%S')} - {message}")
+    logger.info(message)
+
+async def apply_request_delay(component_id: str):
+    """
+    Apply a delay before making an API request to prevent overloading services.
+    
+    Args:
+        component_id: Identifier for the component making the request (e.g., "ai1", "ai2_executor")
+    """
+    global last_api_request, delay_settings
+    
+    # Default delay of 1 second if no settings provided
+    min_delay = delay_settings.get(component_id, {}).get("min_delay", 1.0)
+    
+    # Check when the last request was made by this component
+    last_time = last_api_request.get(component_id, 0)
+    current_time = time.time()
+    elapsed = current_time - last_time
+    
+    # If not enough time has elapsed, wait
+    if elapsed < min_delay:
+        delay_needed = min_delay - elapsed
+        logger.debug(f"[{component_id}] Applying API request delay: {delay_needed:.2f}s")
+        await asyncio.sleep(delay_needed)
+    
+    # Update the last request time
+    last_api_request[component_id] = time.time()
+
+def load_delay_settings(config_data: Dict):
+    """Load delay settings from config data."""
+    global delay_settings
+    
+    delay_config = config_data.get("api_delay_settings", {})
+    for component, settings in delay_config.items():
+        if isinstance(settings, dict) and "min_delay" in settings:
+            delay_settings[component] = settings
+        elif isinstance(settings, (int, float)):
+            # If it's just a number, use it as min_delay
+            delay_settings[component] = {"min_delay": float(settings)}
+    
+    logger.info(f"Loaded API delay settings for {len(delay_settings)} components")
+
+class SystemMonitor:
+    """Monitors system health and manages process recovery"""
+    
+    def __init__(self, config_path: str = "config.json"):
+        self.config_path = config_path
+        self.config = self._load_config()
+        self.process_info = {}
+        self.health_checks = {}
+        self.recovery_attempts = {}
+        self.max_recovery_attempts = self.config.get("monitor", {}).get("max_recovery_attempts", 3)
+        self.check_interval = self.config.get("monitor", {}).get("check_interval", 60)  # seconds
+        self.is_running = False
+        
+    def _load_config(self) -> Dict:
+        """Load configuration from file"""
+        try:
+            with open(self.config_path, 'r') as f:
+                return json.load(f)
+        except Exception as e:
+            log_message(f"[SystemMonitor] Error loading config: {e}")
+            return {}
+            
+    async def start(self):
+        """Start the system monitoring loop"""
+        self.is_running = True
+        log_message("[SystemMonitor] Starting system health monitoring")
+        
+        try:
+            # Initial process status check
+            self._update_process_status()
+            
+            # Main monitoring loop
+            while self.is_running:
+                await self._check_health()
+                await asyncio.sleep(self.check_interval)
+                
+        except Exception as e:
+            log_message(f"[SystemMonitor] Monitoring error: {e}")
+        finally:
+            self.is_running = False
+            
+    def stop(self):
+        """Stop the monitoring loop"""
+        self.is_running = False
+        log_message("[SystemMonitor] Stopping system health monitoring")
+        
+    def _update_process_status(self):
+        """Update the status of all managed processes"""
+        log_message("[SystemMonitor] Updating process status")
+        
+        # Get all active processes
+        processes = self._get_active_processes()
+        
+        # Update process info dictionary
+        for component, pid_info in processes.items():
+            if component not in self.process_info:
+                self.process_info[component] = {
+                    "pid": pid_info["pid"],
+                    "start_time": pid_info["start_time"],
+                    "status": "running"
+                }
+            else:
+                # Update only if PID changed
+                if self.process_info[component]["pid"] != pid_info["pid"]:
+                    self.process_info[component]["pid"] = pid_info["pid"]
+                    self.process_info[component]["start_time"] = pid_info["start_time"]
+                    self.process_info[component]["status"] = "running"
+                    
+        # Mark processes that are no longer running
+        for component in list(self.process_info.keys()):
+            if component not in processes:
+                if self.process_info[component]["status"] == "running":
+                    self.process_info[component]["status"] = "stopped"
+                    log_message(f"[SystemMonitor] Process {component} appears to have stopped")
+        
+    def _get_active_processes(self) -> Dict[str, Dict[str, Any]]:
+        """Get all active AI-SYSTEMS processes using pid files"""
+        processes = {}
+        
+        try:
+            # Check all pid files in logs directory
+            logs_dir = "logs"
+            if not os.path.exists(logs_dir):
+                return processes
+                
+            for filename in os.listdir(logs_dir):
+                if filename.endswith(".pid"):
+                    component = filename.replace(".pid", "")
+                    pid_path = os.path.join(logs_dir, filename)
+                    
+                    try:
+                        with open(pid_path, 'r') as f:
+                            pid_data = f.read().strip()
+                            
+                        # Parse PID and start time
+                        if ":" in pid_data:
+                            pid_str, start_time_str = pid_data.split(":", 1)
+                            pid = int(pid_str)
+                            start_time = float(start_time_str)
+                        else:
+                            pid = int(pid_data)
+                            start_time = 0
+                            
+                        # Check if process is still running
+                        if self._is_process_running(pid):
+                            processes[component] = {
+                                "pid": pid,
+                                "start_time": start_time
+                            }
+                    except Exception as e:
+                        log_message(f"[SystemMonitor] Error reading pid file {filename}: {e}")
+                        
+            return processes
+        except Exception as e:
+            log_message(f"[SystemMonitor] Error getting active processes: {e}")
+            return processes
+            
+    def _is_process_running(self, pid: int) -> bool:
+        """Check if a process with the given PID is running"""
+        try:
+            # On POSIX systems, sending signal 0 checks if process exists
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
+        except Exception:
+            return False
+            
+    async def _check_health(self):
+        """Check the health of all components and recover if needed"""
+        log_message("[SystemMonitor] Performing health check")
+        
+        # Update current process status
+        self._update_process_status()
+        
+        # Check required components
+        required_components = self.config.get("monitor", {}).get("required_components", [])
+        for component in required_components:
+            # Skip if component is not being monitored
+            if component not in self.process_info:
+                continue
+                
+            component_status = self.process_info[component]["status"]
+            if component_status == "stopped":
+                log_message(f"[SystemMonitor] Required component {component} is not running")
+                await self._recover_component(component)
+    
+    async def _recover_component(self, component: str):
+        """Attempt to recover a stopped component"""
+        # Increment recovery attempt counter
+        self.recovery_attempts[component] = self.recovery_attempts.get(component, 0) + 1
+        
+        # Check if we've exceeded the maximum recovery attempts
+        if self.recovery_attempts[component] > self.max_recovery_attempts:
+            log_message(f"[SystemMonitor] Maximum recovery attempts ({self.max_recovery_attempts}) reached for {component}")
+            return
+            
+        log_message(f"[SystemMonitor] Attempting to recover {component} (attempt {self.recovery_attempts[component]})")
+        
+        # Get restart command from configuration
+        restart_cmd = self.config.get("monitor", {}).get("restart_commands", {}).get(component)
+        if not restart_cmd:
+            log_message(f"[SystemMonitor] No restart command configured for {component}")
+            return
+            
+        try:
+            # Execute restart command
+            log_message(f"[SystemMonitor] Executing restart command: {restart_cmd}")
+            process = await asyncio.create_subprocess_shell(
+                restart_cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            
+            # Wait for the process to complete with timeout
+            try:
+                stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30)
+                if process.returncode == 0:
+                    log_message(f"[SystemMonitor] Successfully restarted {component}")
+                    # Reset recovery attempts on success
+                    self.recovery_attempts[component] = 0
+                else:
+                    log_message(f"[SystemMonitor] Failed to restart {component}: {stderr.decode().strip()}")
+            except asyncio.TimeoutError:
+                log_message(f"[SystemMonitor] Restart command for {component} timed out")
+                
+        except Exception as e:
+            log_message(f"[SystemMonitor] Error executing restart command for {component}: {e}")
+
+class TestValidator:
+    """Validates tests and processes test results"""
+    
+    def __init__(self, config_path: str = "config.json"):
+        self.config_path = config_path
+        self.config = self._load_config()
+        self.test_results = {}
+        
+    def _load_config(self) -> Dict:
+        """Load configuration from file"""
+        try:
+            with open(self.config_path, 'r') as f:
+                return json.load(f)
+        except Exception as e:
+            log_message(f"[TestValidator] Error loading config: {e}")
+            return {}
+            
+    async def validate_test_file(self, test_file_path: str, code_file_path: str = None) -> Dict[str, Any]:
+        """Validate a test file against coding standards and check syntax"""
+        results = {
+            "valid": True,
+            "errors": [],
+            "warnings": []
+        }
+        
+        # Check if file exists
+        if not os.path.exists(test_file_path):
+            results["valid"] = False
+            results["errors"].append(f"Test file does not exist: {test_file_path}")
+            return results
+            
+        # Read test file content
+        try:
+            with open(test_file_path, 'r') as f:
+                test_content = f.read()
+        except Exception as e:
+            results["valid"] = False
+            results["errors"].append(f"Error reading test file: {e}")
+            return results
+            
+        # Get file extension to determine language
+        _, ext = os.path.splitext(test_file_path)
+        
+        # Apply language-specific validation
+        if ext == '.py':
+            await self._validate_python_test(test_content, results)
+        elif ext in ['.js', '.jsx']:
+            await self._validate_js_test(test_content, results)
+        elif ext in ['.ts', '.tsx']:
+            await self._validate_ts_test(test_content, results)
+        elif ext == '.java':
+            await self._validate_java_test(test_content, results)
+        elif ext in ['.go']:
+            await self._validate_go_test(test_content, results)
+        elif ext in ['.cpp', '.cc', '.cxx']:
+            await self._validate_cpp_test(test_content, results)
+        else:
+            results["warnings"].append(f"No specific validator for file type {ext}")
+            # Generic validation for unknown types
+            await self._validate_generic_test(test_content, results)
+            
+        # Check for test-code relationship if code file is provided
+        if code_file_path and os.path.exists(code_file_path):
+            await self._validate_test_coverage(test_content, code_file_path, results)
+            
+        return results
+        
+    async def _validate_python_test(self, content: str, results: Dict[str, Any]):
+        """Validate Python test file"""
+        # Check for test imports
+        if 'import pytest' not in content and 'import unittest' not in content:
+            results["warnings"].append("Missing test framework import (pytest or unittest)")
+            
+        # Check for test methods/functions
+        if not re.search(r'def test_\w+', content) and not re.search(r'class Test\w+', content):
+            results["warnings"].append("No test methods/classes found")
+            
+        # Check for assertions
+        if 'assert' not in content and 'self.assert' not in content:
+            results["warnings"].append("No assertions found in test")
+            
+        # Check for syntax errors (compile test)
+        try:
+            compile(content, '<string>', 'exec')
+        except SyntaxError as e:
+            results["valid"] = False
+            results["errors"].append(f"Python syntax error: {str(e)}")
+            
+    async def _validate_js_test(self, content: str, results: Dict[str, Any]):
+        """Validate JavaScript test file"""
+        # Check for test framework
+        if 'test(' not in content and 'it(' not in content and 'describe(' not in content:
+            results["warnings"].append("No test functions found (test, it, describe)")
+            
+        # Check for assertions
+        if 'expect(' not in content and 'assert' not in content:
+            results["warnings"].append("No assertions found in test")
+            
+    async def _validate_ts_test(self, content: str, results: Dict[str, Any]):
+        """Validate TypeScript test file"""
+        # TypeScript tests have similar structures to JS tests
+        await self._validate_js_test(content, results)
+        
+        # Check for TypeScript-specific imports
+        if '@types/jest' not in content and '@types/mocha' not in content:
+            results["warnings"].append("Missing TypeScript type definitions for test framework")
+            
+    async def _validate_java_test(self, content: str, results: Dict[str, Any]):
+        """Validate Java test file"""
+        # Check for JUnit imports
+        if 'import org.junit' not in content:
+            results["warnings"].append("Missing JUnit import")
+            
+        # Check for test methods
+        if '@Test' not in content:
+            results["warnings"].append("No @Test annotations found")
+            
+        # Check for assertions
+        if 'assert' not in content:
+            results["warnings"].append("No assertions found in test")
+            
+    async def _validate_go_test(self, content: str, results: Dict[str, Any]):
+        """Validate Go test file"""
+        # Check for test package
+        if 'package ' not in content:
+            results["warnings"].append("Missing package declaration")
+            
+        # Check for test methods
+        if not re.search(r'func Test\w+', content):
+            results["warnings"].append("No test functions found (should start with 'Test')")
+            
+        # Check for test imports
+        if 'import "testing"' not in content:
+            results["warnings"].append("Missing 'testing' package import")
+            
+    async def _validate_cpp_test(self, content: str, results: Dict[str, Any]):
+        """Validate C++ test file"""
+        # Check for test framework
+        if 'TEST(' not in content and 'TEST_F(' not in content:
+            results["warnings"].append("No GoogleTest TEST macros found")
+            
+        # Check for assertions
+        if 'EXPECT_' not in content and 'ASSERT_' not in content:
+            results["warnings"].append("No GoogleTest assertions found")
+            
+    async def _validate_generic_test(self, content: str, results: Dict[str, Any]):
+        """Generic validation for unknown test file types"""
+        # Check for common test patterns
+        if not re.search(r'test|assert|expect|should', content, re.IGNORECASE):
+            results["warnings"].append("No common test patterns found (test, assert, expect, should)")
+            
+    async def _validate_test_coverage(self, test_content: str, code_file_path: str, results: Dict[str, Any]):
+        """Check if test appears to cover the code file"""
+        try:
+            # Read code file
+            with open(code_file_path, 'r') as f:
+                code_content = f.read()
+                
+            # Extract function and class names from code
+            function_pattern = r'(?:function|def|func)\s+(\w+)'
+            class_pattern = r'(?:class|interface|struct)\s+(\w+)'
+            
+            functions = re.findall(function_pattern, code_content)
+            classes = re.findall(class_pattern, code_content)
+            
+            # Check if functions and classes are mentioned in tests
+            missing_coverage = []
+            
+            for func in functions:
+                # Skip very common or internal function names
+                if func in ['main', 'init', 'setup', 'get', 'set']:
+                    continue
+                    
+                # Check if function name is in test content
+                if func not in test_content:
+                    missing_coverage.append(func)
+                    
+            for cls in classes:
+                if cls not in test_content:
+                    missing_coverage.append(cls)
+                    
+            if missing_coverage:
+                results["warnings"].append(f"Potential missing test coverage for: {', '.join(missing_coverage)}")
+                
+        except Exception as e:
+            results["warnings"].append(f"Error checking test coverage: {e}")
+
+    async def run_tests(self, test_files: List[str]) -> Dict[str, Any]:
+        """Run tests and collect results"""
+        results = {
+            "success": True,
+            "total": len(test_files),
+            "passed": 0,
+            "failed": 0,
+            "skipped": 0,
+            "details": []
+        }
+        
+        for test_file in test_files:
+            test_result = await self._run_test_file(test_file)
+            results["details"].append(test_result)
+            
+            if test_result["status"] == "passed":
+                results["passed"] += 1
+            elif test_result["status"] == "failed":
+                results["failed"] += 1
+                results["success"] = False
+            else:  # skipped
+                results["skipped"] += 1
+                
+        return results
+        
+    async def _run_test_file(self, test_file: str) -> Dict[str, Any]:
+        """Run a single test file"""
+        result = {
+            "file": test_file,
+            "status": "unknown",
+            "output": "",
+            "errors": "",
+            "duration": 0
+        }
+        
+        # Get file extension
+        _, ext = os.path.splitext(test_file)
+        
+        # Prepare command based on file type
+        if ext == '.py':
+            cmd = f"python -m pytest {test_file} -v"
+        elif ext in ['.js', '.jsx', '.ts', '.tsx']:
+            cmd = f"npx jest {test_file}"
+        elif ext == '.go':
+            cmd = f"go test {test_file}"
+        elif ext == '.java':
+            # For Java, we need to be more careful with the command
+            # This is a simplified version that assumes Maven
+            cmd = f"mvn test -Dtest={os.path.basename(test_file).replace('.java', '')}"
+        elif ext in ['.cpp', '.cc', '.cxx']:
+            # Assumes test is built and in the same directory
+            test_exec = os.path.splitext(test_file)[0]
+            cmd = f"./{test_exec}"
+        else:
+            result["status"] = "skipped"
+            result["output"] = f"No runner available for file type: {ext}"
+            return result
+            
+        # Run the test
+        start_time = time.time()
+        try:
+            process = await asyncio.create_subprocess_shell(
+                cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=60)
+            end_time = time.time()
+            
+            result["duration"] = end_time - start_time
+            result["output"] = stdout.decode()
+            result["errors"] = stderr.decode()
+            
+            if process.returncode == 0:
+                result["status"] = "passed"
+            else:
+                result["status"] = "failed"
+                
+        except asyncio.TimeoutError:
+            result["status"] = "failed"
+            result["errors"] = "Test execution timed out (>60s)"
+            result["duration"] = time.time() - start_time
+        except Exception as e:
+            result["status"] = "failed"
+            result["errors"] = f"Error running test: {str(e)}"
+            result["duration"] = time.time() - start_time
+            
+        return result

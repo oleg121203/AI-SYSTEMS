@@ -2054,3 +2054,592 @@ async def shutdown_event():
         except asyncio.CancelledError:
             pass
         logger.info("Stopped periodic chart updates task")
+
+
+class TaskScheduler:
+    """Intelligent task scheduler with dynamic load balancing and parallel processing"""
+    def __init__(self):
+        self.tasks = {
+            "executor": asyncio.Queue(),
+            "tester": asyncio.Queue(),
+            "documenter": asyncio.Queue()
+        }
+        self.in_progress = {}  # task_id -> worker_id
+        self.worker_status = {}  # worker_id -> {"role": str, "busy": bool, "last_active": float}
+        self.task_dependencies = {}  # task_id -> List[task_id]
+        self.task_priorities = {}  # task_id -> priority_score
+        self.task_history = {}  # task_id -> {"status": str, "completion_time": float, "attempts": int}
+        self.load_metrics = {role: [] for role in self.tasks.keys()}  # Track processing times
+
+    async def add_task(self, task: Dict[str, Any], role: str, dependencies: List[str] = None,
+                      priority: int = 1) -> str:
+        """Add a task to the appropriate queue with dependencies and priority"""
+        task_id = str(uuid.uuid4())
+        task["id"] = task_id
+        
+        # Store dependency information
+        if dependencies:
+            self.task_dependencies[task_id] = dependencies
+            # Calculate priority based on dependencies
+            priority += sum(self.task_priorities.get(dep, 0) for dep in dependencies)
+        
+        self.task_priorities[task_id] = priority
+        
+        # Only add to queue if no unmet dependencies
+        if not dependencies or all(dep in self.task_history for dep in dependencies):
+            await self.tasks[role].put((priority, task))
+            logger.info(f"Task {task_id} added to {role} queue with priority {priority}")
+        else:
+            logger.info(f"Task {task_id} waiting for dependencies: {dependencies}")
+        
+        return task_id
+
+    async def get_next_task(self, role: str, worker_id: str) -> Optional[Dict[str, Any]]:
+        """Get the next highest priority task for a worker, considering dependencies"""
+        try:
+            # Update worker status
+            self.worker_status[worker_id] = {
+                "role": role,
+                "busy": False,
+                "last_active": time.time()
+            }
+            
+            # Check queue
+            if not self.tasks[role].empty():
+                priority, task = await self.tasks[role].get()
+                task_id = task["id"]
+                
+                # Check dependencies
+                if task_id in self.task_dependencies:
+                    deps = self.task_dependencies[task_id]
+                    if not all(dep in self.task_history for dep in deps):
+                        # Put back in queue with slightly lower priority
+                        await self.tasks[role].put((priority - 0.1, task))
+                        return None
+                
+                # Mark task as in progress
+                self.in_progress[task_id] = worker_id
+                self.worker_status[worker_id]["busy"] = True
+                
+                # Initialize history entry
+                if task_id not in self.task_history:
+                    self.task_history[task_id] = {
+                        "status": "in_progress",
+                        "attempts": 1,
+                        "start_time": time.time()
+                    }
+                else:
+                    self.task_history[task_id]["attempts"] += 1
+                
+                return task
+            return None
+        except Exception as e:
+            logger.error(f"Error getting next task: {e}")
+            return None
+
+    async def complete_task(self, task_id: str, success: bool, processing_time: float) -> None:
+        """Mark a task as completed and update metrics"""
+        try:
+            if task_id in self.in_progress:
+                worker_id = self.in_progress.pop(task_id)
+                role = self.worker_status[worker_id]["role"]
+                
+                # Update task history
+                self.task_history[task_id].update({
+                    "status": "completed" if success else "failed",
+                    "completion_time": time.time(),
+                    "processing_time": processing_time
+                })
+                
+                # Update load metrics
+                self.load_metrics[role].append(processing_time)
+                if len(self.load_metrics[role]) > 10:  # Keep last 10 measurements
+                    self.load_metrics[role].pop(0)
+                
+                # Mark worker as available
+                self.worker_status[worker_id]["busy"] = False
+                
+                # Check for dependent tasks to unblock
+                await self._process_dependent_tasks(task_id)
+                
+                logger.info(f"Task {task_id} completed with status: {'success' if success else 'failed'}")
+        except Exception as e:
+            logger.error(f"Error completing task {task_id}: {e}")
+
+    async def _process_dependent_tasks(self, completed_task_id: str) -> None:
+        """Process tasks that were waiting on the completed task"""
+        for task_id, deps in self.task_dependencies.items():
+            if completed_task_id in deps:
+                # Check if all dependencies are now met
+                if all(dep in self.task_history for dep in deps):
+                    # Find the role for this task
+                    for role, queue in self.tasks.items():
+                        async with queue._queue.mutex:  # Access internal queue items
+                            for priority, task in queue._queue:
+                                if task["id"] == task_id:
+                                    logger.info(f"Unblocking dependent task {task_id}")
+                                    return
+
+    def get_queue_status(self) -> Dict[str, Dict[str, Any]]:
+        """Get current status of all queues and workers"""
+        status = {}
+        for role in self.tasks:
+            status[role] = {
+                "queue_size": self.tasks[role].qsize(),
+                "active_workers": sum(1 for w in self.worker_status.values() 
+                                   if w["role"] == role and w["busy"]),
+                "avg_processing_time": (sum(self.load_metrics[role]) / len(self.load_metrics[role])
+                                     if self.load_metrics[role] else 0)
+            }
+        return status
+
+    async def rebalance_queues(self) -> None:
+        """Rebalance tasks between queues based on load metrics"""
+        status = self.get_queue_status()
+        
+        # Calculate load factors
+        total_load = sum(s["avg_processing_time"] * s["queue_size"] 
+                        for s in status.values())
+        if total_load == 0:
+            return
+            
+        load_factors = {role: (s["avg_processing_time"] * s["queue_size"]) / total_load 
+                       for role, s in status.items()}
+        
+        # Find overloaded and underloaded queues
+        avg_load = sum(load_factors.values()) / len(load_factors)
+        threshold = 0.2  # 20% deviation threshold
+        
+        overloaded = {r: lf for r, lf in load_factors.items() 
+                     if lf > avg_load * (1 + threshold)}
+        underloaded = {r: lf for r, lf in load_factors.items() 
+                      if lf < avg_load * (1 - threshold)}
+        
+        if not overloaded or not underloaded:
+            return
+            
+        # Attempt to move tasks from overloaded to underloaded queues
+        for over_role in overloaded:
+            for under_role in underloaded:
+                await self._move_eligible_tasks(over_role, under_role)
+
+    async def _move_eligible_tasks(self, from_role: str, to_role: str) -> None:
+        """Move eligible tasks between queues"""
+        try:
+            # Get tasks from source queue
+            source_queue = self.tasks[from_role]
+            if source_queue.empty():
+                return
+                
+            moved_count = 0
+            items = []
+            
+            # Collect all tasks
+            while not source_queue.empty() and moved_count < 3:  # Limit moves per rebalance
+                priority, task = await source_queue.get()
+                
+                # Check if task can be moved (based on role compatibility)
+                if self._can_move_task(task, to_role):
+                    # Put in destination queue
+                    await self.tasks[to_role].put((priority, task))
+                    moved_count += 1
+                    logger.info(f"Moved task {task['id']} from {from_role} to {to_role}")
+                else:
+                    # Put back in source queue
+                    items.append((priority, task))
+                    
+            # Return unmoved tasks to source queue
+            for item in items:
+                await source_queue.put(item)
+                
+        except Exception as e:
+            logger.error(f"Error moving tasks between queues: {e}")
+
+    def _can_move_task(self, task: Dict[str, Any], target_role: str) -> bool:
+        """Check if a task can be moved to the target role"""
+        # Add logic here to determine if a task can be handled by different roles
+        # For now, return False to prevent arbitrary moves
+        return False
+
+    async def monitor_worker_health(self) -> None:
+        """Monitor worker health and handle stalled tasks"""
+        while True:
+            try:
+                current_time = time.time()
+                for worker_id, status in self.worker_status.items():
+                    if status["busy"]:
+                        # Check for stalled tasks (no activity for 5 minutes)
+                        if current_time - status["last_active"] > 300:
+                            await self._handle_stalled_task(worker_id)
+                            
+                # Clean up old history entries
+                self._cleanup_history()
+                
+                await asyncio.sleep(60)  # Check every minute
+                
+            except Exception as e:
+                logger.error(f"Error in worker health monitoring: {e}")
+                await asyncio.sleep(60)
+
+    async def _handle_stalled_task(self, worker_id: str) -> None:
+        """Handle a stalled task by requeuing it"""
+        try:
+            # Find task assigned to this worker
+            task_id = next((tid for tid, wid in self.in_progress.items() 
+                          if wid == worker_id), None)
+            if task_id:
+                # Get task details and requeue
+                role = self.worker_status[worker_id]["role"]
+                if task_id in self.task_history:
+                    attempts = self.task_history[task_id]["attempts"]
+                    if attempts < 3:  # Limit retry attempts
+                        # Requeue with lower priority
+                        priority = self.task_priorities.get(task_id, 1) * 0.8
+                        self.task_priorities[task_id] = priority
+                        
+                        # TODO: Get actual task data
+                        task = {"id": task_id}  # Simplified for example
+                        await self.tasks[role].put((priority, task))
+                        
+                        logger.warning(f"Requeued stalled task {task_id} from worker {worker_id}")
+                    else:
+                        logger.error(f"Task {task_id} failed after {attempts} attempts")
+                        
+                # Clean up
+                if task_id in self.in_progress:
+                    del self.in_progress[task_id]
+                self.worker_status[worker_id]["busy"] = False
+                
+        except Exception as e:
+            logger.error(f"Error handling stalled task for worker {worker_id}: {e}")
+
+    def _cleanup_history(self) -> None:
+        """Clean up old history entries"""
+        try:
+            current_time = time.time()
+            # Keep entries from last 24 hours
+            cutoff_time = current_time - 86400
+            
+            self.task_history = {
+                tid: data for tid, data in self.task_history.items()
+                if data.get("completion_time", current_time) > cutoff_time
+            }
+        except Exception as e:
+            logger.error(f"Error cleaning up task history: {e}")
+
+# Initialize scheduler
+scheduler = TaskScheduler()
+
+@app.post("/task/{role}")
+async def get_task(role: str):
+    """Get next task for a worker"""
+    worker_id = str(uuid.uuid4())  # Generate unique worker ID
+    task = await scheduler.get_next_task(role, worker_id)
+    return {"task": task, "worker_id": worker_id} if task else {"task": None}
+
+
+class MCPApi:
+    """Advanced Model Context Protocol (MCP) API implementation"""
+    def __init__(self):
+        self.task_queue = TaskQueue()
+        self.task_scheduler = TaskScheduler()
+        self.dependency_manager = DependencyManager()
+        self.code_analyzer = CodeAnalyzer()
+        self.pattern_learner = PatternLearner()
+        self.status_monitor = StatusMonitor()
+
+    async def create_project(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        """Creates a new software project with enhanced planning and analysis"""
+        try:
+            # Analyze project requirements
+            analysis = await self.code_analyzer.analyze_requirements(request)
+            
+            # Create project plan with dependencies
+            project_plan = await self.task_scheduler.create_project_plan(analysis)
+            
+            # Initialize project structure
+            project = await self.initialize_project(project_plan)
+            
+            # Set up monitoring
+            await self.status_monitor.initialize_project(project["id"])
+            
+            return {"status": "success", "project": project}
+        except Exception as e:
+            logger.error(f"Project creation failed: {e}", exc_info=True)
+            return {"status": "error", "message": str(e)}
+
+    async def get_task(self, role: str) -> Dict[str, Any]:
+        """Get next task for an AI worker with enhanced context"""
+        try:
+            # Get next task considering dependencies
+            task = await self.task_scheduler.get_next_task(role)
+            if not task:
+                return {"status": "no_task"}
+            
+            # Enhance task with context
+            task = await self.enhance_task_context(task)
+            
+            # Track task assignment
+            await self.status_monitor.track_task(task["id"], "assigned")
+            
+            return {"status": "success", "task": task}
+        except Exception as e:
+            logger.error(f"Task retrieval failed: {e}", exc_info=True)
+            return {"status": "error", "message": str(e)}
+
+    async def enhance_task_context(self, task: Dict[str, Any]) -> Dict[str, Any]:
+        """Enhance task with relevant context and patterns"""
+        # Add project context
+        project_context = await self.get_project_context(task["project_id"])
+        task["context"] = project_context
+        
+        # Add learned patterns
+        patterns = await self.pattern_learner.get_relevant_patterns(task)
+        task["patterns"] = patterns
+        
+        # Add dependencies
+        dependencies = await self.dependency_manager.get_task_dependencies(task["id"])
+        task["dependencies"] = dependencies
+        
+        return task
+
+    async def report_progress(self, report: Dict[str, Any]) -> Dict[str, Any]:
+        """Process task progress report with enhanced analysis"""
+        try:
+            task_id = report["task_id"]
+            
+            # Update task status
+            await self.status_monitor.update_task(task_id, report)
+            
+            # Learn from results
+            await self.pattern_learner.learn_from_report(report)
+            
+            # Check for blockers
+            blockers = await self.analyze_blockers(report)
+            if blockers:
+                await self.handle_blockers(blockers)
+            
+            # Update dependencies
+            await self.dependency_manager.update_dependencies(task_id, report)
+            
+            # Plan next tasks
+            await self.task_scheduler.update_plan(report)
+            
+            return {"status": "success"}
+        except Exception as e:
+            logger.error(f"Progress report failed: {e}", exc_info=True)
+            return {"status": "error", "message": str(e)}
+
+    async def analyze_blockers(self, report: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Analyze task report for potential blockers"""
+        blockers = []
+        
+        # Check for errors
+        if report.get("status") == "error":
+            blocker = {
+                "type": "error",
+                "task_id": report["task_id"],
+                "description": report.get("error_message", "Unknown error"),
+                "severity": self._assess_severity(report)
+            }
+            blockers.append(blocker)
+        
+        # Check for missing dependencies
+        missing_deps = await self.dependency_manager.check_missing_dependencies(report)
+        if missing_deps:
+            blocker = {
+                "type": "missing_dependency",
+                "task_id": report["task_id"],
+                "dependencies": missing_deps
+            }
+            blockers.append(blocker)
+        
+        return blockers
+
+    def _assess_severity(self, report: Dict[str, Any]) -> str:
+        """Assess the severity of reported issues"""
+        if "error" in report.get("error_message", "").lower():
+            return "high"
+        elif "warning" in report.get("error_message", "").lower():
+            return "medium"
+        return "low"
+
+    async def handle_blockers(self, blockers: List[Dict[str, Any]]):
+        """Handle identified blockers"""
+        for blocker in blockers:
+            if blocker["type"] == "error":
+                await self._handle_error_blocker(blocker)
+            elif blocker["type"] == "missing_dependency":
+                await self._handle_dependency_blocker(blocker)
+
+    async def _handle_error_blocker(self, blocker: Dict[str, Any]):
+        """Handle error-type blockers"""
+        # Retry strategy based on severity
+        if blocker["severity"] == "high":
+            await self.task_scheduler.reschedule_task(blocker["task_id"], priority="high")
+        else:
+            await self.task_scheduler.retry_task(blocker["task_id"])
+
+    async def _handle_dependency_blocker(self, blocker: Dict[str, Any]):
+        """Handle dependency-related blockers"""
+        # Schedule missing dependencies
+        for dep in blocker["dependencies"]:
+            await self.task_scheduler.schedule_dependency(dep)
+
+    async def get_project_status(self, project_id: str) -> Dict[str, Any]:
+        """Get detailed project status with analytics"""
+        try:
+            # Get basic status
+            status = await self.status_monitor.get_project_status(project_id)
+            
+            # Add analytics
+            analytics = await self.analyze_project_progress(project_id)
+            status["analytics"] = analytics
+            
+            # Add predictions
+            predictions = await self.predict_completion(project_id)
+            status["predictions"] = predictions
+            
+            return {"status": "success", "project_status": status}
+        except Exception as e:
+            logger.error(f"Status retrieval failed: {e}", exc_info=True)
+            return {"status": "error", "message": str(e)}
+
+    async def analyze_project_progress(self, project_id: str) -> Dict[str, Any]:
+        """Analyze project progress with metrics"""
+        return {
+            "completion_rate": await self._calculate_completion_rate(project_id),
+            "error_rate": await self._calculate_error_rate(project_id),
+            "bottlenecks": await self._identify_bottlenecks(project_id),
+            "quality_metrics": await self._calculate_quality_metrics(project_id)
+        }
+
+    async def predict_completion(self, project_id: str) -> Dict[str, Any]:
+        """Predict project completion metrics"""
+        return {
+            "estimated_completion_time": await self._estimate_completion_time(project_id),
+            "risk_factors": await self._identify_risk_factors(project_id),
+            "resource_requirements": await self._estimate_resource_requirements(project_id)
+        }
+
+class TaskQueue:
+    """Enhanced task queue with priority and dependency management"""
+    def __init__(self):
+        self.tasks = []
+        self.processing = {}
+        self.completed = {}
+        self.lock = asyncio.Lock()
+
+    async def add_task(self, task: Dict[str, Any], priority: int = 1):
+        """Add task to queue with priority"""
+        async with self.lock:
+            heapq.heappush(self.tasks, (priority, task))
+
+    async def get_next_task(self, role: str) -> Optional[Dict[str, Any]]:
+        """Get next task considering dependencies"""
+        async with self.lock:
+            while self.tasks:
+                priority, task = heapq.heappop(self.tasks)
+                if task["role"] == role and await self._can_process(task):
+                    self.processing[task["id"]] = task
+                    return task
+                else:
+                    heapq.heappush(self.tasks, (priority, task))
+        return None
+
+    async def _can_process(self, task: Dict[str, Any]) -> bool:
+        """Check if task can be processed"""
+        deps = task.get("dependencies", [])
+        return all(dep in self.completed for dep in deps)
+
+class TaskScheduler:
+    """Advanced task scheduler with dependency resolution"""
+    def __init__(self):
+        self.task_queue = TaskQueue()
+        self.project_plans = {}
+        self.lock = asyncio.Lock()
+
+    async def create_project_plan(self, analysis: Dict[str, Any]) -> Dict[str, Any]:
+        """Create project execution plan"""
+        tasks = []
+        dependencies = []
+        
+        # Create tasks from analysis
+        for component in analysis["components"]:
+            task = await self._create_component_tasks(component)
+            tasks.extend(task)
+        
+        # Identify dependencies
+        for task in tasks:
+            deps = await self._identify_dependencies(task)
+            dependencies.extend(deps)
+        
+        return {
+            "tasks": tasks,
+            "dependencies": dependencies,
+            "estimated_duration": await self._estimate_duration(tasks)
+        }
+
+class DependencyManager:
+    """Manages task dependencies and relationships"""
+    def __init__(self):
+        self.dependencies = {}
+        self.lock = asyncio.Lock()
+
+    async def add_dependency(self, task_id: str, dependency: str):
+        """Add task dependency"""
+        async with self.lock:
+            if task_id not in self.dependencies:
+                self.dependencies[task_id] = set()
+            self.dependencies[task_id].add(dependency)
+
+    async def check_dependencies(self, task_id: str) -> bool:
+        """Check if all dependencies are met"""
+        if task_id not in self.dependencies:
+            return True
+        return all(self._is_completed(dep) for dep in self.dependencies[task_id])
+
+class CodeAnalyzer:
+    """Analyzes code and project requirements"""
+    def __init__(self):
+        self.pattern_matcher = PatternMatcher()
+        self.requirement_analyzer = RequirementAnalyzer()
+
+    async def analyze_requirements(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        """Analyze project requirements"""
+        components = await self.requirement_analyzer.extract_components(request)
+        patterns = await self.pattern_matcher.find_patterns(components)
+        
+        return {
+            "components": components,
+            "patterns": patterns,
+            "complexity": await self._estimate_complexity(components)
+        }
+
+class StatusMonitor:
+    """Monitors project and task status"""
+    def __init__(self):
+        self.project_status = {}
+        self.task_status = {}
+        self.metrics = {}
+        self.lock = asyncio.Lock()
+
+    async def track_task(self, task_id: str, status: str):
+        """Track task status changes"""
+        async with self.lock:
+            self.task_status[task_id] = {
+                "status": status,
+                "timestamp": datetime.now().isoformat(),
+                "updates": []
+            }
+
+    async def update_task(self, task_id: str, report: Dict[str, Any]):
+        """Update task status with report"""
+        async with self.lock:
+            if task_id in self.task_status:
+                self.task_status[task_id]["updates"].append({
+                    "timestamp": datetime.now().isoformat(),
+                    "status": report.get("status"),
+                    "progress": report.get("progress"),
+                    "message": report.get("message")
+                })

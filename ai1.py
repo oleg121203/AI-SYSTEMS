@@ -1175,6 +1175,994 @@ class AI1:
         return True
 
 
+class ProjectAnalyzer:
+    """Analyzes project structure and requirements to generate optimal task sequence"""
+    def __init__(self):
+        self.context_history = []
+        self.language_analyzers = {
+            'python': self._analyze_python_project,
+            'javascript': self._analyze_js_project,
+            'typescript': self._analyze_ts_project,
+            'go': self._analyze_go_project,
+            'rust': self._analyze_rust_project,
+            'java': self._analyze_java_project,
+            'cpp': self._analyze_cpp_project
+        }
+        self.framework_analyzers = {
+            'django': self._analyze_django_project,
+            'flask': self._analyze_flask_project,
+            'fastapi': self._analyze_fastapi_project,
+            'react': self._analyze_react_project,
+            'vue': self._analyze_vue_project,
+            'angular': self._analyze_angular_project,
+            'next': self._analyze_next_project,
+            'express': self._analyze_express_project,
+            'spring': self._analyze_spring_project
+        }
+
+    async def analyze_project(self, project_spec: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Analyze project specification and generate prioritized task list"""
+        try:
+            # Store project context
+            self.context_history.append({
+                'timestamp': time.time(),
+                'spec': project_spec,
+                'language_hints': self._detect_languages(project_spec),
+                'framework_hints': self._detect_frameworks(project_spec)
+            })
+            
+            tasks = []
+            
+            # Determine main language and framework
+            main_language = self._determine_main_language(project_spec)
+            main_framework = self._determine_main_framework(project_spec)
+            
+            # Get specialized analysis for language/framework
+            if main_language and main_language in self.language_analyzers:
+                language_tasks = await self.language_analyzers[main_language](project_spec)
+                tasks.extend(language_tasks)
+                
+            if main_framework and main_framework in self.framework_analyzers:
+                framework_tasks = await self.framework_analyzers[main_framework](project_spec)
+                tasks.extend(framework_tasks)
+                
+            # Generate common tasks
+            common_tasks = await self._generate_common_tasks(project_spec)
+            tasks.extend(common_tasks)
+            
+            # Prioritize and order tasks
+            ordered_tasks = self._prioritize_tasks(tasks, project_spec)
+            
+            return ordered_tasks
+            
+        except Exception as e:
+            log_message(f"[ProjectAnalyzer] Error analyzing project: {e}")
+            return []
+
+    def _detect_languages(self, spec: Dict[str, Any]) -> List[str]:
+        """Detect programming languages from project specification"""
+        languages = set()
+        
+        # Check explicit language mentions
+        if 'languages' in spec:
+            languages.update(lang.lower() for lang in spec['languages'])
+            
+        # Look for language-specific patterns in description
+        description = spec.get('description', '').lower()
+        patterns = {
+            'python': ['python', 'django', 'flask', 'fastapi', 'pip'],
+            'javascript': ['javascript', 'js', 'node', 'npm', 'yarn'],
+            'typescript': ['typescript', 'ts', 'angular'],
+            'go': ['golang', 'go build'],
+            'rust': ['rust', 'cargo'],
+            'java': ['java', 'spring', 'maven', 'gradle'],
+            'cpp': ['c++', 'cpp', 'cmake']
+        }
+        
+        for lang, keywords in patterns.items():
+            if any(kw in description for kw in keywords):
+                languages.add(lang)
+                
+        return list(languages)
+
+    def _detect_frameworks(self, spec: Dict[str, Any]) -> List[str]:
+        """Detect frameworks from project specification"""
+        frameworks = set()
+        
+        # Check explicit framework mentions
+        if 'frameworks' in spec:
+            frameworks.update(fw.lower() for fw in spec['frameworks'])
+            
+        # Look for framework-specific patterns
+        description = spec.get('description', '').lower()
+        patterns = {
+            'django': ['django'],
+            'flask': ['flask'],
+            'fastapi': ['fastapi'],
+            'react': ['react', 'jsx', 'tsx'],
+            'vue': ['vue', 'vuex', 'nuxt'],
+            'angular': ['angular', 'ng'],
+            'next': ['next.js', 'nextjs'],
+            'express': ['express', 'expressjs'],
+            'spring': ['spring boot', 'spring framework']
+        }
+        
+        for framework, keywords in patterns.items():
+            if any(kw in description for kw in keywords):
+                frameworks.add(framework)
+                
+        return list(frameworks)
+
+    def _determine_main_language(self, spec: Dict[str, Any]) -> Optional[str]:
+        """Determine the main programming language for the project"""
+        languages = self._detect_languages(spec)
+        if not languages:
+            return None
+            
+        # Use explicitly specified main language if available
+        if 'main_language' in spec:
+            main = spec['main_language'].lower()
+            if main in languages:
+                return main
+                
+        # Otherwise use heuristics to determine main language
+        language_scores = {}
+        description = spec.get('description', '').lower()
+        
+        for lang in languages:
+            score = 0
+            # Check frequency of language mentions
+            score += description.count(lang) * 2
+            # Check for build/config files
+            if lang == 'python' and ('requirements.txt' in description or 'setup.py' in description):
+                score += 3
+            elif lang == 'javascript' and ('package.json' in description or 'webpack' in description):
+                score += 3
+            elif lang == 'typescript' and ('tsconfig' in description):
+                score += 3
+            # Add more language-specific scoring rules
+            
+            language_scores[lang] = score
+            
+        # Return language with highest score, or first language if tied
+        return max(language_scores.items(), key=lambda x: x[1])[0] if language_scores else None
+
+    def _determine_main_framework(self, spec: Dict[str, Any]) -> Optional[str]:
+        """Determine the main framework for the project"""
+        frameworks = self._detect_frameworks(spec)
+        if not frameworks:
+            return None
+            
+        # Use explicitly specified main framework if available
+        if 'main_framework' in spec:
+            main = spec['main_framework'].lower()
+            if main in frameworks:
+                return main
+                
+        # Otherwise use heuristics to determine main framework
+        framework_scores = {}
+        description = spec.get('description', '').lower()
+        
+        for framework in frameworks:
+            score = 0
+            # Check frequency of framework mentions
+            score += description.count(framework) * 2
+            # Check for framework-specific patterns
+            if framework == 'django' and 'models.py' in description:
+                score += 3
+            elif framework == 'react' and ('jsx' in description or 'tsx' in description):
+                score += 3
+            elif framework == 'vue' and 'components/' in description:
+                score += 3
+            # Add more framework-specific scoring rules
+            
+            framework_scores[framework] = score
+            
+        # Return framework with highest score, or first framework if tied
+        return max(framework_scores.items(), key=lambda x: x[1])[0] if framework_scores else None
+
+    async def _analyze_python_project(self, spec: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Generate tasks specific to Python projects"""
+        tasks = []
+        
+        # Add Python-specific setup tasks
+        tasks.append({
+            'type': 'setup',
+            'priority': 10,
+            'description': 'Set up Python virtual environment',
+            'file': 'requirements.txt',
+            'dependencies': []
+        })
+        
+        # Add core Python files
+        tasks.append({
+            'type': 'code',
+            'priority': 8,
+            'description': 'Create main application entry point',
+            'file': 'main.py',
+            'dependencies': ['requirements.txt']
+        })
+        
+        # Add test configuration
+        tasks.append({
+            'type': 'test',
+            'priority': 7,
+            'description': 'Set up pytest configuration',
+            'file': 'pytest.ini',
+            'dependencies': ['requirements.txt']
+        })
+        
+        # Add type hints if using Python 3
+        tasks.append({
+            'type': 'code',
+            'priority': 6,
+            'description': 'Add type hints to core modules',
+            'dependencies': ['main.py']
+        })
+        
+        return tasks
+
+    async def _analyze_js_project(self, spec: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Generate tasks specific to JavaScript projects"""
+        tasks = []
+        
+        # Add JavaScript-specific setup tasks
+        tasks.append({
+            'type': 'setup',
+            'priority': 10,
+            'description': 'Initialize package.json and install dependencies',
+            'file': 'package.json',
+            'dependencies': []
+        })
+        
+        # Add core JS files
+        tasks.append({
+            'type': 'code',
+            'priority': 8,
+            'description': 'Create main application entry point',
+            'file': 'index.js',
+            'dependencies': ['package.json']
+        })
+        
+        # Add test configuration
+        tasks.append({
+            'type': 'test',
+            'priority': 7,
+            'description': 'Set up Jest configuration',
+            'file': 'jest.config.js',
+            'dependencies': ['package.json']
+        })
+        
+        return tasks
+
+    async def _analyze_ts_project(self, spec: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Generate tasks specific to TypeScript projects"""
+        tasks = []
+        
+        # Add TypeScript-specific setup tasks
+        tasks.extend([
+            {
+                'type': 'setup',
+                'priority': 10,
+                'description': 'Initialize package.json and install TypeScript dependencies',
+                'file': 'package.json',
+                'dependencies': []
+            },
+            {
+                'type': 'setup',
+                'priority': 9,
+                'description': 'Configure TypeScript compiler options',
+                'file': 'tsconfig.json',
+                'dependencies': ['package.json']
+            }
+        ])
+        
+        # Add core TS files
+        tasks.append({
+            'type': 'code',
+            'priority': 8,
+            'description': 'Create main application entry point',
+            'file': 'index.ts',
+            'dependencies': ['tsconfig.json']
+        })
+        
+        return tasks
+
+    async def _analyze_react_project(self, spec: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Generate tasks specific to React projects"""
+        tasks = []
+        
+        # Add React-specific setup tasks
+        tasks.extend([
+            {
+                'type': 'setup',
+                'priority': 10,
+                'description': 'Initialize React application with Create React App',
+                'dependencies': []
+            },
+            {
+                'type': 'setup',
+                'priority': 9,
+                'description': 'Configure React testing library',
+                'dependencies': ['package.json']
+            }
+        ])
+        
+        # Add core React components
+        tasks.extend([
+            {
+                'type': 'code',
+                'priority': 8,
+                'description': 'Create App component',
+                'file': 'src/App.tsx',
+                'dependencies': ['package.json']
+            },
+            {
+                'type': 'code',
+                'priority': 7,
+                'description': 'Set up routing configuration',
+                'file': 'src/routes.tsx',
+                'dependencies': ['src/App.tsx']
+            }
+        ])
+        
+        return tasks
+
+    async def _analyze_go_project(self, spec: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Generate tasks specific to Go projects"""
+        tasks = []
+        
+        # Add Go-specific setup tasks
+        tasks.extend([
+            {
+                'type': 'setup',
+                'priority': 10,
+                'description': 'Initialize Go module',
+                'file': 'go.mod',
+                'dependencies': []
+            },
+            {
+                'type': 'setup',
+                'priority': 9,
+                'description': 'Create initial project structure',
+                'dependencies': ['go.mod']
+            }
+        ])
+        
+        # Add core Go files
+        tasks.extend([
+            {
+                'type': 'code',
+                'priority': 8,
+                'description': 'Create main package',
+                'file': 'main.go',
+                'dependencies': ['go.mod']
+            },
+            {
+                'type': 'code',
+                'priority': 7,
+                'description': 'Set up configuration package',
+                'file': 'pkg/config/config.go',
+                'dependencies': ['main.go']
+            }
+        ])
+        
+        return tasks
+
+    async def _analyze_rust_project(self, spec: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Generate tasks specific to Rust projects"""
+        tasks = []
+        
+        # Add Rust-specific setup tasks
+        tasks.extend([
+            {
+                'type': 'setup',
+                'priority': 10,
+                'description': 'Initialize Cargo project',
+                'file': 'Cargo.toml',
+                'dependencies': []
+            },
+            {
+                'type': 'setup',
+                'priority': 9,
+                'description': 'Configure Rust edition and dependencies',
+                'dependencies': ['Cargo.toml']
+            }
+        ])
+        
+        # Add core Rust files
+        tasks.extend([
+            {
+                'type': 'code',
+                'priority': 8,
+                'description': 'Create lib.rs with core functionality',
+                'file': 'src/lib.rs',
+                'dependencies': ['Cargo.toml']
+            },
+            {
+                'type': 'code',
+                'priority': 7,
+                'description': 'Create main.rs as entry point',
+                'file': 'src/main.rs',
+                'dependencies': ['src/lib.rs']
+            }
+        ])
+        
+        return tasks
+
+    async def _analyze_java_project(self, spec: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Generate tasks specific to Java projects"""
+        tasks = []
+        
+        # Add Java-specific setup tasks
+        tasks.extend([
+            {
+                'type': 'setup',
+                'priority': 10,
+                'description': 'Initialize Maven or Gradle project',
+                'file': 'pom.xml' if 'maven' in spec.get('description', '').lower() else 'build.gradle',
+                'dependencies': []
+            },
+            {
+                'type': 'setup',
+                'priority': 9,
+                'description': 'Configure Java version and dependencies',
+                'dependencies': ['pom.xml' if 'maven' in spec.get('description', '').lower() else 'build.gradle']
+            }
+        ])
+        
+        # Add core Java files
+        base_package = spec.get('package', 'com.example.app').replace('.', '/')
+        tasks.extend([
+            {
+                'type': 'code',
+                'priority': 8,
+                'description': 'Create main application class',
+                'file': f'src/main/java/{base_package}/Application.java',
+                'dependencies': ['pom.xml' if 'maven' in spec.get('description', '').lower() else 'build.gradle']
+            },
+            {
+                'type': 'code',
+                'priority': 7,
+                'description': 'Create configuration class',
+                'file': f'src/main/java/{base_package}/config/AppConfig.java',
+                'dependencies': [f'src/main/java/{base_package}/Application.java']
+            }
+        ])
+        
+        return tasks
+
+    async def _analyze_cpp_project(self, spec: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Generate tasks specific to C++ projects"""
+        tasks = []
+        
+        # Add C++-specific setup tasks
+        tasks.extend([
+            {
+                'type': 'setup',
+                'priority': 10,
+                'description': 'Initialize CMake project',
+                'file': 'CMakeLists.txt',
+                'dependencies': []
+            },
+            {
+                'type': 'setup',
+                'priority': 9,
+                'description': 'Configure C++ standard and dependencies',
+                'dependencies': ['CMakeLists.txt']
+            }
+        ])
+        
+        # Add core C++ files
+        tasks.extend([
+            {
+                'type': 'code',
+                'priority': 8,
+                'description': 'Create main entry point',
+                'file': 'src/main.cpp',
+                'dependencies': ['CMakeLists.txt']
+            },
+            {
+                'type': 'code',
+                'priority': 7,
+                'description': 'Create core utility header',
+                'file': 'include/utils.hpp',
+                'dependencies': ['CMakeLists.txt']
+            }
+        ])
+        
+        return tasks
+
+    async def _analyze_django_project(self, spec: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Generate tasks specific to Django projects"""
+        tasks = []
+        
+        project_name = spec.get('project_name', 'djangoproject')
+        
+        # Add Django-specific setup tasks
+        tasks.extend([
+            {
+                'type': 'setup',
+                'priority': 10,
+                'description': 'Initialize Django project',
+                'file': f'{project_name}/settings.py',
+                'dependencies': ['requirements.txt']
+            },
+            {
+                'type': 'setup',
+                'priority': 9,
+                'description': 'Create initial Django app',
+                'file': 'app/models.py',
+                'dependencies': [f'{project_name}/settings.py']
+            }
+        ])
+        
+        # Add core Django files
+        tasks.extend([
+            {
+                'type': 'code',
+                'priority': 8,
+                'description': 'Create Django models',
+                'file': 'app/models.py',
+                'dependencies': [f'{project_name}/settings.py']
+            },
+            {
+                'type': 'code',
+                'priority': 7,
+                'description': 'Create Django views',
+                'file': 'app/views.py',
+                'dependencies': ['app/models.py']
+            },
+            {
+                'type': 'code',
+                'priority': 6,
+                'description': 'Configure Django URLs',
+                'file': 'app/urls.py',
+                'dependencies': ['app/views.py']
+            }
+        ])
+        
+        return tasks
+
+    async def _analyze_flask_project(self, spec: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Generate tasks specific to Flask projects"""
+        tasks = []
+
+        # Add Flask-specific setup tasks
+        tasks.extend([
+            {
+                'type': 'setup',
+                'priority': 10,
+                'description': 'Initialize Flask application',
+                'file': 'app/__init__.py',
+                'dependencies': ['requirements.txt']
+            },
+            {
+                'type': 'setup',
+                'priority': 9,
+                'description': 'Create Flask configuration',
+                'file': 'config.py',
+                'dependencies': ['app/__init__.py']
+            }
+        ])
+
+        # Add core Flask files
+        tasks.extend([
+            {
+                'type': 'code',
+                'priority': 8,
+                'description': 'Create Flask routes',
+                'file': 'app/routes.py',
+                'dependencies': ['app/__init__.py']
+            },
+            {
+                'type': 'code',
+                'priority': 7,
+                'description': 'Create Flask models',
+                'file': 'app/models.py',
+                'dependencies': ['app/__init__.py']
+            },
+            {
+                'type': 'code',
+                'priority': 6,
+                'description': 'Set up Flask templates',
+                'file': 'app/templates/index.html',
+                'dependencies': ['app/routes.py']
+            }
+        ])
+        
+        return tasks
+
+    async def _analyze_fastapi_project(self, spec: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Generate tasks specific to FastAPI projects"""
+        tasks = []
+
+        # Add FastAPI-specific setup tasks
+        tasks.extend([
+            {
+                'type': 'setup',
+                'priority': 10,
+                'description': 'Initialize FastAPI application',
+                'file': 'app/main.py',
+                'dependencies': ['requirements.txt']
+            },
+            {
+                'type': 'setup',
+                'priority': 9,
+                'description': 'Create FastAPI configuration',
+                'file': 'app/config.py',
+                'dependencies': ['app/main.py']
+            }
+        ])
+
+        # Add core FastAPI files
+        tasks.extend([
+            {
+                'type': 'code',
+                'priority': 8,
+                'description': 'Create Pydantic models',
+                'file': 'app/models.py',
+                'dependencies': ['app/main.py']
+            },
+            {
+                'type': 'code',
+                'priority': 7,
+                'description': 'Create API routers',
+                'file': 'app/routers/items.py',
+                'dependencies': ['app/models.py']
+            },
+            {
+                'type': 'code',
+                'priority': 6,
+                'description': 'Set up database connection',
+                'file': 'app/database.py',
+                'dependencies': ['app/main.py']
+            }
+        ])
+        
+        return tasks
+
+    async def _analyze_next_project(self, spec: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Generate tasks specific to Next.js projects"""
+        tasks = []
+
+        # Add Next.js-specific setup tasks
+        tasks.extend([
+            {
+                'type': 'setup',
+                'priority': 10,
+                'description': 'Initialize Next.js application',
+                'file': 'next.config.js',
+                'dependencies': ['package.json']
+            },
+            {
+                'type': 'setup',
+                'priority': 9,
+                'description': 'Configure TypeScript for Next.js',
+                'file': 'tsconfig.json',
+                'dependencies': ['next.config.js']
+            }
+        ])
+
+        # Add core Next.js files
+        tasks.extend([
+            {
+                'type': 'code',
+                'priority': 8,
+                'description': 'Create Next.js pages',
+                'file': 'pages/index.tsx',
+                'dependencies': ['next.config.js']
+            },
+            {
+                'type': 'code',
+                'priority': 7,
+                'description': 'Create API routes',
+                'file': 'pages/api/hello.ts',
+                'dependencies': ['pages/index.tsx']
+            },
+            {
+                'type': 'code',
+                'priority': 6,
+                'description': 'Set up components',
+                'file': 'components/Layout.tsx',
+                'dependencies': ['pages/index.tsx']
+            }
+        ])
+        
+        return tasks
+
+    async def _analyze_express_project(self, spec: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Generate tasks specific to Express.js projects"""
+        tasks = []
+
+        # Add Express-specific setup tasks
+        tasks.extend([
+            {
+                'type': 'setup',
+                'priority': 10,
+                'description': 'Initialize Express application',
+                'file': 'app.js',
+                'dependencies': ['package.json']
+            },
+            {
+                'type': 'setup',
+                'priority': 9,
+                'description': 'Configure Express middleware',
+                'file': 'middleware/index.js',
+                'dependencies': ['app.js']
+            }
+        ])
+
+        # Add core Express files
+        tasks.extend([
+            {
+                'type': 'code',
+                'priority': 8,
+                'description': 'Create Express routes',
+                'file': 'routes/index.js',
+                'dependencies': ['app.js']
+            },
+            {
+                'type': 'code',
+                'priority': 7,
+                'description': 'Create Express controllers',
+                'file': 'controllers/index.js',
+                'dependencies': ['routes/index.js']
+            },
+            {
+                'type': 'code',
+                'priority': 6,
+                'description': 'Set up database models',
+                'file': 'models/index.js',
+                'dependencies': ['app.js']
+            }
+        ])
+        
+        return tasks
+
+    async def _analyze_vue_project(self, spec: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Generate tasks specific to Vue.js projects"""
+        tasks = []
+
+        # Add Vue-specific setup tasks
+        tasks.extend([
+            {
+                'type': 'setup',
+                'priority': 10,
+                'description': 'Initialize Vue application',
+                'file': 'vue.config.js',
+                'dependencies': ['package.json']
+            },
+            {
+                'type': 'setup',
+                'priority': 9,
+                'description': 'Configure Vue router',
+                'file': 'src/router/index.js',
+                'dependencies': ['vue.config.js']
+            }
+        ])
+
+        # Add core Vue files
+        tasks.extend([
+            {
+                'type': 'code',
+                'priority': 8,
+                'description': 'Create Vue components',
+                'file': 'src/components/HelloWorld.vue',
+                'dependencies': ['vue.config.js']
+            },
+            {
+                'type': 'code',
+                'priority': 7,
+                'description': 'Create Vue views',
+                'file': 'src/views/Home.vue',
+                'dependencies': ['src/components/HelloWorld.vue']
+            },
+            {
+                'type': 'code',
+                'priority': 6,
+                'description': 'Set up Vuex store',
+                'file': 'src/store/index.js',
+                'dependencies': ['src/views/Home.vue']
+            }
+        ])
+        
+        return tasks
+
+    async def _analyze_angular_project(self, spec: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Generate tasks specific to Angular projects"""
+        tasks = []
+
+        # Add Angular-specific setup tasks
+        tasks.extend([
+            {
+                'type': 'setup',
+                'priority': 10,
+                'description': 'Initialize Angular application',
+                'file': 'angular.json',
+                'dependencies': ['package.json']
+            },
+            {
+                'type': 'setup',
+                'priority': 9,
+                'description': 'Configure TypeScript for Angular',
+                'file': 'tsconfig.json',
+                'dependencies': ['angular.json']
+            }
+        ])
+
+        # Add core Angular files
+        tasks.extend([
+            {
+                'type': 'code',
+                'priority': 8,
+                'description': 'Create Angular components',
+                'file': 'src/app/components/hello.component.ts',
+                'dependencies': ['angular.json']
+            },
+            {
+                'type': 'code',
+                'priority': 7,
+                'description': 'Create Angular services',
+                'file': 'src/app/services/data.service.ts',
+                'dependencies': ['src/app/components/hello.component.ts']
+            },
+            {
+                'type': 'code',
+                'priority': 6,
+                'description': 'Set up Angular routing',
+                'file': 'src/app/app-routing.module.ts',
+                'dependencies': ['src/app/components/hello.component.ts']
+            }
+        ])
+        
+        return tasks
+
+    async def _analyze_spring_project(self, spec: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Generate tasks specific to Spring Boot projects"""
+        tasks = []
+        
+        base_package = spec.get('package', 'com.example.demo').replace('.', '/')
+
+        # Add Spring-specific setup tasks
+        tasks.extend([
+            {
+                'type': 'setup',
+                'priority': 10,
+                'description': 'Initialize Spring Boot application',
+                'file': 'pom.xml' if 'maven' in spec.get('description', '').lower() else 'build.gradle',
+                'dependencies': []
+            },
+            {
+                'type': 'setup',
+                'priority': 9,
+                'description': 'Configure Spring Boot properties',
+                'file': 'src/main/resources/application.properties',
+                'dependencies': ['pom.xml' if 'maven' in spec.get('description', '').lower() else 'build.gradle']
+            }
+        ])
+
+        # Add core Spring files
+        tasks.extend([
+            {
+                'type': 'code',
+                'priority': 8,
+                'description': 'Create Spring Boot main class',
+                'file': f'src/main/java/{base_package}/Application.java',
+                'dependencies': ['pom.xml' if 'maven' in spec.get('description', '').lower() else 'build.gradle']
+            },
+            {
+                'type': 'code',
+                'priority': 7,
+                'description': 'Create Spring Boot controllers',
+                'file': f'src/main/java/{base_package}/controller/MainController.java',
+                'dependencies': [f'src/main/java/{base_package}/Application.java']
+            },
+            {
+                'type': 'code',
+                'priority': 6,
+                'description': 'Set up Spring Boot services',
+                'file': f'src/main/java/{base_package}/service/MainService.java',
+                'dependencies': [f'src/main/java/{base_package}/controller/MainController.java']
+            }
+        ])
+        
+        return tasks
+
+    async def _generate_common_tasks(self, spec: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Generate common tasks applicable to all projects"""
+        tasks = []
+
+        # Add documentation tasks
+        tasks.extend([
+            {
+                'type': 'doc',
+                'priority': 9,
+                'description': 'Create main README.md',
+                'file': 'README.md',
+                'dependencies': []
+            },
+            {
+                'type': 'doc',
+                'priority': 8,
+                'description': 'Add API documentation',
+                'file': 'docs/api.md',
+                'dependencies': ['README.md']
+            }
+        ])
+        
+        # Add testing tasks
+        tasks.append({
+            'type': 'test',
+            'priority': 7,
+            'description': 'Set up continuous integration',
+            'file': '.github/workflows/ci.yml',
+            'dependencies': []
+        })
+        
+        # Add deployment tasks
+        tasks.append({
+            'type': 'deploy',
+            'priority': 5,
+            'description': 'Configure deployment pipeline',
+            'file': 'deploy/docker-compose.yml',
+            'dependencies': []
+        })
+        
+        return tasks
+
+    def _prioritize_tasks(self, tasks: List[Dict[str, Any]], spec: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Prioritize and order tasks based on dependencies and importance"""
+        # Build dependency graph
+        graph = {}
+        for task in tasks:
+            task_id = task.get('file', task['description'])
+            graph[task_id] = {
+                'task': task,
+                'dependencies': task['dependencies'],
+                'dependents': set()
+            }
+            
+        # Add reverse dependencies
+        for task_id, node in graph.items():
+            for dep in node['dependencies']:
+                if dep in graph:
+                    graph[dep]['dependents'].add(task_id)
+                    
+        # Calculate priority scores
+        scores = {}
+        for task_id, node in graph.items():
+            base_priority = node['task']['priority']
+            dep_count = len(node['dependencies'])
+            dependent_count = len(node['dependents'])
+            
+            # Priority formula: base_priority + (dependent_count * 2) - (dep_count * 1)
+            scores[task_id] = base_priority + (dependent_count * 2) - dep_count
+            
+        # Sort tasks by score (highest first)
+        ordered_tasks = []
+        visited = set()
+        
+        def visit(task_id):
+            if task_id in visited:
+                return
+            visited.add(task_id)
+            
+            # Visit dependencies first
+            for dep in graph[task_id]['dependencies']:
+                if dep in graph:
+                    visit(dep)
+                    
+            ordered_tasks.append(graph[task_id]['task'])
+            
+        # Visit tasks in order of priority score
+        sorted_tasks = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+        for task_id, _ in sorted_tasks:
+            visit(task_id)
+            
+        return ordered_tasks
+
+
 async def main():
     target = config.get("target")
     if not target:
