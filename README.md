@@ -39,7 +39,7 @@ The interface is built with modern web technologies:
 The web interface is automatically launched when starting the system with the `run_async_services.sh` script. By default, it's accessible at:
 
 ```
-http://localhost:8000
+http://localhost: 7860
 ```
 
 You can interact with the interface to:

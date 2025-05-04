@@ -2072,32 +2072,6 @@ function setupLogPanelBehavior() {
     if (logMaxLinesInput) logMaxLinesInput.value = maxLogLines;
   }
 
-  // Save settings when inputs change
-  if (logDisplaySecondsInput) {
-    logDisplaySecondsInput.addEventListener("change", function () {
-      logDisplaySeconds = parseInt(this.value, 10);
-      localStorage.setItem("logDisplaySeconds", logDisplaySeconds);
-      console.log(`Log display duration set to ${logDisplaySeconds} seconds`);
-    });
-  }
-
-  if (logMaxLinesInput) {
-    logMaxLinesInput.addEventListener("change", function () {
-      maxLogLines = parseInt(this.value, 10);
-      localStorage.setItem("maxLogLines", maxLogLines);
-      console.log(`Maximum log lines set to ${maxLogLines}`);
-
-      // Trim existing logs if needed
-      if (logContent) {
-        while (logContent.childElementCount > maxLogLines) {
-          if (logContent.firstChild) {
-            logContent.removeChild(logContent.firstChild);
-          }
-        }
-      }
-    });
-  }
-
   if (logPanelContainer) {
     // Show log panel when mouse enters trigger area
     logPanelContainer.addEventListener("mouseenter", () => {
@@ -2109,6 +2083,35 @@ function setupLogPanelBehavior() {
     logPanelContainer.addEventListener("mouseleave", () => {
       logPanelMouseIsOver = false;
       retractLogPanel();
+    });
+
+    // Prevent panel from closing when interacting with input fields
+    const inputFields = logPanelContainer.querySelectorAll(
+      'input[type="number"]'
+    );
+    inputFields.forEach((input) => {
+      input.addEventListener("focus", () => {
+        // Keep panel open while input is focused
+        logPanelMouseIsOver = true;
+      });
+
+      input.addEventListener("blur", () => {
+        // Check if mouse is still over the panel
+        setTimeout(() => {
+          if (!logPanelContainer.matches(":hover")) {
+            logPanelMouseIsOver = false;
+            retractLogPanel();
+          }
+        }, 100); // Short delay to check hover state
+      });
+
+      // Prevent wheel events from scrolling the page when adjusting input value
+      input.addEventListener("wheel", (e) => {
+        if (document.activeElement === input) {
+          e.preventDefault();
+          // Optional: implement custom increment/decrement logic here if needed
+        }
+      });
     });
 
     // Handle click anywhere on the document to close log panel
@@ -2492,6 +2495,34 @@ function updateTimelineChart(data) {
     // Update the chart
     timelineChart.update();
     console.log("[Timeline] Updated from explicit timeline data");
+  }
+
+  // ADDED: Force immediate update even if there's only one data point
+  if (timelineChart.data.labels.length === 1) {
+    // Add a second data point with the same values to show a line
+    const lastTime = timelineChart.data.labels[0];
+    const nextTime = new Date();
+    nextTime.setMinutes(nextTime.getMinutes() + 1);
+    const nextTimeLabel = nextTime.toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+
+    if (lastTime !== nextTimeLabel) {
+      timelineChart.data.labels.push(nextTimeLabel);
+
+      // Add the same values for the second point (or with slight increment)
+      const filesValue = timelineChart.data.datasets[0].data[0];
+      const tasksValue = timelineChart.data.datasets[1].data[0];
+
+      timelineChart.data.datasets[0].data.push(filesValue);
+      timelineChart.data.datasets[1].data.push(tasksValue);
+
+      console.log(
+        "[Timeline] Added additional point to ensure line visibility"
+      );
+      timelineChart.update();
+    }
   }
 }
 
@@ -2892,4 +2923,68 @@ function renderNode(node, parentUl, currentPath = "") {
       });
     }
   }
+}
+
+// --- New function to save log panel configuration ---
+function saveLogPanelConfig(type) {
+  if (type === "seconds") {
+    const secondsInput = document.getElementById("log-display-seconds");
+    if (secondsInput) {
+      const newValue = parseInt(secondsInput.value, 10);
+      if (!isNaN(newValue) && newValue > 0) {
+        logDisplaySeconds = newValue;
+        localStorage.setItem("logDisplaySeconds", logDisplaySeconds);
+        showNotification(
+          `Log display duration set to ${logDisplaySeconds} seconds`,
+          "success"
+        );
+        console.log(`Log display duration saved: ${logDisplaySeconds} seconds`);
+      } else {
+        // Reset to previously valid value if input is invalid
+        secondsInput.value = logDisplaySeconds;
+        showNotification(
+          "Please enter a valid positive number for seconds",
+          "warning"
+        );
+      }
+    }
+  } else if (type === "lines") {
+    const linesInput = document.getElementById("log-max-lines");
+    if (linesInput) {
+      const newValue = parseInt(linesInput.value, 10);
+      if (!isNaN(newValue) && newValue > 0) {
+        maxLogLines = newValue;
+        localStorage.setItem("maxLogLines", maxLogLines);
+        showNotification(`Maximum log lines set to ${maxLogLines}`, "success");
+        console.log(`Maximum log lines saved: ${maxLogLines}`);
+
+        // Trim existing logs if needed
+        if (logContent) {
+          while (logContent.childElementCount > maxLogLines) {
+            if (logContent.firstChild) {
+              logContent.removeChild(logContent.firstChild);
+            }
+          }
+        }
+      } else {
+        // Reset to previously valid value if input is invalid
+        linesInput.value = maxLogLines;
+        showNotification(
+          "Please enter a valid positive number for maximum lines",
+          "warning"
+        );
+      }
+    }
+  }
+
+  // Keep the panel open after saving configuration
+  logPanelMouseIsOver = true;
+  setTimeout(() => {
+    // Check if mouse is still over the panel after a delay
+    const logPanelContainer = document.querySelector(".log-panel-container");
+    if (logPanelContainer && !logPanelContainer.matches(":hover")) {
+      logPanelMouseIsOver = false;
+      retractLogPanel();
+    }
+  }, 1000); // Longer delay to give user time to see the notification
 }

@@ -431,19 +431,25 @@ body {
 }
 
 .log-panel {
-  /* Styles for the log panel moved outside the container */
-  margin: 0 20px 20px 20px; /* Add margin: top 0, sides 20px, bottom 20px */
-  width: calc(100% - 40px); /* Full width minus side margins */
-  box-sizing: border-box;
-  /* Inherit panel styles if needed, or redefine */
+  /* Styles for the log panel itself */
+  position: absolute;
+  top: 0;
+  /* Center the panel horizontally - improved positioning */
+  left: 50%;
+  transform: translateX(-50%) translateY(-100%); /* Center horizontally and hide above */
+  width: 90%; /* Reduced from 100% for nicer appearance */
+  max-width: 1400px; /* Add maximum width for better appearance on wide screens */
+  /* Add slight border radius to the top edge too */
+  border-radius: 0 0 8px 8px; /* Rounded bottom corners */
+  box-shadow: var(--panel-shadow), 0 5px 15px rgba(0, 0, 0, 0.2); /* Enhanced shadow */
+  box-sizing: border-box; /* Include padding in width calculations */
   background: var(--container-bg);
-  padding: 15px;
-  border-radius: 8px;
   border: 1px solid var(--border-color);
-  box-shadow: var(--panel-shadow);
+  border-top: none; /* No top border as it connects to the edge */
+  padding: 15px;
+  transition: transform 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275); /* Improved animation with bounce effect */
   display: flex;
   flex-direction: column;
-  overflow: hidden;
 }
 
 /* Control Panel Specifics */
@@ -1123,6 +1129,12 @@ body {
   height: 10px;
   overflow: hidden; /* Hide the panel initially */
   transition: height 0.5s ease-in-out; /* Smooth height transition */
+  padding: 0; /* Remove any padding that could cause offset */
+  margin: 0; /* Remove any margin that could cause offset */
+  box-sizing: border-box; /* Include padding in width/height calculations */
+  display: flex;
+  justify-content: center; /* Center the panel horizontally */
+  pointer-events: auto; /* Ensure events are captured */
 }
 
 .log-panel-trigger {
@@ -1139,17 +1151,20 @@ body {
   /* Styles for the log panel itself */
   position: absolute;
   top: 0;
-  left: 0;
-  width: 100%;
+  /* Center the panel horizontally - improved positioning */
+  left: 50%;
+  transform: translateX(-50%) translateY(-100%); /* Center horizontally and hide above */
+  width: 90%; /* Reduced from 100% for nicer appearance */
+  max-width: 1400px; /* Add maximum width for better appearance on wide screens */
+  /* Add slight border radius to the top edge too */
+  border-radius: 0 0 8px 8px; /* Rounded bottom corners */
+  box-shadow: var(--panel-shadow), 0 5px 15px rgba(0, 0, 0, 0.2); /* Enhanced shadow */
+  box-sizing: border-box; /* Include padding in width calculations */
   background: var(--container-bg);
   border: 1px solid var(--border-color);
   border-top: none; /* No top border as it connects to the edge */
-  border-radius: 0 0 8px 8px; /* Rounded bottom corners */
-  box-shadow: var(--panel-shadow);
   padding: 15px;
-  box-sizing: border-box;
-  transform: translateY(-100%); /* Initially hidden above */
-  transition: transform 0.5s ease-in-out; /* Smooth slide transition */
+  transition: transform 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275); /* Improved animation with bounce effect */
   display: flex;
   flex-direction: column;
 }
@@ -1625,4 +1640,77 @@ body {
   background: var(--input-bg);
   color: var(--input-text);
   font-size: 0.8rem;
+}
+
+.log-config-save-btn {
+  background: var(--success-color);
+  color: white;
+  border: none;
+  border-radius: 4px;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  padding: 0;
+  margin-left: 2px;
+}
+
+.log-config-save-btn:hover {
+  background: color-mix(in srgb, var(--success-color) 100%, #fff 15%);
+  transform: translateY(-1px);
+}
+
+.log-config-save-btn:active {
+  transform: translateY(1px);
+  background: color-mix(in srgb, var(--success-color) 100%, #000 15%);
+}
+
+/* Log Panel - Positioned from the upper right */
+.log-panel-container {
+  position: fixed;
+  top: 0;
+  right: 0; /* Align to the right edge instead of left */
+  width: 100%;
+  z-index: 1001;
+  height: 10px;
+  overflow: hidden;
+  transition: height 0.5s ease-in-out;
+  padding: 0;
+  margin: 0;
+  box-sizing: border-box;
+  display: flex;
+  justify-content: flex-end; /* Align panel to the right */
+  pointer-events: auto;
+}
+
+.log-panel-trigger {
+  position: absolute;
+  top: 0;
+  right: 0; /* Align to the right instead of left */
+  width: 100px; /* Reduced width for the trigger area */
+  height: 10px;
+  cursor: pointer;
+}
+
+.log-panel {
+  position: absolute;
+  top: 0;
+  right: 20px; /* Position from the right with margin */
+  left: auto; /* Remove left positioning */
+  transform: translateY(-100%); /* Hide above only, no horizontal transform */
+  width: 90%; /* Panel width */
+  max-width: 1200px; /* Limit maximum width */
+  border-radius: 0 0 8px 8px;
+  box-shadow: var(--panel-shadow), 0 5px 15px rgba(0, 0, 0, 0.2);
+  box-sizing: border-box;
+  background: var(--container-bg);
+  border: 1px solid var(--border-color);
+  border-top: none;
+  padding: 15px;
+  transition: transform 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  display: flex;
+  flex-direction: column;
 }

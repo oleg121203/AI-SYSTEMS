@@ -3,31 +3,42 @@ import json
 import logging
 import os
 import subprocess
-from collections import deque, Counter
+from collections import Counter, deque
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Union, Any # Add Any here
+from typing import Any, Dict, List, Optional, Set, Union  # Add Any here
 from uuid import uuid4
 
 import aiofiles
+
 # --- CHANGE: Import Repo and GitCommandError ---
 import git
-from git import Repo, GitCommandError
+import requests  # Додано для repository_dispatch
+
 # --- END CHANGE ---
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import (BackgroundTasks, FastAPI, HTTPException, Request,
-                     WebSocket, WebSocketDisconnect)
+from fastapi import (
+    BackgroundTasks,
+    FastAPI,
+    HTTPException,
+    Request,
+    WebSocket,
+    WebSocketDisconnect,
+)
+
 # --- CHANGE: Define constants ---
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+
 # --- END CHANGE ---
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from git import GitCommandError, Repo
+from json_log_formatter import JSONFormatter  # Corrected import
 from pydantic import BaseModel, Field, ValidationError
 
-from json_log_formatter import JSONFormatter # Corrected import
 from utils import log_message
-import requests # Додано для repository_dispatch
+
 # Assuming TestRecommendation is defined in ai3.py
 try:
     from ai3 import TestRecommendation
@@ -72,7 +83,7 @@ class Report(BaseModel):
 try:
     # --- CHANGE: Use constant ---
     with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-    # --- END CHANGE ---
+        # --- END CHANGE ---
         config_str = f.read()
     # Replace environment variables
     for key, value in os.environ.items():
@@ -96,7 +107,7 @@ except Exception as e:
 # --- CHANGE: Use constant for default value ---
 GITHUB_MAIN_REPO = config.get("github_repo", DEFAULT_GITHUB_REPO_PLACEHOLDER)
 # --- END CHANGE ---
-GITHUB_TOKEN = os.getenv("GITHUB_TOKEN") # Get token from environment variable
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")  # Get token from environment variable
 # --- END CHANGE ---
 
 # --- Logging Setup ---
@@ -110,6 +121,7 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",  # Added logger name
 )
 logger = logging.getLogger(__name__)  # Use specific logger
+
 
 # Add a handler to send logs via WebSocket
 class WebSocketLogHandler(logging.Handler):
@@ -128,10 +140,13 @@ class WebSocketLogHandler(logging.Handler):
             # Тихо ігноруємо помилки при логуванні
             pass
 
+
 # Configure the handler (do this after basicConfig)
 ws_log_handler = WebSocketLogHandler()
 ws_log_handler.setLevel(logging.INFO)  # Set desired level for WebSocket logs
-formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')  # Simpler format for UI - FIX: levelname instead of levellevel
+formatter = logging.Formatter(
+    "%(asctime)s - %(levelname)s - %(message)s"
+)  # Simpler format for UI - FIX: levelname instead of levellevel
 ws_log_handler.setFormatter(formatter)
 logging.getLogger().addHandler(ws_log_handler)  # Add to root logger
 
@@ -157,10 +172,10 @@ except git.exc.InvalidGitRepositoryError:
         logger.info(f"Initialized new Git repository at {repo_path}")
     except Exception as e:
         logger.error(f"Error initializing Git repository at {repo_path}: {e}")
-        repo = None # Indicate repo is not available
+        repo = None  # Indicate repo is not available
 except Exception as e:
     logger.error(f"Error accessing Git repository at {repo_path}: {e}")
-    repo = None # Indicate repo is not available
+    repo = None  # Indicate repo is not available
 
 
 # --- Global State ---
@@ -201,15 +216,14 @@ tasks = {}
 
 # Removed count_files_in_structure function as it's no longer the basis for actual_total_tasks
 
+
 async def run_restart_script(action: str):
     """Runs the new_restart.sh script with the specified action."""
     command = f"bash ./new_restart.sh {action}"
     logger.info(f"Executing command: {command}")
     try:
         process = await asyncio.create_subprocess_shell(
-            command,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
         stdout, stderr = await process.communicate()
 
@@ -222,11 +236,14 @@ async def run_restart_script(action: str):
             logger.info(f"Command '{command}' executed successfully.")
             return True
         else:
-            logger.error(f"Command '{command}' failed with return code {process.returncode}.")
+            logger.error(
+                f"Command '{command}' failed with return code {process.returncode}."
+            )
             return False
     except Exception as e:
         logger.error(f"Failed to execute command '{command}': {e}")
         return False
+
 
 def is_safe_path(basedir, path_str):
     """Check if the path_str is safely within the basedir."""
@@ -307,11 +324,18 @@ async def broadcast_specific_update(update_data: dict):
         for connection in list(active_connections):
             try:
                 await connection.send_text(message)
-            except (WebSocketDisconnect, RuntimeError) as e: # Catch specific errors related to closed connections
-                logger.warning(f"Failed to send specific update to client {connection.client}: {e}. Removing connection.")
+            except (
+                WebSocketDisconnect,
+                RuntimeError,
+            ) as e:  # Catch specific errors related to closed connections
+                logger.warning(
+                    f"Failed to send specific update to client {connection.client}: {e}. Removing connection."
+                )
                 disconnected_clients.add(connection)
-            except Exception as e: # Catch other potential send errors
-                logger.error(f"Unexpected error sending specific update to client {connection.client}: {e}. Removing connection.")
+            except Exception as e:  # Catch other potential send errors
+                logger.error(
+                    f"Unexpected error sending specific update to client {connection.client}: {e}. Removing connection."
+                )
                 disconnected_clients.add(connection)
 
         # Remove disconnected clients from the main set
@@ -323,65 +347,86 @@ async def broadcast_chart_updates():
     """Формує та відправляє дані для всіх графіків."""
     if not active_connections:
         return
-    
+
     # Отримуємо дані для графіків
     progress_data = get_progress_chart_data()
-    
-    # --- CHANGE: Refine status aggregation for Pie Chart --- 
-    status_counts = {"pending": 0, "processing": 0, "completed": 0, "failed": 0, "other": 0}
+
+    # --- CHANGE: Refine status aggregation for Pie Chart ---
+    status_counts = {
+        "pending": 0,
+        "processing": 0,
+        "completed": 0,
+        "failed": 0,
+        "other": 0,
+    }
     for status in subtask_status.values():
         if status == "pending":
             status_counts["pending"] += 1
         elif status == "processing":
             status_counts["processing"] += 1
         # More comprehensive list of completed/successful states
-        elif status in ["accepted", "completed", "code_received", "tested", "documented", "skipped"]:
+        elif status in [
+            "accepted",
+            "completed",
+            "code_received",
+            "tested",
+            "documented",
+            "skipped",
+        ]:
             status_counts["completed"] += 1
         # Group failure/error states
-        elif status in ["failed", "error", "needs_rework"] or (isinstance(status, str) and "error" in status.lower()):
+        elif status in ["failed", "error", "needs_rework"] or (
+            isinstance(status, str) and "error" in status.lower()
+        ):
             status_counts["failed"] += 1
         else:
-            status_counts["other"] += 1 # Catch-all for any other statuses
+            status_counts["other"] += 1  # Catch-all for any other statuses
     # --- END CHANGE ---
-    
+
     # Формуємо дані для графіка git активності
     git_activity_data = {
         "labels": [f"Commit {i+1}" for i in range(len(processed_history))],
-        "values": list(processed_history)
+        "values": list(processed_history),
     }
-    
+
     # Формуємо повне оновлення для всіх графіків
     update_data = {
         "progress_data": progress_data,
         "git_activity": git_activity_data,
-        "task_status_distribution": status_counts
+        "task_status_distribution": status_counts,
     }
-    
+
     # Надсилаємо оновлення всім підключеним клієнтам
     await broadcast_specific_update(update_data)
+
 
 # --- ADDED: Function to broadcast monitoring stats ---
 async def broadcast_monitoring_stats():
     """Calculates and broadcasts core monitoring stats (Total, Completed)."""
     if active_connections:
         try:
-            stats = get_progress_stats() # Get stats including completed count
-            actual_total_tasks = len(subtask_status) # Total known subtasks
+            stats = get_progress_stats()  # Get stats including completed count
+            actual_total_tasks = len(subtask_status)  # Total known subtasks
             completed_tasks = stats.get("tasks_completed", 0)
 
             update_data = {
                 "type": "monitoring_update",
                 "total_tasks": actual_total_tasks,
-                "completed_tasks": completed_tasks
+                "completed_tasks": completed_tasks,
             }
             await broadcast_specific_update(update_data)
-            logger.debug(f"Broadcasted monitoring update: Total={actual_total_tasks}, Completed={completed_tasks}")
+            logger.debug(
+                f"Broadcasted monitoring update: Total={actual_total_tasks}, Completed={completed_tasks}"
+            )
         except Exception as e:
             logger.error(f"Error broadcasting monitoring stats: {e}", exc_info=True)
+
+
 # --- END ADDED ---
 
 # Змінна для збереження завдання періодичного оновлення
 chart_update_task = None
+
 
 async def periodic_chart_updates():
     """Періодично надсилає оновлення для графіків (як fallback)."""
@@ -397,29 +442,33 @@ async def periodic_chart_updates():
             await asyncio.sleep(10)  # Продовжуємо спробувати навіть при помилці
 
 
-async def _determine_adjusted_path(repo_path: Path, file_rel_path: str, repo_dir: str) -> str:
+async def _determine_adjusted_path(
+    repo_path: Path, file_rel_path: str, repo_dir: str
+) -> str:
     """Determines the adjusted relative path within the repo, respecting the structure from AI3.
-    
+
     Args:
         repo_path: Повний шлях до репозиторію (/repo)
         file_rel_path: Відносний шлях файлу, який потрібно створити
         repo_dir: Ім'я директорії репозиторію (зазвичай "repo")
-        
+
     Returns:
         Скоригований відносний шлях в межах repo_path
     """
     global current_structure
-    
+
     # Перевіряємо, чи ім'я проекту є верхнім рівнем поза репозиторієм
     # Зараз використовуємо реальне ім'я проекту з структури, а не хардкодоване "project"
-    project_names = [k for k in current_structure.keys() if isinstance(current_structure[k], dict)]
+    project_names = [
+        k for k in current_structure.keys() if isinstance(current_structure[k], dict)
+    ]
     # Встановлюємо ім'я проекту, якщо є саме один основний проект у структурі
     project_name = project_names[0] if len(project_names) == 1 else None
-    
+
     # Визначаємо, чи початковий шлях містить ім'я проекту поза репо
     is_outside_repo = False
     adjusted_rel_path = file_rel_path
-    
+
     # Якщо існує імя проекту, і шлях починається з нього, але не як шлях в репо
     if project_name and file_rel_path.startswith(project_name + "/"):
         # Перевіряємо, чи файл не є явно в структурі репозиторію
@@ -427,12 +476,16 @@ async def _determine_adjusted_path(repo_path: Path, file_rel_path: str, repo_dir
         repo_path_check = repo_path / file_rel_path
         if repo_path_check.exists():
             repo_file_exists = True
-            logger.info(f"[API-Write] File {file_rel_path} already exists in repo, keeping path as is.")
-        
+            logger.info(
+                f"[API-Write] File {file_rel_path} already exists in repo, keeping path as is."
+            )
+
         if not repo_file_exists:
             is_outside_repo = True
-            logger.warning(f"[API-Write] Path '{file_rel_path}' appears to be outside repo (starts with '{project_name}/')")
-    
+            logger.warning(
+                f"[API-Write] Path '{file_rel_path}' appears to be outside repo (starts with '{project_name}/')"
+            )
+
     # Якщо шлях здається зовнішнім, виправляємо його
     if is_outside_repo:
         # Залишаємо шлях як є, MCP записує його у внутрішню директорію repo/
@@ -441,43 +494,66 @@ async def _determine_adjusted_path(repo_path: Path, file_rel_path: str, repo_dir
         # Для всіх інших випадків, перевіряємо, чи є у нас структура з ім'ям проекту
         if project_name and project_name in current_structure:
             potential_project_root = repo_path / project_name
-            
+
             # Якщо директорія проекту існує в репо і шлях НЕ починається з неї
-            if potential_project_root.is_dir() and not file_rel_path.startswith(f"{project_name}/"):
+            if potential_project_root.is_dir() and not file_rel_path.startswith(
+                f"{project_name}/"
+            ):
                 # Додаємо ім'я проекту на початок шляху, якщо він не порожній і не є самим ім'ям проекту
                 if file_rel_path and file_rel_path != project_name:
                     adjusted_rel_path = os.path.join(project_name, file_rel_path)
-                    logger.info(f"[API-Write] Prepending '{project_name}/' to path '{file_rel_path}'. New path: '{adjusted_rel_path}'")
-    
+                    logger.info(
+                        f"[API-Write] Prepending '{project_name}/' to path '{file_rel_path}'. New path: '{adjusted_rel_path}'"
+                    )
+
     if not adjusted_rel_path and file_rel_path:
         adjusted_rel_path = file_rel_path
-        logger.warning(f"[API-Write] Adjusted path became empty, defaulting back to original: '{file_rel_path}'")
-    
-    logger.info(f"[API-Write] Final adjusted path: '{adjusted_rel_path}' (original: '{file_rel_path}')")
+        logger.warning(
+            f"[API-Write] Adjusted path became empty, defaulting back to original: '{file_rel_path}'"
+        )
+
+    logger.info(
+        f"[API-Write] Final adjusted path: '{adjusted_rel_path}' (original: '{file_rel_path}')"
+    )
     return adjusted_rel_path
 
-async def _write_file_content(full_path: Path, content: str, adjusted_rel_path: str, subtask_id: Optional[str]) -> bool:
+
+async def _write_file_content(
+    full_path: Path, content: str, adjusted_rel_path: str, subtask_id: Optional[str]
+) -> bool:
     """Writes content to the specified file path."""
     try:
         if adjusted_rel_path and adjusted_rel_path != ".":
             full_path.parent.mkdir(parents=True, exist_ok=True)
 
         if full_path.is_dir():
-            logger.warning(f"[API-Write] Adjusted path '{adjusted_rel_path}' points to a directory. Cannot write file content.")
+            logger.warning(
+                f"[API-Write] Adjusted path '{adjusted_rel_path}' points to a directory. Cannot write file content."
+            )
             return False
 
         async with aiofiles.open(full_path, "w", encoding="utf-8") as f:
             await f.write(content)
-        logger.info(f"[API-Write] Successfully wrote code to: {adjusted_rel_path} (Subtask: {subtask_id})")
+        logger.info(
+            f"[API-Write] Successfully wrote code to: {adjusted_rel_path} (Subtask: {subtask_id})"
+        )
         return True
     except OSError as e:
-        logger.error(f"[API-Write] Error writing file {full_path} (adjusted path: {adjusted_rel_path}): {e}")
+        logger.error(
+            f"[API-Write] Error writing file {full_path} (adjusted path: {adjusted_rel_path}): {e}"
+        )
         return False
     except Exception as e:
-        logger.error(f"[API-Write] Unexpected error writing file {full_path} (adjusted path: {adjusted_rel_path}): {e}", exc_info=True)
+        logger.error(
+            f"[API-Write] Unexpected error writing file {full_path} (adjusted path: {adjusted_rel_path}): {e}",
+            exc_info=True,
+        )
         return False
 
-async def _commit_changes(repo: Repo, adjusted_rel_path: str, subtask_id: Optional[str]) -> bool:
+
+async def _commit_changes(
+    repo: Repo, adjusted_rel_path: str, subtask_id: Optional[str]
+) -> bool:
     """Commits changes for the specified path using gitpython."""
     global processed_tasks_count, processed_history
 
@@ -494,30 +570,43 @@ async def _commit_changes(repo: Repo, adjusted_rel_path: str, subtask_id: Option
             # Update history and broadcast
             processed_tasks_count += 1
             processed_history.append(processed_tasks_count)
-            await broadcast_chart_updates() # Broadcast full chart update
-            return True # Commit successful
+            await broadcast_chart_updates()  # Broadcast full chart update
+            return True  # Commit successful
         else:
-            logger.info(f"[API-Git] No changes staged for commit for: {adjusted_rel_path}")
+            logger.info(
+                f"[API-Git] No changes staged for commit for: {adjusted_rel_path}"
+            )
             # Decide if writing without changes should be considered success for dispatch trigger
-            return True # Treat as success for triggering dispatch even if no commit needed
+            return True  # Treat as success for triggering dispatch even if no commit needed
     except GitCommandError as e:
         logger.error(f"[API-Git] GitCommandError committing {adjusted_rel_path}: {e}")
         logger.error(f"[API-Git] Stderr: {e.stderr}")
-        return False # Commit failed
+        return False  # Commit failed
     except Exception as e:
-        logger.error(f"[API-Git] Unexpected error during commit for {adjusted_rel_path}: {e}")
-        return False # Commit failed
+        logger.error(
+            f"[API-Git] Unexpected error during commit for {adjusted_rel_path}: {e}"
+        )
+        return False  # Commit failed
 
-async def _trigger_repository_dispatch(commit_successful: bool, adjusted_rel_path: str, subtask_id: Optional[str]):
+
+async def _trigger_repository_dispatch(
+    commit_successful: bool, adjusted_rel_path: str, subtask_id: Optional[str]
+):
     """Triggers a GitHub repository_dispatch event if conditions are met."""
     if not commit_successful:
-        logger.debug("[API-GitHub] Skipping repository_dispatch because commit was not successful.")
+        logger.debug(
+            "[API-GitHub] Skipping repository_dispatch because commit was not successful."
+        )
         return
     if not GITHUB_TOKEN:
-        logger.warning("[API-GitHub] GITHUB_TOKEN not set. Skipping repository_dispatch.")
+        logger.warning(
+            "[API-GitHub] GITHUB_TOKEN not set. Skipping repository_dispatch."
+        )
         return
     if GITHUB_MAIN_REPO == DEFAULT_GITHUB_REPO_PLACEHOLDER:
-        logger.warning("[API-GitHub] github_repo not configured in config.json. Skipping repository_dispatch.")
+        logger.warning(
+            "[API-GitHub] github_repo not configured in config.json. Skipping repository_dispatch."
+        )
         return
 
     logger.info(f"[API-GitHub] Triggering repository_dispatch for {GITHUB_MAIN_REPO}")
@@ -525,12 +614,17 @@ async def _trigger_repository_dispatch(commit_successful: bool, adjusted_rel_pat
         "Authorization": f"token {GITHUB_TOKEN}",
         "Accept": "application/vnd.github.v3+json",
     }
-    data = {"event_type": "code-committed-in-repo", "client_payload": {"file": adjusted_rel_path, "subtask_id": subtask_id}}
+    data = {
+        "event_type": "code-committed-in-repo",
+        "client_payload": {"file": adjusted_rel_path, "subtask_id": subtask_id},
+    }
     dispatch_url = f"https://api.github.com/repos/{GITHUB_MAIN_REPO}/dispatches"
     try:
         response = requests.post(dispatch_url, headers=headers, json=data, timeout=15)
         response.raise_for_status()
-        logger.info(f"[API-GitHub] Successfully triggered repository_dispatch event 'code-committed-in-repo' for {adjusted_rel_path}")
+        logger.info(
+            f"[API-GitHub] Successfully triggered repository_dispatch event 'code-committed-in-repo' for {adjusted_rel_path}"
+        )
     except requests.exceptions.RequestException as e:
         logger.error(f"[API-GitHub] Failed to trigger repository_dispatch: {e}")
     except Exception as e:
@@ -539,26 +633,42 @@ async def _trigger_repository_dispatch(commit_successful: bool, adjusted_rel_pat
 
 async def create_follow_up_tasks(filename: str, original_executor_subtask_id: str):
     """Creates and queues tester and documenter tasks after executor finishes."""
-    logger.info(f"[API-FollowUp] Creating follow-up tasks for {filename} (Original: {original_executor_subtask_id})")
+    logger.info(
+        f"[API-FollowUp] Creating follow-up tasks for {filename} (Original: {original_executor_subtask_id})"
+    )
 
-    # --- CHANGE: Read file content --- 
+    # --- CHANGE: Read file content ---
     file_content = None
-    full_path = repo_path / filename # Construct full path
+    full_path = repo_path / filename  # Construct full path
     try:
         if (full_path).is_file():
             async with aiofiles.open(full_path, "r", encoding="utf-8") as f:
                 file_content = await f.read()
             logger.info(f"[API-FollowUp] Successfully read content for {filename}")
         else:
-            logger.warning(f"[API-FollowUp] File not found or is a directory, cannot read content: {full_path}")
+            logger.warning(
+                f"[API-FollowUp] File not found or is a directory, cannot read content: {full_path}"
+            )
     except Exception as e:
         logger.error(f"[API-FollowUp] Error reading file content for {filename}: {e}")
     # --- END CHANGE ---
 
     # Determine if testing is applicable (simple check based on common extensions)
     testable_extensions = (
-        ".py", ".js", ".ts", ".java", ".cpp", ".go", ".rs", ".php",
-        ".html", ".css", ".scss", ".jsx", ".tsx", ".vue"
+        ".py",
+        ".js",
+        ".ts",
+        ".java",
+        ".cpp",
+        ".go",
+        ".rs",
+        ".php",
+        ".html",
+        ".css",
+        ".scss",
+        ".jsx",
+        ".tsx",
+        ".vue",
     )
     needs_testing = filename.lower().endswith(testable_extensions)
 
@@ -573,20 +683,23 @@ async def create_follow_up_tasks(filename: str, original_executor_subtask_id: st
             "text": tester_prompt,
             "role": "tester",
             "filename": filename,
-            # --- CHANGE: Add file content --- 
-            "code": file_content, # Add the read content
+            # --- CHANGE: Add file content ---
+            "code": file_content,  # Add the read content
             # --- END CHANGE ---
-            "is_rework": False, # Assuming initial test generation is not rework
-            "originating_subtask_id": original_executor_subtask_id # Link to original task
+            "is_rework": False,  # Assuming initial test generation is not rework
+            "originating_subtask_id": original_executor_subtask_id,  # Link to original task
         }
         # Only add if content was read successfully
         if file_content is not None:
             tasks_to_add.append(("tester", tester_subtask_id, tester_subtask))
         else:
-            logger.warning(f"[API-FollowUp] Skipping tester task for {filename} due to missing content.")
+            logger.warning(
+                f"[API-FollowUp] Skipping tester task for {filename} due to missing content."
+            )
     else:
-        logger.info(f"[API-FollowUp] Skipping tester task for non-testable file: {filename}")
-
+        logger.info(
+            f"[API-FollowUp] Skipping tester task for non-testable file: {filename}"
+        )
 
     # --- Create Documenter Task ---
     documenter_subtask_id = str(uuid4())
@@ -596,88 +709,129 @@ async def create_follow_up_tasks(filename: str, original_executor_subtask_id: st
         "text": documenter_prompt,
         "role": "documenter",
         "filename": filename,
-        # --- CHANGE: Add file content --- 
-        "code": file_content, # Add the read content
+        # --- CHANGE: Add file content ---
+        "code": file_content,  # Add the read content
         # --- END CHANGE ---
         "is_rework": False,
-        "originating_subtask_id": original_executor_subtask_id # Link to original task
+        "originating_subtask_id": original_executor_subtask_id,  # Link to original task
     }
     # Only add if content was read successfully
     if file_content is not None:
         tasks_to_add.append(("documenter", documenter_subtask_id, documenter_subtask))
     else:
-        logger.warning(f"[API-FollowUp] Skipping documenter task for {filename} due to missing content.")
+        logger.warning(
+            f"[API-FollowUp] Skipping documenter task for {filename} due to missing content."
+        )
 
     # --- Add tasks to queues and update status ---
     subtask_updates = {}
-    queue_updates = {"executor": [], "tester": [], "documenter": []} # Initialize structure
+    queue_updates = {
+        "executor": [],
+        "tester": [],
+        "documenter": [],
+    }  # Initialize structure
 
     for role, subtask_id, subtask_data in tasks_to_add:
         if role == "tester":
             await tester_queue.put(subtask_data)
             subtask_status[subtask_id] = "pending"
             subtask_updates[subtask_id] = "pending"
-            queue_updates["tester"] = [t for t in tester_queue._queue] # Get current queue state
-            logger.info(f"[API-FollowUp] Queued tester task {subtask_id} for {filename}")
+            queue_updates["tester"] = [
+                t for t in tester_queue._queue
+            ]  # Get current queue state
+            logger.info(
+                f"[API-FollowUp] Queued tester task {subtask_id} for {filename}"
+            )
         elif role == "documenter":
             await documenter_queue.put(subtask_data)
             subtask_status[subtask_id] = "pending"
             subtask_updates[subtask_id] = "pending"
-            queue_updates["documenter"] = [t for t in documenter_queue._queue] # Get current queue state
-            logger.info(f"[API-FollowUp] Queued documenter task {subtask_id} for {filename}")
+            queue_updates["documenter"] = [
+                t for t in documenter_queue._queue
+            ]  # Get current queue state
+            logger.info(
+                f"[API-FollowUp] Queued documenter task {subtask_id} for {filename}"
+            )
 
     # --- Broadcast updates ---
     if subtask_updates:
-        await broadcast_specific_update({
-            "subtasks": subtask_updates,
-            "queues": queue_updates # Send updated queue states
-        })
-        await broadcast_monitoring_stats() # Update total/completed counts
+        await broadcast_specific_update(
+            {
+                "subtasks": subtask_updates,
+                "queues": queue_updates,  # Send updated queue states
+            }
+        )
+        await broadcast_monitoring_stats()  # Update total/completed counts
 
 
 async def write_and_commit_code(
-    file_rel_path: str, content: str, subtask_id: Optional[str], background_tasks: BackgroundTasks # Add background_tasks
+    file_rel_path: str,
+    content: str,
+    subtask_id: Optional[str],
+    background_tasks: BackgroundTasks,  # Add background_tasks
 ) -> bool:
     """Helper function to write file content, commit changes, trigger dispatch, and create follow-up tasks."""
-    adjusted_rel_path = await _determine_adjusted_path(repo_path, file_rel_path, repo_dir)
+    adjusted_rel_path = await _determine_adjusted_path(
+        repo_path, file_rel_path, repo_dir
+    )
 
     async with file_write_lock:
         # ... (rest of the path safety check) ...
         if not is_safe_path(repo_path, adjusted_rel_path):
-            logger.error(f"[API-Write] Attempt to write to unsafe adjusted path denied: {adjusted_rel_path} (original: {file_rel_path})")
+            logger.error(
+                f"[API-Write] Attempt to write to unsafe adjusted path denied: {adjusted_rel_path} (original: {file_rel_path})"
+            )
             return False
 
         full_path = repo_path / adjusted_rel_path
 
-        write_successful = await _write_file_content(full_path, content, adjusted_rel_path, subtask_id)
+        write_successful = await _write_file_content(
+            full_path, content, adjusted_rel_path, subtask_id
+        )
         if not write_successful:
-            return False # Stop if writing failed
+            return False  # Stop if writing failed
 
         try:
-            current_repo = Repo(repo_path) # Get a fresh repo object reflecting current state
+            current_repo = Repo(
+                repo_path
+            )  # Get a fresh repo object reflecting current state
         except git.exc.InvalidGitRepositoryError:
-            logger.error("[API-Git] Failed to re-initialize repository. Skipping commit.")
-            return False # Cannot commit if repo is invalid
+            logger.error(
+                "[API-Git] Failed to re-initialize repository. Skipping commit."
+            )
+            return False  # Cannot commit if repo is invalid
         except Exception as e:
             logger.error(f"[API-Git] Unexpected error re-initializing repository: {e}")
-            return False # Cannot commit if repo init fails
+            return False  # Cannot commit if repo init fails
 
-        commit_successful = await _commit_changes(current_repo, adjusted_rel_path, subtask_id)
+        commit_successful = await _commit_changes(
+            current_repo, adjusted_rel_path, subtask_id
+        )
 
         # --- ADDED: Trigger follow-up tasks on successful commit ---
-        if commit_successful and subtask_id: # Ensure commit was ok and we have the original ID
-             logger.info(f"[API-Write] Commit successful for {adjusted_rel_path}. Scheduling follow-up tasks.")
-             background_tasks.add_task(create_follow_up_tasks, adjusted_rel_path, subtask_id)
+        if (
+            commit_successful and subtask_id
+        ):  # Ensure commit was ok and we have the original ID
+            logger.info(
+                f"[API-Write] Commit successful for {adjusted_rel_path}. Scheduling follow-up tasks."
+            )
+            background_tasks.add_task(
+                create_follow_up_tasks, adjusted_rel_path, subtask_id
+            )
         elif not commit_successful:
-             logger.warning(f"[API-Write] Commit failed or no changes for {adjusted_rel_path}. Skipping follow-up tasks.")
+            logger.warning(
+                f"[API-Write] Commit failed or no changes for {adjusted_rel_path}. Skipping follow-up tasks."
+            )
         # --- END ADDED ---
 
         # Trigger dispatch regardless of commit success *if writing succeeded*?
         # Current logic triggers only if commit_successful is True (which includes "no changes staged")
-        await _trigger_repository_dispatch(commit_successful, adjusted_rel_path, subtask_id)
+        await _trigger_repository_dispatch(
+            commit_successful, adjusted_rel_path, subtask_id
+        )
 
         # Return overall success (writing succeeded, commit attempted/succeeded/no-op)
-        return write_successful # Or return commit_successful depending on strictness needed
+        return write_successful  # Or return commit_successful depending on strictness needed
 
 
 def process_test_results(test_data: Report, subtask_id: str):  # Уточним тип test_data
@@ -707,17 +861,17 @@ def build_directory_structure(start_path):
     """Build a nested dictionary representing the folder structure at start_path."""
     if not os.path.exists(start_path):
         return {}
-    
+
     structure = {}
-    
+
     try:
         for item in os.listdir(start_path):
             # Skip hidden files and directories
-            if item.startswith('.') and item != '.gitignore':
+            if item.startswith(".") and item != ".gitignore":
                 continue
-                
+
             full_path = os.path.join(start_path, item)
-            
+
             # Check if it's a directory
             if os.path.isdir(full_path):
                 # Recursively scan subdirectories
@@ -729,8 +883,9 @@ def build_directory_structure(start_path):
         logger.warning(f"Permission denied when scanning directory: {start_path}")
     except Exception as e:
         logger.error(f"Error scanning directory {start_path}: {e}")
-    
+
     return structure
+
 
 # Initialize structure from repo directory on startup
 if (repo_path).exists():
@@ -741,29 +896,31 @@ if (repo_path).exists():
         logger.error(f"Failed to build initial file structure: {e}")
         current_structure = {}  # Empty dict as fallback
 else:
-    logger.warning(f"Repository path {repo_path} does not exist, structure will be empty")
+    logger.warning(
+        f"Repository path {repo_path} does not exist, structure will be empty"
+    )
     current_structure = {}
 
 
 # --- Нова функція для розрахунку статистики ---
 def get_progress_stats():
-    """Розраховує статистику прогресу проекту на основі глобального словника `subtask_status`.""" # Оновлено docstring
+    """Розраховує статистику прогресу проекту на основі глобального словника `subtask_status`."""  # Оновлено docstring
     stats = {
-        "tasks_total": 0, # Загальна кількість відомих завдань
-        "tasks_completed": 0, # Завдання з УСПІШНИМ кінцевим статусом (для графіка)
-        "files_created": 0, # Файли, для яких executor завершив роботу (потрібно уточнити логіку)
-        "files_tested_accepted": 0, # Файли, що пройшли тестування (accepted)
-        "files_rejected": 0 # Файли, відправлені на доопрацювання (needs_rework)
+        "tasks_total": 0,  # Загальна кількість відомих завдань
+        "tasks_completed": 0,  # Завдання з УСПІШНИМ кінцевим статусом (для графіка)
+        "files_created": 0,  # Файли, для яких executor завершив роботу (потрібно уточнити логіку)
+        "files_tested_accepted": 0,  # Файли, що пройшли тестування (accepted)
+        "files_rejected": 0,  # Файли, відправлені на доопрацювання (needs_rework)
     }
-    # --- CHANGE: Use subtask_status as the source for counts --- 
+    # --- CHANGE: Use subtask_status as the source for counts ---
     # created_files = set()
     # accepted_files = set()
     # rejected_files = set()
 
-    stats["tasks_total"] = len(subtask_status) # Загальна кількість відомих завдань
+    stats["tasks_total"] = len(subtask_status)  # Загальна кількість відомих завдань
 
     # Temporary sets to track files based on subtask_status
-    # --- CHANGE: Remove unused variables --- 
+    # --- CHANGE: Remove unused variables ---
     # temp_accepted_files = set()
     # temp_rejected_files = set()
     # --- END CHANGE ---
@@ -772,14 +929,21 @@ def get_progress_stats():
     # For now, focus on counting completed tasks from subtask_status.
 
     for task_id, status in subtask_status.items():
-        # --- CHANGE: Align completed statuses with frontend text statistic --- 
+        # --- CHANGE: Align completed statuses with frontend text statistic ---
         # Рахуємо завершені завдання (тільки статуси, що використовуються в текстовій статистиці)
         # More comprehensive list of completed/successful states
-        if status in ["accepted", "completed", "code_received", "tested", "documented", "skipped"]:
-        # --- END CHANGE ---
-             stats["tasks_completed"] += 1
+        if status in [
+            "accepted",
+            "completed",
+            "code_received",
+            "tested",
+            "documented",
+            "skipped",
+        ]:
+            # --- END CHANGE ---
+            stats["tasks_completed"] += 1
 
-        # --- CHANGE: Implement logic for tested/accepted files --- 
+        # --- CHANGE: Implement logic for tested/accepted files ---
         # Count files that have passed testing or been accepted
         # Assuming 'tested' and 'accepted' are relevant statuses after testing
         if status in ["tested", "accepted"]:
@@ -788,7 +952,9 @@ def get_progress_stats():
             # or looking up the original task data. Let's assume we need to look up.
             # This part is still a placeholder as the original `tasks` dict might not be populated
             # or accessible here easily. For now, just increment a counter based on status.
-            stats["files_tested_accepted"] += 1 # Increment counter directly based on status
+            stats[
+                "files_tested_accepted"
+            ] += 1  # Increment counter directly based on status
             # TODO: Refine this logic if filename uniqueness is needed and `tasks` dict is available.
             # task_data = tasks.get(task_id) # Get original task data if needed
             # if task_data and task_data.get("filename"):
@@ -799,7 +965,7 @@ def get_progress_stats():
 
         # Count files needing rework
         elif status == "needs_rework":
-            stats["files_rejected"] += 1 # Increment counter directly
+            stats["files_rejected"] += 1  # Increment counter directly
             # task_data = tasks.get(task_id)
             # if task_data and task_data.get("filename"):
             #     file_path = task_data["filename"]
@@ -822,29 +988,26 @@ def get_progress_chart_data():
     """
     # Отримуємо поточну статистику
     stats = get_progress_stats()
-    
+
     # Поточна кількість git дій (останнє значення з історії)
-    # --- FIX: Handle empty processed_history --- 
+    # --- FIX: Handle empty processed_history ---
     current_git_actions = processed_history[-1] if processed_history else 0
     # --- END FIX ---
-    
+
     # Отримуємо значення для графіка
     completed_tasks_count = stats.get("tasks_completed", 0)
     successful_tests_count = stats.get("files_tested_accepted", 0)
     files_created_count = stats.get("files_created", 0)
-    # --- ADDED: Get rejected files count --- 
+    # --- ADDED: Get rejected files count ---
     rejected_files_count = stats.get("files_rejected", 0)
     # --- END ADDED ---
     total_tasks = stats.get("tasks_total", 0) or 1  # Уникаємо ділення на нуль
-    
+
     # Розраховуємо відсоток прогресу
     weighted_progress = calculate_weighted_progress(
-        completed_tasks_count,
-        successful_tests_count,
-        files_created_count,
-        total_tasks
+        completed_tasks_count, successful_tests_count, files_created_count, total_tasks
     )
-    
+
     # Формуємо підсумкову точку даних з повною міткою часу
     return {
         "timestamp": datetime.now().strftime("%Y-%м-%d %H:%М:%S"),
@@ -852,12 +1015,15 @@ def get_progress_chart_data():
         "successful_tests": successful_tests_count,
         "git_actions": current_git_actions,
         "progress_percentage": weighted_progress,
-        # --- ADDED: Include rejected files count --- 
-        "rejected_files": rejected_files_count
+        # --- ADDED: Include rejected files count ---
+        "rejected_files": rejected_files_count,
         # --- END ADDED ---
     }
 
-def calculate_weighted_progress(completed_tasks, successful_tests, files_created, total_tasks):
+
+def calculate_weighted_progress(
+    completed_tasks, successful_tests, files_created, total_tasks
+):
     """
     Розраховує зважений прогрес на основі різних метрик.
     """
@@ -865,19 +1031,21 @@ def calculate_weighted_progress(completed_tasks, successful_tests, files_created
     task_weight = 0.4
     test_weight = 0.4
     file_weight = 0.2
-    
+
     # Нормалізуємо значення до діапазону 0-100
     task_progress = (completed_tasks / total_tasks) * 100 if total_tasks else 0
-    test_progress = (successful_tests / max(1, files_created)) * 100 if files_created > 0 else 0
+    test_progress = (
+        (successful_tests / max(1, files_created)) * 100 if files_created > 0 else 0
+    )
     file_progress = (files_created / total_tasks) * 100 if total_tasks else 0
-    
+
     # Зважений прогрес
     weighted_progress = (
-        task_progress * task_weight +
-        test_progress * test_weight +
-        file_progress * file_weight
+        task_progress * task_weight
+        + test_progress * test_weight
+        + file_progress * file_weight
     )
-    
+
     # Обмежуємо значення діапазоном 0-100 і округлюємо до одного знаку
     return min(100, max(0, round(weighted_progress, 1)))
 
@@ -908,46 +1076,131 @@ async def get_file_content(path: str):
         file_ext = file_path.suffix.lower()
         # More comprehensive list of common binary extensions
         binary_extensions = [
-            '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.ico', '.tif', '.tiff',
-            '.mp3', '.wav', '.ogg', '.flac', '.aac',
-            '.mp4', '.avi', '.mov', '.wmv', '.mkv',
-            '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
-            '.zip', '.rar', '.7z', '.tar', '.gz', '.bz2', '.xz',
-            '.exe', '.dll', '.so', '.dylib', '.app', '.dmg',
-            '.db', '.sqlite', '.mdb', '.accdb',
-            '.pyc', '.pyo', # Python bytecode
-            '.class', # Java bytecode
-            '.o', '.a', # Object files, archives
-            '.woff', '.woff2', '.ttf', '.otf', '.eot' # Fonts
+            ".png",
+            ".jpg",
+            ".jpeg",
+            ".gif",
+            ".bmp",
+            ".ico",
+            ".tif",
+            ".tiff",
+            ".mp3",
+            ".wav",
+            ".ogg",
+            ".flac",
+            ".aac",
+            ".mp4",
+            ".avi",
+            ".mov",
+            ".wmv",
+            ".mkv",
+            ".pdf",
+            ".doc",
+            ".docx",
+            ".xls",
+            ".xlsx",
+            ".ppt",
+            ".pptx",
+            ".zip",
+            ".rar",
+            ".7z",
+            ".tar",
+            ".gz",
+            ".bz2",
+            ".xz",
+            ".exe",
+            ".dll",
+            ".so",
+            ".dylib",
+            ".app",
+            ".dmg",
+            ".db",
+            ".sqlite",
+            ".mdb",
+            ".accdb",
+            ".pyc",
+            ".pyo",  # Python bytecode
+            ".class",  # Java bytecode
+            ".o",
+            ".a",  # Object files, archives
+            ".woff",
+            ".woff2",
+            ".ttf",
+            ".otf",
+            ".eot",  # Fonts
         ]
         # Common text extensions/names (including empty for files like .gitignore)
         text_extensions_or_names = [
-            '', '.txt', '.md', '.py', '.js', '.html', '.css', '.json', '.xml',
-            '.yaml', '.yml', '.ini', '.cfg', '.conf', '.sh', '.bash', '.zsh',
-            '.c', '.h', '.cpp', '.hpp', '.cs', '.java', '.go', '.php', '.rb',
-            '.swift', '.kt', '.kts', '.rs', '.lua', '.pl', '.sql', '.log',
-            '.gitignore', '.gitattributes', '.editorconfig', '.env',
-            '.csv', '.tsv', '.rtf', '.tex', 'makefile', 'dockerfile', # Use lowercase for names
-            'readme' # Common base name
+            "",
+            ".txt",
+            ".md",
+            ".py",
+            ".js",
+            ".html",
+            ".css",
+            ".json",
+            ".xml",
+            ".yaml",
+            ".yml",
+            ".ini",
+            ".cfg",
+            ".conf",
+            ".sh",
+            ".bash",
+            ".zsh",
+            ".c",
+            ".h",
+            ".cpp",
+            ".hpp",
+            ".cs",
+            ".java",
+            ".go",
+            ".php",
+            ".rb",
+            ".swift",
+            ".kt",
+            ".kts",
+            ".rs",
+            ".lua",
+            ".pl",
+            ".sql",
+            ".log",
+            ".gitignore",
+            ".gitattributes",
+            ".editorconfig",
+            ".env",
+            ".csv",
+            ".tsv",
+            ".rtf",
+            ".tex",
+            "makefile",
+            "dockerfile",  # Use lowercase for names
+            "readme",  # Common base name
         ]
 
         # Check common names without extension, case-insensitively
         file_name_lower = file_path.name.lower()
 
         is_likely_binary = file_ext in binary_extensions
-        is_likely_text = (file_ext in text_extensions_or_names or
-                          file_name_lower in text_extensions_or_names or
-                          any(file_name_lower.startswith(name) for name in ['readme', 'dockerfile', 'makefile']))
+        is_likely_text = (
+            file_ext in text_extensions_or_names
+            or file_name_lower in text_extensions_or_names
+            or any(
+                file_name_lower.startswith(name)
+                for name in ["readme", "dockerfile", "makefile"]
+            )
+        )
 
-
-        if is_likely_binary and not is_likely_text: # Prioritize binary if extension matches and not likely text
-             logger.info(f"Binary file detected by extension: {file_path}")
-             return PlainTextResponse(
-                 content=f"[Binary file: {file_path.name}]\nThis file type cannot be displayed as text.",
-                 # --- CHANGE: Use constant ---
-                 media_type=TEXT_PLAIN
-                 # --- END CHANGE ---
-             )
+        if (
+            is_likely_binary and not is_likely_text
+        ):  # Prioritize binary if extension matches and not likely text
+            logger.info(f"Binary file detected by extension: {file_path}")
+            return PlainTextResponse(
+                content=f"[Binary file: {file_path.name}]\nThis file type cannot be displayed as text.",
+                # --- CHANGE: Use constant ---
+                media_type=TEXT_PLAIN,
+                # --- END CHANGE ---
+            )
 
         # Attempt to read as text (UTF-8 first)
         try:
@@ -957,39 +1210,51 @@ async def get_file_content(path: str):
             return PlainTextResponse(content=content, media_type=TEXT_PLAIN)
             # --- END CHANGE ---
         except UnicodeDecodeError:
-            logger.warning(f"Failed to decode {file_path} as UTF-8. Trying fallback encodings.")
+            logger.warning(
+                f"Failed to decode {file_path} as UTF-8. Trying fallback encodings."
+            )
             try:
                 # Try latin-1 as a common fallback
                 content = file_path.read_text(encoding="latin-1")
-                logger.info(f"Successfully read file {file_path} with latin-1 fallback.")
+                logger.info(
+                    f"Successfully read file {file_path} with latin-1 fallback."
+                )
                 # --- CHANGE: Use constant ---
                 return PlainTextResponse(content=content, media_type=TEXT_PLAIN)
                 # --- END CHANGE ---
-            except Exception: # Catch potential errors reading with latin-1 too
-                 logger.warning(f"Failed to decode {file_path} with latin-1. Reading bytes with replacement.")
-                 try:
-                     # Last resort: read bytes and decode with replacement characters
-                     content_bytes = file_path.read_bytes()
-                     content = content_bytes.decode("utf-8", errors="replace")
-                     logger.info(f"Read file {file_path} as bytes and decoded with replacement characters.")
-                     # --- CHANGE: Use constant ---
-                     return PlainTextResponse(content=content, media_type=TEXT_PLAIN)
-                     # --- END CHANGE ---
-                 except Exception as read_err:
-                     logger.error(f"Failed even reading bytes for {file_path}: {read_err}")
-                     # If even reading bytes fails, report as unreadable
-                     return PlainTextResponse(
-                         content=f"[Unreadable file: {file_path.name}]\nCould not read file content.",
-                         # --- CHANGE: Use constant ---
-                         media_type=TEXT_PLAIN
-                         # --- END CHANGE ---
-                     )
+            except Exception:  # Catch potential errors reading with latin-1 too
+                logger.warning(
+                    f"Failed to decode {file_path} with latin-1. Reading bytes with replacement."
+                )
+                try:
+                    # Last resort: read bytes and decode with replacement characters
+                    content_bytes = file_path.read_bytes()
+                    content = content_bytes.decode("utf-8", errors="replace")
+                    logger.info(
+                        f"Read file {file_path} as bytes and decoded with replacement characters."
+                    )
+                    # --- CHANGE: Use constant ---
+                    return PlainTextResponse(content=content, media_type=TEXT_PLAIN)
+                    # --- END CHANGE ---
+                except Exception as read_err:
+                    logger.error(
+                        f"Failed even reading bytes for {file_path}: {read_err}"
+                    )
+                    # If even reading bytes fails, report as unreadable
+                    return PlainTextResponse(
+                        content=f"[Unreadable file: {file_path.name}]\nCould not read file content.",
+                        # --- CHANGE: Use constant ---
+                        media_type=TEXT_PLAIN,
+                        # --- END CHANGE ---
+                    )
 
     except HTTPException as http_exc:
         # Re-raise known HTTP exceptions
         raise http_exc
     except Exception as e:
-        logger.error(f"Error processing file content request for {path}: {e}", exc_info=True)
+        logger.error(
+            f"Error processing file content request for {path}: {e}", exc_info=True
+        )
         raise HTTPException(
             status_code=500, detail=f"Internal server error reading file: {e}"
         )
@@ -1038,11 +1303,15 @@ async def receive_subtask(data: dict):
         f"Received subtask for {role}: '{text[:50]}...', ID: {subtask_id}, File: {filename}"
     )
     # Broadcast queue update
-    await broadcast_specific_update({"queues": {
-         "executor": [t for t in executor_queue._queue],
-         "tester": [t for t in tester_queue._queue],
-         "documenter": [t for t in documenter_queue._queue],
-    }})
+    await broadcast_specific_update(
+        {
+            "queues": {
+                "executor": [t for t in executor_queue._queue],
+                "tester": [t for t in tester_queue._queue],
+                "documenter": [t for t in documenter_queue._queue],
+            }
+        }
+    )
     # --- ADDED: Broadcast monitoring stats update ---
     await broadcast_monitoring_stats()
     # --- END ADDED ---
@@ -1069,12 +1338,14 @@ async def get_task_for_role(role: str):
         logger.info(f"Providing task ID {subtask.get('id')} to {role} worker.")
         subtask_status[subtask.get("id")] = "processing"  # Mark as processing
         # Broadcast status and queue update
-        await broadcast_specific_update({
-            "subtasks": {subtask.get("id"): "processing"},
-            "queues": {
-                role: [t for t in queue._queue]  # Отправляем обновленную очередь
+        await broadcast_specific_update(
+            {
+                "subtasks": {subtask.get("id"): "processing"},
+                "queues": {
+                    role: [t for t in queue._queue]  # Отправляем обновленную очередь
+                },
             }
-        })
+        )
         # --- ADDED: Broadcast monitoring stats update (status changed) ---
         await broadcast_monitoring_stats()
         # --- END ADDED ---
@@ -1107,7 +1378,7 @@ async def receive_structure(data: dict):
     )
     # Broadcast structure update AND full status to ensure actual_total_tasks is updated
     await broadcast_specific_update({"structure": current_structure})
-    await broadcast_full_status() # <<< ADDED CALL
+    await broadcast_full_status()  # <<< ADDED CALL
     return {"status": "structure received"}
 
 
@@ -1149,7 +1420,7 @@ async def receive_report(
                         report.file,
                         report.content,
                         report.subtask_id,
-                        background_tasks=background_tasks # Pass it here
+                        background_tasks=background_tasks,  # Pass it here
                     )
             elif report.type == "test_result":
                 new_status = "tested"
@@ -1163,13 +1434,13 @@ async def receive_report(
             elif report.type == "status_update":
                 new_status = report.message or "updated"
                 if hasattr(report, "status") and report.status:
-                    new_status = report.status # Use specific status if provided
+                    new_status = report.status  # Use specific status if provided
 
             if new_status:
-                 subtask_status[report.subtask_id] = new_status
-                 # --- ADDED: Broadcast monitoring stats update (status changed) ---
-                 await broadcast_monitoring_stats()
-                 # --- END ADDED ---
+                subtask_status[report.subtask_id] = new_status
+                # --- ADDED: Broadcast monitoring stats update (status changed) ---
+                await broadcast_monitoring_stats()
+                # --- END ADDED ---
 
             # Broadcast status update after processing
             if report.subtask_id:
@@ -1177,20 +1448,51 @@ async def receive_report(
                 update_payload = {"subtasks": {report.subtask_id: current_status}}
 
                 # If the task reached a final state, also send queue updates
-                final_states = ["accepted", "completed", "code_received", "tested", "documented", "skipped", "failed", "error", "needs_rework", "failed_by_ai2", "error_processing", "failed_tests", "failed_to_send"] # Define comprehensive final states
+                final_states = [
+                    "accepted",
+                    "completed",
+                    "code_received",
+                    "tested",
+                    "documented",
+                    "skipped",
+                    "failed",
+                    "error",
+                    "needs_rework",
+                    "failed_by_ai2",
+                    "error_processing",
+                    "failed_tests",
+                    "failed_to_send",
+                ]  # Define comprehensive final states
                 if current_status in final_states:
-                    logger.info(f"Task {report.subtask_id} reached final state '{current_status}'. Broadcasting queue update.")
+                    logger.info(
+                        f"Task {report.subtask_id} reached final state '{current_status}'. Broadcasting queue update."
+                    )
                     update_payload["queues"] = {
                         "executor": [
-                            {"id": t["id"], "filename": t.get("filename", "N/A"), "text": t["text"], "status": subtask_status.get(t["id"], "unknown")}
+                            {
+                                "id": t["id"],
+                                "filename": t.get("filename", "N/A"),
+                                "text": t["text"],
+                                "status": subtask_status.get(t["id"], "unknown"),
+                            }
                             for t in list(executor_queue._queue)
                         ],
                         "tester": [
-                             {"id": t["id"], "filename": t.get("filename", "N/A"), "text": t["text"], "status": subtask_status.get(t["id"], "unknown")}
+                            {
+                                "id": t["id"],
+                                "filename": t.get("filename", "N/A"),
+                                "text": t["text"],
+                                "status": subtask_status.get(t["id"], "unknown"),
+                            }
                             for t in list(tester_queue._queue)
                         ],
                         "documenter": [
-                             {"id": t["id"], "filename": t.get("filename", "N/A"), "text": t["text"], "status": subtask_status.get(t["id"], "unknown")}
+                            {
+                                "id": t["id"],
+                                "filename": t.get("filename", "N/A"),
+                                "text": t["text"],
+                                "status": subtask_status.get(t["id"], "unknown"),
+                            }
                             for t in list(documenter_queue._queue)
                         ],
                     }
@@ -1303,7 +1605,7 @@ async def update_ai_provider(data: dict):
         try:
             # --- CHANGE: Use constant ---
             with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-            # --- END CHANGE ---
+                # --- END CHANGE ---
                 json.dump(config, f, indent=4, ensure_ascii=False)
             logger.info(message)
             return {"status": "success", "message": message}
@@ -1383,7 +1685,7 @@ async def update_config(data: dict):
         try:
             # --- CHANGE: Use constant ---
             with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-            # --- END CHANGE ---
+                # --- END CHANGE ---
                 json.dump(config, f, indent=4, ensure_ascii=False)
             logger.info("Configuration file updated successfully.")
             return {"status": "config updated"}
@@ -1404,7 +1706,9 @@ async def update_config(data: dict):
 async def update_config_item(data: dict):
     """Updates a single configuration item and saves the config file."""
     if not data or len(data) != 1:
-        raise HTTPException(status_code=400, detail="Request must contain exactly one key-value pair.")
+        raise HTTPException(
+            status_code=400, detail="Request must contain exactly one key-value pair."
+        )
 
     key = list(data.keys())[0]
     value = data[key]
@@ -1423,14 +1727,18 @@ async def update_config_item(data: dict):
         try:
             # --- CHANGE: Use constant ---
             with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-            # --- END CHANGE ---
+                # --- END CHANGE ---
                 json.dump(config, f, indent=4, ensure_ascii=False)
-            logger.info(f"Configuration file updated successfully after changing '{key}'.")
+            logger.info(
+                f"Configuration file updated successfully after changing '{key}'."
+            )
             # Повідомлення клієнтам про зміну конфігурації (якщо потрібно)
             # await broadcast_specific_update({"config_update": {key: value}})
             return {"status": f"'{key}' updated successfully"}
         except Exception as e:
-            logger.error(f"Failed to write updated config.json after changing '{key}': {e}")
+            logger.error(
+                f"Failed to write updated config.json after changing '{key}': {e}"
+            )
             # Відновлюємо попереднє значення в пам'яті, якщо запис не вдався
             if current_value is not None:
                 config[key] = current_value
@@ -1439,11 +1747,14 @@ async def update_config_item(data: dict):
                 config.pop(key, None)
             # --- CHANGE: Fix status_code usage ---
             raise HTTPException(
-                status_code=500, detail=f"Failed to save updated configuration file for '{key}'."
+                status_code=500,
+                detail=f"Failed to save updated configuration file for '{key}'.",
             )
             # --- END CHANGE ---
     else:
-        logger.info(f"Configuration item '{key}' already has the value '{value}'. No change.")
+        logger.info(
+            f"Configuration item '{key}' already has the value '{value}'. No change."
+        )
         return {"status": "no change detected"}
 
 
@@ -1495,7 +1806,7 @@ async def start_all(background_tasks: BackgroundTasks):
     ai_status["ai1"] = True
     ai_status["ai2"] = True
     ai_status["ai3"] = True
-    await broadcast_full_status() # Update UI immediately
+    await broadcast_full_status()  # Update UI immediately
 
     # --- CHANGE: Call 'start_ai' action ---
     # Run the start_ai script in the background
@@ -1515,7 +1826,7 @@ async def stop_all(background_tasks: BackgroundTasks):
     ai_status["ai1"] = False
     ai_status["ai2"] = False
     ai_status["ai3"] = False
-    await broadcast_full_status() # Update UI immediately
+    await broadcast_full_status()  # Update UI immediately
 
     # --- CHANGE: Call 'stop' action ---
     # Run the stop script in the background
@@ -1530,10 +1841,10 @@ async def stop_all(background_tasks: BackgroundTasks):
 
 
 @app.post("/clear")
-async def clear_state(): # Removed background_tasks as we await commands now
+async def clear_state():  # Removed background_tasks as we await commands now
     """Stops AI, clears state, repo, logs, cache, then restarts AI (keeps MCP API running)."""
     global subtask_status, report_metrics, current_structure, ai3_report, processed_history, collaboration_requests, processed_tasks_count
-    global executor_queue, tester_queue, documenter_queue, repo # Declare repo as global to allow re-assignment
+    global executor_queue, tester_queue, documenter_queue, repo  # Declare repo as global to allow re-assignment
 
     logger.warning("Initiating AI stop and full state/repo clear...")
 
@@ -1544,27 +1855,33 @@ async def clear_state(): # Removed background_tasks as we await commands now
         logger.error("Failed to stop AI services. Aborting clear operation.")
         raise HTTPException(status_code=500, detail="Failed to stop AI services.")
     logger.info("AI services stopped.")
-    await asyncio.sleep(3) # Pause after stopping AI
+    await asyncio.sleep(3)  # Pause after stopping AI
 
     # 2. Clear internal state (queues, statuses, etc.)
     logger.info("Clearing internal MCP state (queues, statuses...).")
     # Clear queues
     while not executor_queue.empty():
-        try: executor_queue.get_nowait()
-        except asyncio.QueueEmpty: break
+        try:
+            executor_queue.get_nowait()
+        except asyncio.QueueEmpty:
+            break
     while not tester_queue.empty():
-        try: tester_queue.get_nowait()
-        except asyncio.QueueEmpty: break
+        try:
+            tester_queue.get_nowait()
+        except asyncio.QueueEmpty:
+            break
     while not documenter_queue.empty():
-        try: documenter_queue.get_nowait()
-        except asyncio.QueueEmpty: break
+        try:
+            documenter_queue.get_nowait()
+        except asyncio.QueueEmpty:
+            break
     # Reset state variables
     subtask_status = {}
     report_metrics = {}
-    current_structure = {} # Reset structure as repo is cleared
+    current_structure = {}  # Reset structure as repo is cleared
     ai3_report = {"status": "pending"}
     processed_history.clear()
-    processed_tasks_count = 0 # Reset counter
+    processed_tasks_count = 0  # Reset counter
     collaboration_requests = []
     logger.info("Internal MCP state cleared.")
     # --- ADDED: Broadcast monitoring stats update (state cleared) ---
@@ -1581,51 +1898,62 @@ async def clear_state(): # Removed background_tasks as we await commands now
             command,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            cwd=working_dir
+            cwd=working_dir,
         )
         stdout, stderr = await process.communicate()
         if process.returncode == 0:
             logger.info(f"Successfully executed: {description}")
-            if stdout: logger.debug(f"stdout:\n{stdout.decode(errors='ignore')}")
+            if stdout:
+                logger.debug(f"stdout:\n{stdout.decode(errors='ignore')}")
             return True
         else:
-            logger.error(f"Failed to execute: {description}. Return code: {process.returncode}")
-            if stderr: logger.error(f"stderr:\n{stderr.decode(errors='ignore')}")
-            if stdout: logger.error(f"stdout:\n{stdout.decode(errors='ignore')}") # Log stdout on error too
+            logger.error(
+                f"Failed to execute: {description}. Return code: {process.returncode}"
+            )
+            if stderr:
+                logger.error(f"stderr:\n{stderr.decode(errors='ignore')}")
+            if stdout:
+                logger.error(
+                    f"stdout:\n{stdout.decode(errors='ignore')}"
+                )  # Log stdout on error too
             return False
 
     # Clear repo contents (preserves repo/ directory itself)
     # Ensure repo_path is correctly used for the working directory
     # --- CHANGE: Use regular string ---
-    repo_clear_cmd = "find . -mindepth 1 -delete" # Command to run inside repo_dir
+    repo_clear_cmd = "find . -mindepth 1 -delete"  # Command to run inside repo_dir
     # --- END CHANGE ---
-    if not await run_shell_command(repo_clear_cmd, "Clear repository contents", working_dir=repo_path):
-         logger.error("Failed to clear repository contents. Continuing cleanup...")
+    if not await run_shell_command(
+        repo_clear_cmd, "Clear repository contents", working_dir=repo_path
+    ):
+        logger.error("Failed to clear repository contents. Continuing cleanup...")
 
     # Re-initialize git repo
     logger.info(f"Re-initializing Git repository at {repo_path}")
     try:
         # Use git init command via shell, ensure it runs in repo_path
         # --- CHANGE: Use regular string ---
-        init_cmd = "git init" # Command to run inside repo_dir
+        init_cmd = "git init"  # Command to run inside repo_dir
         # --- END CHANGE ---
-        if not await run_shell_command(init_cmd, "Initialize Git repository", working_dir=repo_path):
-             logger.error("Failed to re-initialize Git repository via command.")
-             repo = None # Mark as unavailable
+        if not await run_shell_command(
+            init_cmd, "Initialize Git repository", working_dir=repo_path
+        ):
+            logger.error("Failed to re-initialize Git repository via command.")
+            repo = None  # Mark as unavailable
         else:
-             # Re-initialize the global repo object
-             try:
-                 repo = Repo(repo_path)
-                 logger.info("Global repo object re-initialized.")
-                 # Add initial commit? Optional, but might prevent issues.
-                 # try:
-                 #     repo.index.commit("Initial commit after clear")
-                 #     logger.info("Added initial commit.")
-                 # except Exception as commit_err:
-                 #     logger.warning(f"Could not create initial commit: {commit_err}")
-             except Exception as e:
-                 logger.error(f"Failed to re-initialize global repo object: {e}")
-                 repo = None # Mark as unavailable
+            # Re-initialize the global repo object
+            try:
+                repo = Repo(repo_path)
+                logger.info("Global repo object re-initialized.")
+                # Add initial commit? Optional, but might prevent issues.
+                # try:
+                #     repo.index.commit("Initial commit after clear")
+                #     logger.info("Added initial commit.")
+                # except Exception as commit_err:
+                #     logger.warning(f"Could not create initial commit: {commit_err}")
+            except Exception as e:
+                logger.error(f"Failed to re-initialize global repo object: {e}")
+                repo = None  # Mark as unavailable
     except Exception as e:
         logger.error(f"Error during Git re-initialization: {e}")
         repo = None
@@ -1634,7 +1962,7 @@ async def clear_state(): # Removed background_tasks as we await commands now
     # --- CHANGE: Use regular string ---
     log_clear_cmd = "rm -f logs/*.log"
     # --- END CHANGE ---
-    await run_shell_command(log_clear_cmd, "Clear log files") # Don't abort if fails
+    await run_shell_command(log_clear_cmd, "Clear log files")  # Don't abort if fails
 
     # Clear Python cache (run from workspace root)
     cache_clear_cmd_1 = "find . -type d -name '__pycache__' -exec rm -rf {} +"
@@ -1643,11 +1971,11 @@ async def clear_state(): # Removed background_tasks as we await commands now
     await run_shell_command(cache_clear_cmd_2, "Clear .pyc files")
 
     logger.info("Cleanup of repo, logs, and cache finished.")
-    await asyncio.sleep(3) # Pause after cleanup
+    await asyncio.sleep(3)  # Pause after cleanup
 
     # 4. Broadcast cleared state to UI
     logger.info("Broadcasting cleared state to UI.")
-    await broadcast_full_status() # Send the now empty state
+    await broadcast_full_status()  # Send the now empty state
 
     # 5. Start AI services
     logger.info("Starting AI services...")
@@ -1657,12 +1985,16 @@ async def clear_state(): # Removed background_tasks as we await commands now
         # Return an error response, but don't raise HTTPException as the clear part succeeded
         return JSONResponse(
             status_code=500,
-            content={"status": "State cleared, repo reset, but failed to restart AI services."}
+            content={
+                "status": "State cleared, repo reset, but failed to restart AI services."
+            },
         )
 
     logger.info("AI services restart initiated.")
 
-    return {"status": "AI stopped, state/repo cleared, AI restart initiated. MCP API remains running."}
+    return {
+        "status": "AI stopped, state/repo cleared, AI restart initiated. MCP API remains running."
+    }
 
 
 @app.post("/clear_repo")
@@ -1672,34 +2004,68 @@ async def clear_repo():
         # --- CHANGE: Comment out undefined call and add TODO ---
         # TODO: Implement proper interaction with AI3 process instead of direct call
         # await ai3_instance.clear_and_init_repo()
-        logger.warning("[API] /clear_repo endpoint called, but AI3 interaction is not implemented yet.")
+        logger.warning(
+            "[API] /clear_repo endpoint called, but AI3 interaction is not implemented yet."
+        )
         # Placeholder response until AI3 interaction is implemented
-        await broadcast_specific_update({"message": "Repository clear requested (implementation pending).", "log_line": "[API] Repository clear requested (implementation pending)."})
+        await broadcast_specific_update(
+            {
+                "message": "Repository clear requested (implementation pending).",
+                "log_line": "[API] Repository clear requested (implementation pending).",
+            }
+        )
         return {"status": "Repository clear requested (implementation pending)."}
         # --- END CHANGE ---
     except Exception as e:
         logger.error(f"Error during repository clear request: {e}")
-        await broadcast_specific_update({"error": f"Failed to request repository clear: {e}"})
-        raise HTTPException(status_code=500, detail=f"Failed to request repository clear: {e}")
+        await broadcast_specific_update(
+            {"error": f"Failed to request repository clear: {e}"}
+        )
+        raise HTTPException(
+            status_code=500, detail=f"Failed to request repository clear: {e}"
+        )
 
 
 async def broadcast_full_status():
     """Broadcasts detailed status to all connected clients."""
     if active_connections:
         # --- Aggregation for Pie Chart ---
-        status_counts = {"pending": 0, "processing": 0, "completed": 0, "failed": 0, "other": 0}
+        status_counts = {
+            "pending": 0,
+            "processing": 0,
+            "completed": 0,
+            "failed": 0,
+            "other": 0,
+        }
         for status in subtask_status.values():
             # Use a more comprehensive set of completed/final statuses
-            if status in ["accepted", "completed", "code_received", "tested", "skipped", "failed_by_ai2", "error_processing", "review_needed", "failed_tests", "failed_to_send"]:
-                status_counts["completed"] += 1 # Group all final states for simplicity here, adjust if needed
+            if status in [
+                "accepted",
+                "completed",
+                "code_received",
+                "tested",
+                "skipped",
+                "failed_by_ai2",
+                "error_processing",
+                "review_needed",
+                "failed_tests",
+                "failed_to_send",
+            ]:
+                status_counts[
+                    "completed"
+                ] += 1  # Group all final states for simplicity here, adjust if needed
             elif status == "pending":
                 status_counts["pending"] += 1
-            elif status in ["sending", "sent", "processing"]: # Explicitly list processing states
+            elif status in [
+                "sending",
+                "sent",
+                "processing",
+            ]:  # Explicitly list processing states
                 status_counts["processing"] += 1
             # elif "Ошибка" in status or "failed" in status: # This might double-count some final states
             #     status_counts["failed"] += 1 # Consider removing if covered by 'completed' grouping
             else:
-                status_counts["other"] += 1 # Catch-all for unknown/transient states
+                status_counts["other"] += 1  # Catch-all for unknown/transient states
         # --- End Aggregation ---
 
         # Get progress chart data
@@ -1709,12 +2075,14 @@ async def broadcast_full_status():
         history_list = list(processed_history)
         git_activity_data = {
             "labels": [f"Commit {i+1}" for i in range(len(history_list))],
-            "values": history_list
+            "values": history_list,
         }
 
         # Calculate actual total tasks as the number of known subtasks
         actual_total_tasks = len(subtask_status)
-        logger.debug(f"[Broadcast] Calculated actual_total_tasks (known subtasks): {actual_total_tasks}")
+        logger.debug(
+            f"[Broadcast] Calculated actual_total_tasks (known subtasks): {actual_total_tasks}"
+        )
 
         state_data = {
             "type": "full_status_update",
@@ -1752,21 +2120,28 @@ async def broadcast_full_status():
             "structure": current_structure,
             "ai3_report": ai3_report,
             # "processed_history": history_list, # Keep original if needed elsewhere, but add formatted one
-            "git_activity": git_activity_data, # Add formatted data for the chart
-            "progress_data": progress_chart_data, # Add progress chart data
-            "task_status_distribution": status_counts, # Include aggregated counts
-            "actual_total_tasks": actual_total_tasks, # Add the calculated total tasks
+            "git_activity": git_activity_data,  # Add formatted data for the chart
+            "progress_data": progress_chart_data,  # Add progress chart data
+            "task_status_distribution": status_counts,  # Include aggregated counts
+            "actual_total_tasks": actual_total_tasks,  # Add the calculated total tasks
         }
         message = json.dumps(state_data)
         disconnected_clients = set()
         for connection in list(active_connections):
             try:
                 await connection.send_text(message)
-            except (WebSocketDisconnect, RuntimeError) as e: # Catch specific errors related to closed connections
-                logger.warning(f"Failed to send full status to client {connection.client}: {e}. Removing connection.")
+            except (
+                WebSocketDisconnect,
+                RuntimeError,
+            ) as e:  # Catch specific errors related to closed connections
+                logger.warning(
+                    f"Failed to send full status to client {connection.client}: {e}. Removing connection."
+                )
                 disconnected_clients.add(connection)
-            except Exception as e: # Catch other potential send errors
-                logger.error(f"Unexpected error sending full status to client {connection.client}: {e}. Removing connection.")
+            except Exception as e:  # Catch other potential send errors
+                logger.error(
+                    f"Unexpected error sending full status to client {connection.client}: {e}. Removing connection."
+                )
                 disconnected_clients.add(connection)
 
         # Remove disconnected clients from the main set
@@ -1778,17 +2153,40 @@ async def send_full_status_update(websocket: WebSocket):
     """Відправляє повний статус конкретному клієнту WebSocket."""
     try:
         # --- Aggregation for Pie Chart ---
-        status_counts = {"pending": 0, "processing": 0, "completed": 0, "failed": 0, "other": 0}
+        status_counts = {
+            "pending": 0,
+            "processing": 0,
+            "completed": 0,
+            "failed": 0,
+            "other": 0,
+        }
         for status in subtask_status.values():
             # Use a more comprehensive set of completed/final statuses
-            if status in ["accepted", "completed", "code_received", "tested", "skipped", "failed_by_ai2", "error_processing", "review_needed", "failed_tests", "failed_to_send"]:
-                status_counts["completed"] += 1 # Group all final states for simplicity here, adjust if needed
+            if status in [
+                "accepted",
+                "completed",
+                "code_received",
+                "tested",
+                "skipped",
+                "failed_by_ai2",
+                "error_processing",
+                "review_needed",
+                "failed_tests",
+                "failed_to_send",
+            ]:
+                status_counts[
+                    "completed"
+                ] += 1  # Group all final states for simplicity here, adjust if needed
             elif status == "pending":
                 status_counts["pending"] += 1
-            elif status in ["sending", "sent", "processing"]: # Explicitly list processing states
+            elif status in [
+                "sending",
+                "sent",
+                "processing",
+            ]:  # Explicitly list processing states
                 status_counts["processing"] += 1
             else:
-                status_counts["other"] += 1 # Catch-all for unknown/transient states
+                status_counts["other"] += 1  # Catch-all for unknown/transient states
         # --- End Aggregation ---
 
         # Get progress chart data
@@ -1798,12 +2196,14 @@ async def send_full_status_update(websocket: WebSocket):
         history_list = list(processed_history)
         git_activity_data = {
             "labels": [f"Commit {i+1}" for i in range(len(history_list))],
-            "values": history_list
+            "values": history_list,
         }
 
         # Calculate actual total tasks as the number of known subtasks
         actual_total_tasks = len(subtask_status)
-        logger.debug(f"[Send] Calculated actual_total_tasks (known subtasks): {actual_total_tasks}")
+        logger.debug(
+            f"[Send] Calculated actual_total_tasks (known subtasks): {actual_total_tasks}"
+        )
 
         state_data = {
             "type": "full_status_update",
@@ -1843,7 +2243,7 @@ async def send_full_status_update(websocket: WebSocket):
             "git_activity": git_activity_data,
             "progress_data": progress_chart_data,
             "task_status_distribution": status_counts,
-            "actual_total_tasks": actual_total_tasks, # Use the count of known subtasks
+            "actual_total_tasks": actual_total_tasks,  # Use the count of known subtasks
         }
 
         # Відправляємо дані клієнту
@@ -1852,11 +2252,14 @@ async def send_full_status_update(websocket: WebSocket):
 
     # ... (exception handling remains the same) ...
     except WebSocketDisconnect:
-        logger.warning(f"Client {websocket.client} disconnected during full status update.")
+        logger.warning(
+            f"Client {websocket.client} disconnected during full status update."
+        )
         if websocket in active_connections:
             active_connections.remove(websocket)
     except Exception as e:
         logger.error(f"Error sending full status to client {websocket.client}: {e}")
+
 
 # ... rest of the file ...
 
@@ -1866,15 +2269,17 @@ async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     client_id = f"Address(host='{websocket.client.host}', port={websocket.client.port})"
     active_connections.add(websocket)
-    logger.info(f"WebSocket connection established from {client_id}. Total: {len(active_connections)}")
-    
+    logger.info(
+        f"WebSocket connection established from {client_id}. Total: {len(active_connections)}"
+    )
+
     try:
         while True:
             data = await websocket.receive_text()
             try:
                 message = json.loads(data)
                 logger.debug(f"Received message from client {client_id}: {message}")
-                
+
                 # Обробляємо запити від клієнта
                 if message.get("action") == "get_full_status":
                     # Надсилаємо повний статус як відповідь на запит
@@ -1887,16 +2292,22 @@ async def websocket_endpoint(websocket: WebSocket):
                 logger.error(f"Invalid JSON received from client {client_id}: {data}")
             except Exception as e:
                 logger.error(f"Error processing client {client_id} message: {e}")
-        
+
     except WebSocketDisconnect:
         logger.info(f"WebSocket connection closed for {client_id}")
         active_connections.remove(websocket)
-        logger.info(f"WebSocket connection removed for {client_id}. Remaining: {len(active_connections)}")
+        logger.info(
+            f"WebSocket connection removed for {client_id}. Remaining: {len(active_connections)}"
+        )
     except Exception as e:
-        logger.error(f"Unexpected error in websocket_endpoint for client {client_id}: {e}")
+        logger.error(
+            f"Unexpected error in websocket_endpoint for client {client_id}: {e}"
+        )
         if websocket in active_connections:
             active_connections.remove(websocket)
-            logger.info(f"WebSocket connection removed for {client_id} after error. Remaining: {len(active_connections)}")
+            logger.info(
+                f"WebSocket connection removed for {client_id} after error. Remaining: {len(active_connections)}"
+            )
 
 
 @app.get("/health")
@@ -1928,18 +2339,18 @@ async def get_worker_status():
         "executor": {
             "status": "idle" if executor_queue.empty() else "busy",
             "queue_empty": executor_queue.empty(),
-            "queue_size": executor_queue.qsize()
+            "queue_size": executor_queue.qsize(),
         },
         "tester": {
             "status": "idle" if tester_queue.empty() else "busy",
             "queue_empty": tester_queue.empty(),
-            "queue_size": tester_queue.qsize()
+            "queue_size": tester_queue.qsize(),
         },
         "documenter": {
             "status": "idle" if documenter_queue.empty() else "busy",
             "queue_empty": documenter_queue.empty(),
-            "queue_size": documenter_queue.qsize()
-        }
+            "queue_size": documenter_queue.qsize(),
+        },
     }
     return worker_status
 
@@ -1950,7 +2361,7 @@ async def request_task_for_idle_worker(data: dict):
     worker = data.get("worker")
     if not worker or worker not in ["executor", "tester", "documenter"]:
         raise HTTPException(status_code=400, detail="Invalid worker specified")
-    
+
     # Перевіряємо, чи є задачі у відповідній черзі
     queue = None
     if worker == "executor":
@@ -1959,14 +2370,16 @@ async def request_task_for_idle_worker(data: dict):
         queue = tester_queue
     elif worker == "documenter":
         queue = documenter_queue
-    
+
     if queue.empty():
         return {"success": False, "message": f"No tasks available for {worker}"}
-    
+
     try:
         # Спробуємо отримати задачу (не блокуючий виклик)
         task = queue.get_nowait()
-        logger.info(f"Task requested for idle worker {worker}. Task ID: {task.get('id')}")
+        logger.info(
+            f"Task requested for idle worker {worker}. Task ID: {task.get('id')}"
+        )
         return {"success": True, "task": task}
     except asyncio.QueueEmpty:
         return {"success": False, "message": f"Queue for {worker} is empty"}
@@ -1981,7 +2394,7 @@ async def request_error_fix(data: dict):
     errors = data.get("errors")
     if not errors:
         raise HTTPException(status_code=400, detail="No errors provided")
-    
+
     # --- CHANGE: Remove misplaced code block and add logging ---
     logger.info(f"Received error fix request with errors: {errors}")
     # TODO: Implement logic to handle error fixing requests, potentially creating new subtasks.
@@ -1993,7 +2406,9 @@ async def request_error_fix(data: dict):
 @app.post("/test_recommendation")
 async def receive_test_recommendation(recommendation: TestRecommendation):
     """Отримує рекомендацію від AI3 щодо результатів тестування."""
-    log_message(f"Received test recommendation: {recommendation.recommendation}, Context: {recommendation.context}")
+    log_message(
+        f"Received test recommendation: {recommendation.recommendation}, Context: {recommendation.context}"
+    )
 
     failed_files = recommendation.context.get("failed_files", [])
     updated_tasks = []
@@ -2002,22 +2417,30 @@ async def receive_test_recommendation(recommendation: TestRecommendation):
     for task_id, task_data in tasks.items():
         # Перевіряємо, чи файл завдання є серед тих, що не пройшли перевірку
         # Або якщо рекомендація 'rework' і немає конкретних файлів (загальна помилка workflow)
-        if task_data.get("file") in failed_files or (recommendation.recommendation == "rework" and not failed_files):
-             if recommendation.recommendation == "rework":
-                 # Перевіряємо, чи статус вже не 'needs_rework', щоб уникнути зациклення
-                 if task_data["status"] != "needs_rework":
-                     task_data["status"] = "needs_rework"
-                     task_data["test_context"] = recommendation.context # Зберігаємо контекст помилки
-                     updated_tasks.append(task_id)
-             # Не оновлюємо статус на 'accepted' тут, це зробить AI1
-             # elif recommendation.recommendation == "accept" і task_data["status"] == "tested":
-             #     task_data["status"] = "accepted" # Позначаємо як прийняте
-             #     updated_tasks.append(task_id)
-
+        if task_data.get("file") in failed_files or (
+            recommendation.recommendation == "rework" and not failed_files
+        ):
+            if recommendation.recommendation == "rework":
+                # Перевіряємо, чи статус вже не 'needs_rework', щоб уникнути зациклення
+                if task_data["status"] != "needs_rework":
+                    task_data["status"] = "needs_rework"
+                    task_data["test_context"] = (
+                        recommendation.context
+                    )  # Зберігаємо контекст помилки
+                    updated_tasks.append(task_id)
+            # Не оновлюємо статус на 'accepted' тут, це зробить AI1
+            # elif recommendation.recommendation == "accept" і task_data["status"] == "tested":
+            #     task_data["status"] = "accepted" # Позначаємо як прийняте
+            #     updated_tasks.append(task_id)
 
     if updated_tasks:
         # --- CHANGE: Use broadcast_specific_update ---
-        await broadcast_specific_update({"type": "task_update", "message": f"Test recommendation '{recommendation.recommendation}' applied to tasks: {updated_tasks}"})
+        await broadcast_specific_update(
+            {
+                "type": "task_update",
+                "message": f"Test recommendation '{recommendation.recommendation}' applied to tasks: {updated_tasks}",
+            }
+        )
         # --- END CHANGE ---
 
     # Пересилаємо рекомендацію AI1 (якщо потрібно) - припускаємо, що AI1 слухає WebSocket або має інший механізм
@@ -2058,57 +2481,73 @@ async def shutdown_event():
 
 class TaskScheduler:
     """Intelligent task scheduler with dynamic load balancing and parallel processing"""
+
     def __init__(self):
         self.tasks = {
             "executor": asyncio.Queue(),
             "tester": asyncio.Queue(),
-            "documenter": asyncio.Queue()
+            "documenter": asyncio.Queue(),
         }
         self.in_progress = {}  # task_id -> worker_id
-        self.worker_status = {}  # worker_id -> {"role": str, "busy": bool, "last_active": float}
+        self.worker_status = (
+            {}
+        )  # worker_id -> {"role": str, "busy": bool, "last_active": float}
         self.task_dependencies = {}  # task_id -> List[task_id]
         self.task_priorities = {}  # task_id -> priority_score
-        self.task_history = {}  # task_id -> {"status": str, "completion_time": float, "attempts": int}
-        self.load_metrics = {role: [] for role in self.tasks.keys()}  # Track processing times
+        self.task_history = (
+            {}
+        )  # task_id -> {"status": str, "completion_time": float, "attempts": int}
+        self.load_metrics = {
+            role: [] for role in self.tasks.keys()
+        }  # Track processing times
 
-    async def add_task(self, task: Dict[str, Any], role: str, dependencies: List[str] = None,
-                      priority: int = 1) -> str:
+    async def add_task(
+        self,
+        task: Dict[str, Any],
+        role: str,
+        dependencies: List[str] = None,
+        priority: int = 1,
+    ) -> str:
         """Add a task to the appropriate queue with dependencies and priority"""
         task_id = str(uuid.uuid4())
         task["id"] = task_id
-        
+
         # Store dependency information
         if dependencies:
             self.task_dependencies[task_id] = dependencies
             # Calculate priority based on dependencies
             priority += sum(self.task_priorities.get(dep, 0) for dep in dependencies)
-        
+
         self.task_priorities[task_id] = priority
-        
+
         # Only add to queue if no unmet dependencies
         if not dependencies or all(dep in self.task_history for dep in dependencies):
             await self.tasks[role].put((priority, task))
-            logger.info(f"Task {task_id} added to {role} queue with priority {priority}")
+            logger.info(
+                f"Task {task_id} added to {role} queue with priority {priority}"
+            )
         else:
             logger.info(f"Task {task_id} waiting for dependencies: {dependencies}")
-        
+
         return task_id
 
-    async def get_next_task(self, role: str, worker_id: str) -> Optional[Dict[str, Any]]:
+    async def get_next_task(
+        self, role: str, worker_id: str
+    ) -> Optional[Dict[str, Any]]:
         """Get the next highest priority task for a worker, considering dependencies"""
         try:
             # Update worker status
             self.worker_status[worker_id] = {
                 "role": role,
                 "busy": False,
-                "last_active": time.time()
+                "last_active": time.time(),
             }
-            
+
             # Check queue
             if not self.tasks[role].empty():
                 priority, task = await self.tasks[role].get()
                 task_id = task["id"]
-                
+
                 # Check dependencies
                 if task_id in self.task_dependencies:
                     deps = self.task_dependencies[task_id]
@@ -2116,53 +2555,59 @@ class TaskScheduler:
                         # Put back in queue with slightly lower priority
                         await self.tasks[role].put((priority - 0.1, task))
                         return None
-                
+
                 # Mark task as in progress
                 self.in_progress[task_id] = worker_id
                 self.worker_status[worker_id]["busy"] = True
-                
+
                 # Initialize history entry
                 if task_id not in self.task_history:
                     self.task_history[task_id] = {
                         "status": "in_progress",
                         "attempts": 1,
-                        "start_time": time.time()
+                        "start_time": time.time(),
                     }
                 else:
                     self.task_history[task_id]["attempts"] += 1
-                
+
                 return task
             return None
         except Exception as e:
             logger.error(f"Error getting next task: {e}")
             return None
 
-    async def complete_task(self, task_id: str, success: bool, processing_time: float) -> None:
+    async def complete_task(
+        self, task_id: str, success: bool, processing_time: float
+    ) -> None:
         """Mark a task as completed and update metrics"""
         try:
             if task_id in self.in_progress:
                 worker_id = self.in_progress.pop(task_id)
                 role = self.worker_status[worker_id]["role"]
-                
+
                 # Update task history
-                self.task_history[task_id].update({
-                    "status": "completed" if success else "failed",
-                    "completion_time": time.time(),
-                    "processing_time": processing_time
-                })
-                
+                self.task_history[task_id].update(
+                    {
+                        "status": "completed" if success else "failed",
+                        "completion_time": time.time(),
+                        "processing_time": processing_time,
+                    }
+                )
+
                 # Update load metrics
                 self.load_metrics[role].append(processing_time)
                 if len(self.load_metrics[role]) > 10:  # Keep last 10 measurements
                     self.load_metrics[role].pop(0)
-                
+
                 # Mark worker as available
                 self.worker_status[worker_id]["busy"] = False
-                
+
                 # Check for dependent tasks to unblock
                 await self._process_dependent_tasks(task_id)
-                
-                logger.info(f"Task {task_id} completed with status: {'success' if success else 'failed'}")
+
+                logger.info(
+                    f"Task {task_id} completed with status: {'success' if success else 'failed'}"
+                )
         except Exception as e:
             logger.error(f"Error completing task {task_id}: {e}")
 
@@ -2186,38 +2631,49 @@ class TaskScheduler:
         for role in self.tasks:
             status[role] = {
                 "queue_size": self.tasks[role].qsize(),
-                "active_workers": sum(1 for w in self.worker_status.values() 
-                                   if w["role"] == role and w["busy"]),
-                "avg_processing_time": (sum(self.load_metrics[role]) / len(self.load_metrics[role])
-                                     if self.load_metrics[role] else 0)
+                "active_workers": sum(
+                    1
+                    for w in self.worker_status.values()
+                    if w["role"] == role and w["busy"]
+                ),
+                "avg_processing_time": (
+                    sum(self.load_metrics[role]) / len(self.load_metrics[role])
+                    if self.load_metrics[role]
+                    else 0
+                ),
             }
         return status
 
     async def rebalance_queues(self) -> None:
         """Rebalance tasks between queues based on load metrics"""
         status = self.get_queue_status()
-        
+
         # Calculate load factors
-        total_load = sum(s["avg_processing_time"] * s["queue_size"] 
-                        for s in status.values())
+        total_load = sum(
+            s["avg_processing_time"] * s["queue_size"] for s in status.values()
+        )
         if total_load == 0:
             return
-            
-        load_factors = {role: (s["avg_processing_time"] * s["queue_size"]) / total_load 
-                       for role, s in status.items()}
-        
+
+        load_factors = {
+            role: (s["avg_processing_time"] * s["queue_size"]) / total_load
+            for role, s in status.items()
+        }
+
         # Find overloaded and underloaded queues
         avg_load = sum(load_factors.values()) / len(load_factors)
         threshold = 0.2  # 20% deviation threshold
-        
-        overloaded = {r: lf for r, lf in load_factors.items() 
-                     if lf > avg_load * (1 + threshold)}
-        underloaded = {r: lf for r, lf in load_factors.items() 
-                      if lf < avg_load * (1 - threshold)}
-        
+
+        overloaded = {
+            r: lf for r, lf in load_factors.items() if lf > avg_load * (1 + threshold)
+        }
+        underloaded = {
+            r: lf for r, lf in load_factors.items() if lf < avg_load * (1 - threshold)
+        }
+
         if not overloaded or not underloaded:
             return
-            
+
         # Attempt to move tasks from overloaded to underloaded queues
         for over_role in overloaded:
             for under_role in underloaded:
@@ -2230,28 +2686,32 @@ class TaskScheduler:
             source_queue = self.tasks[from_role]
             if source_queue.empty():
                 return
-                
+
             moved_count = 0
             items = []
-            
+
             # Collect all tasks
-            while not source_queue.empty() and moved_count < 3:  # Limit moves per rebalance
+            while (
+                not source_queue.empty() and moved_count < 3
+            ):  # Limit moves per rebalance
                 priority, task = await source_queue.get()
-                
+
                 # Check if task can be moved (based on role compatibility)
                 if self._can_move_task(task, to_role):
                     # Put in destination queue
                     await self.tasks[to_role].put((priority, task))
                     moved_count += 1
-                    logger.info(f"Moved task {task['id']} from {from_role} to {to_role}")
+                    logger.info(
+                        f"Moved task {task['id']} from {from_role} to {to_role}"
+                    )
                 else:
                     # Put back in source queue
                     items.append((priority, task))
-                    
+
             # Return unmoved tasks to source queue
             for item in items:
                 await source_queue.put(item)
-                
+
         except Exception as e:
             logger.error(f"Error moving tasks between queues: {e}")
 
@@ -2271,12 +2731,12 @@ class TaskScheduler:
                         # Check for stalled tasks (no activity for 5 minutes)
                         if current_time - status["last_active"] > 300:
                             await self._handle_stalled_task(worker_id)
-                            
+
                 # Clean up old history entries
                 self._cleanup_history()
-                
+
                 await asyncio.sleep(60)  # Check every minute
-                
+
             except Exception as e:
                 logger.error(f"Error in worker health monitoring: {e}")
                 await asyncio.sleep(60)
@@ -2285,8 +2745,9 @@ class TaskScheduler:
         """Handle a stalled task by requeuing it"""
         try:
             # Find task assigned to this worker
-            task_id = next((tid for tid, wid in self.in_progress.items() 
-                          if wid == worker_id), None)
+            task_id = next(
+                (tid for tid, wid in self.in_progress.items() if wid == worker_id), None
+            )
             if task_id:
                 # Get task details and requeue
                 role = self.worker_status[worker_id]["role"]
@@ -2296,20 +2757,22 @@ class TaskScheduler:
                         # Requeue with lower priority
                         priority = self.task_priorities.get(task_id, 1) * 0.8
                         self.task_priorities[task_id] = priority
-                        
+
                         # TODO: Get actual task data
                         task = {"id": task_id}  # Simplified for example
                         await self.tasks[role].put((priority, task))
-                        
-                        logger.warning(f"Requeued stalled task {task_id} from worker {worker_id}")
+
+                        logger.warning(
+                            f"Requeued stalled task {task_id} from worker {worker_id}"
+                        )
                     else:
                         logger.error(f"Task {task_id} failed after {attempts} attempts")
-                        
+
                 # Clean up
                 if task_id in self.in_progress:
                     del self.in_progress[task_id]
                 self.worker_status[worker_id]["busy"] = False
-                
+
         except Exception as e:
             logger.error(f"Error handling stalled task for worker {worker_id}: {e}")
 
@@ -2319,16 +2782,19 @@ class TaskScheduler:
             current_time = time.time()
             # Keep entries from last 24 hours
             cutoff_time = current_time - 86400
-            
+
             self.task_history = {
-                tid: data for tid, data in self.task_history.items()
+                tid: data
+                for tid, data in self.task_history.items()
                 if data.get("completion_time", current_time) > cutoff_time
             }
         except Exception as e:
             logger.error(f"Error cleaning up task history: {e}")
 
+
 # Initialize scheduler
 scheduler = TaskScheduler()
+
 
 @app.post("/task/{role}")
 async def get_task(role: str):
@@ -2340,6 +2806,7 @@ async def get_task(role: str):
 
 class MCPApi:
     """Advanced Model Context Protocol (MCP) API implementation"""
+
     def __init__(self):
         self.task_queue = TaskQueue()
         self.task_scheduler = TaskScheduler()
@@ -2353,16 +2820,16 @@ class MCPApi:
         try:
             # Analyze project requirements
             analysis = await self.code_analyzer.analyze_requirements(request)
-            
+
             # Create project plan with dependencies
             project_plan = await self.task_scheduler.create_project_plan(analysis)
-            
+
             # Initialize project structure
             project = await self.initialize_project(project_plan)
-            
+
             # Set up monitoring
             await self.status_monitor.initialize_project(project["id"])
-            
+
             return {"status": "success", "project": project}
         except Exception as e:
             logger.error(f"Project creation failed: {e}", exc_info=True)
@@ -2375,13 +2842,13 @@ class MCPApi:
             task = await self.task_scheduler.get_next_task(role)
             if not task:
                 return {"status": "no_task"}
-            
+
             # Enhance task with context
             task = await self.enhance_task_context(task)
-            
+
             # Track task assignment
             await self.status_monitor.track_task(task["id"], "assigned")
-            
+
             return {"status": "success", "task": task}
         except Exception as e:
             logger.error(f"Task retrieval failed: {e}", exc_info=True)
@@ -2392,39 +2859,39 @@ class MCPApi:
         # Add project context
         project_context = await self.get_project_context(task["project_id"])
         task["context"] = project_context
-        
+
         # Add learned patterns
         patterns = await self.pattern_learner.get_relevant_patterns(task)
         task["patterns"] = patterns
-        
+
         # Add dependencies
         dependencies = await self.dependency_manager.get_task_dependencies(task["id"])
         task["dependencies"] = dependencies
-        
+
         return task
 
     async def report_progress(self, report: Dict[str, Any]) -> Dict[str, Any]:
         """Process task progress report with enhanced analysis"""
         try:
             task_id = report["task_id"]
-            
+
             # Update task status
             await self.status_monitor.update_task(task_id, report)
-            
+
             # Learn from results
             await self.pattern_learner.learn_from_report(report)
-            
+
             # Check for blockers
             blockers = await self.analyze_blockers(report)
             if blockers:
                 await self.handle_blockers(blockers)
-            
+
             # Update dependencies
             await self.dependency_manager.update_dependencies(task_id, report)
-            
+
             # Plan next tasks
             await self.task_scheduler.update_plan(report)
-            
+
             return {"status": "success"}
         except Exception as e:
             logger.error(f"Progress report failed: {e}", exc_info=True)
@@ -2433,27 +2900,27 @@ class MCPApi:
     async def analyze_blockers(self, report: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Analyze task report for potential blockers"""
         blockers = []
-        
+
         # Check for errors
         if report.get("status") == "error":
             blocker = {
                 "type": "error",
                 "task_id": report["task_id"],
                 "description": report.get("error_message", "Unknown error"),
-                "severity": self._assess_severity(report)
+                "severity": self._assess_severity(report),
             }
             blockers.append(blocker)
-        
+
         # Check for missing dependencies
         missing_deps = await self.dependency_manager.check_missing_dependencies(report)
         if missing_deps:
             blocker = {
                 "type": "missing_dependency",
                 "task_id": report["task_id"],
-                "dependencies": missing_deps
+                "dependencies": missing_deps,
             }
             blockers.append(blocker)
-        
+
         return blockers
 
     def _assess_severity(self, report: Dict[str, Any]) -> str:
@@ -2476,7 +2943,9 @@ class MCPApi:
         """Handle error-type blockers"""
         # Retry strategy based on severity
         if blocker["severity"] == "high":
-            await self.task_scheduler.reschedule_task(blocker["task_id"], priority="high")
+            await self.task_scheduler.reschedule_task(
+                blocker["task_id"], priority="high"
+            )
         else:
             await self.task_scheduler.retry_task(blocker["task_id"])
 
@@ -2491,15 +2960,15 @@ class MCPApi:
         try:
             # Get basic status
             status = await self.status_monitor.get_project_status(project_id)
-            
+
             # Add analytics
             analytics = await self.analyze_project_progress(project_id)
             status["analytics"] = analytics
-            
+
             # Add predictions
             predictions = await self.predict_completion(project_id)
             status["predictions"] = predictions
-            
+
             return {"status": "success", "project_status": status}
         except Exception as e:
             logger.error(f"Status retrieval failed: {e}", exc_info=True)
@@ -2511,19 +2980,25 @@ class MCPApi:
             "completion_rate": await self._calculate_completion_rate(project_id),
             "error_rate": await self._calculate_error_rate(project_id),
             "bottlenecks": await self._identify_bottlenecks(project_id),
-            "quality_metrics": await self._calculate_quality_metrics(project_id)
+            "quality_metrics": await self._calculate_quality_metrics(project_id),
         }
 
     async def predict_completion(self, project_id: str) -> Dict[str, Any]:
         """Predict project completion metrics"""
         return {
-            "estimated_completion_time": await self._estimate_completion_time(project_id),
+            "estimated_completion_time": await self._estimate_completion_time(
+                project_id
+            ),
             "risk_factors": await self._identify_risk_factors(project_id),
-            "resource_requirements": await self._estimate_resource_requirements(project_id)
+            "resource_requirements": await self._estimate_resource_requirements(
+                project_id
+            ),
         }
+
 
 class TaskQueue:
     """Enhanced task queue with priority and dependency management"""
+
     def __init__(self):
         self.tasks = []
         self.processing = {}
@@ -2552,8 +3027,10 @@ class TaskQueue:
         deps = task.get("dependencies", [])
         return all(dep in self.completed for dep in deps)
 
+
 class TaskScheduler:
     """Advanced task scheduler with dependency resolution"""
+
     def __init__(self):
         self.task_queue = TaskQueue()
         self.project_plans = {}
@@ -2563,25 +3040,27 @@ class TaskScheduler:
         """Create project execution plan"""
         tasks = []
         dependencies = []
-        
+
         # Create tasks from analysis
         for component in analysis["components"]:
             task = await self._create_component_tasks(component)
             tasks.extend(task)
-        
+
         # Identify dependencies
         for task in tasks:
             deps = await self._identify_dependencies(task)
             dependencies.extend(deps)
-        
+
         return {
             "tasks": tasks,
             "dependencies": dependencies,
-            "estimated_duration": await self._estimate_duration(tasks)
+            "estimated_duration": await self._estimate_duration(tasks),
         }
+
 
 class DependencyManager:
     """Manages task dependencies and relationships"""
+
     def __init__(self):
         self.dependencies = {}
         self.lock = asyncio.Lock()
@@ -2599,8 +3078,10 @@ class DependencyManager:
             return True
         return all(self._is_completed(dep) for dep in self.dependencies[task_id])
 
+
 class CodeAnalyzer:
     """Analyzes code and project requirements"""
+
     def __init__(self):
         self.pattern_matcher = PatternMatcher()
         self.requirement_analyzer = RequirementAnalyzer()
@@ -2609,15 +3090,17 @@ class CodeAnalyzer:
         """Analyze project requirements"""
         components = await self.requirement_analyzer.extract_components(request)
         patterns = await self.pattern_matcher.find_patterns(components)
-        
+
         return {
             "components": components,
             "patterns": patterns,
-            "complexity": await self._estimate_complexity(components)
+            "complexity": await self._estimate_complexity(components),
         }
+
 
 class StatusMonitor:
     """Monitors project and task status"""
+
     def __init__(self):
         self.project_status = {}
         self.task_status = {}
@@ -2630,16 +3113,18 @@ class StatusMonitor:
             self.task_status[task_id] = {
                 "status": status,
                 "timestamp": datetime.now().isoformat(),
-                "updates": []
+                "updates": [],
             }
 
     async def update_task(self, task_id: str, report: Dict[str, Any]):
         """Update task status with report"""
         async with self.lock:
             if task_id in self.task_status:
-                self.task_status[task_id]["updates"].append({
-                    "timestamp": datetime.now().isoformat(),
-                    "status": report.get("status"),
-                    "progress": report.get("progress"),
-                    "message": report.get("message")
-                })
+                self.task_status[task_id]["updates"].append(
+                    {
+                        "timestamp": datetime.now().isoformat(),
+                        "status": report.get("status"),
+                        "progress": report.get("progress"),
+                        "message": report.get("message"),
+                    }
+                )
