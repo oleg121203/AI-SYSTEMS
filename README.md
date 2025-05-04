@@ -11,29 +11,30 @@ The system consists of the following main components:
 - **AI1 (Coordinator)**: Plans and coordinates tasks, makes decisions based on test results. Uses LLM for flexible decision-making, task prioritization, and report analysis.
 - **AI2 (Executors)**: Generates high-quality code, comprehensive tests, and detailed documentation using language-specific patterns and validation. Features multiple provider fallback and quality assurance checks.
 - **AI3 (Monitor/Structure Manager)**: Creates the project structure, proactively monitors the system, provides consultations, identifies problems, initiates their resolution, and independently fixes testing errors.
-- **MCP API**: Central API for interaction between components, manages task queues.
-- **Web Interface**: Visualization of the development process and system management.
-- **GitHub Actions**: Automated code testing.
+- **MCP API**: Central API for interaction between components, manages task queues and provides status monitoring.
+- **Web Interface**: Visualization of the development process and system management (work in progress).
 
 ## Repository Structure
 
-The system uses two repositories:
+The system currently uses the following structure:
 
 1. **Main Repository (AI-SYSTEMS)**:
-   - Contains the code of the system itself (AI agents, API, web interface)
-   - URL: `https://github.com/oleg121203/AI-SYSTEMS.git`
+   - Contains the code of the system itself (AI agents, API)
+   - Main scripts: ai1.py, ai2.py, ai3.py, mcp_api.py
+   - Configuration: config.json, config.py
+   - Utilities: utils.py, providers.py
 
 2. **Project Repository (repo/)**:
-   - Nested repository where the generated project is stored
-   - AI3 automatically creates files and makes commits
-   - URL: `https://github.com/oleg121203/AI-SYSTEMS-REPO.git`
+   - Located under the AI-SYSTEMS directory
+   - Contains the generated project files
+   - Managed by AI3, which creates the structure and files
 
 ## System Prompt Configuration
 
 The system uses a hybrid approach to prompt management:
 
 1. **Base prompts in config.json**:
-   - `ai1_prompt`: Basic instruction for the AI1 coordinator. Describes the goals and capabilities of AI1.
+   - `ai1_prompt`: Basic instruction for the AI1 coordinator.
    - `ai2_prompts`: Array of basic instructions for AI2 (executor, tester, documenter).
    - `ai3_prompt`: Basic instruction for AI3 regarding project structure generation.
 
@@ -41,7 +42,7 @@ The system uses a hybrid approach to prompt management:
    - Each AI agent supplements the basic prompt with system instructions (e.g., use of Latin characters, JSON format).
    - This provides flexibility (the main prompt can be changed through configuration) and reliability (critical instructions are protected in the code).
 
-## Project Structure Generation with Two Cycles
+## Project Structure Generation
 
 The AI3 system uses a two-stage approach to project structure generation:
 
@@ -63,11 +64,7 @@ The AI3 system uses a two-stage approach to project structure generation:
    * Creates these files and directories in the local repository (repo).
    * Generates the initial idea.md file with a project description.
    * Sends the generated structure to the MCP API.
-   * Launches background monitoring processes:
-     * **Worker Monitoring**: Checks the status of AI2 workers and requests new tasks when idle.
-     * **Log and Test Monitoring**: Scans logs for errors and automatically runs and analyzes tests.
-     * **GitHub Actions Monitoring**: Analyzes the results of CI/CD test runs.
-     * **Queue Monitoring**: Tracks the sizes of task queues and notifies AI1 for redistribution.
+   * Launches background monitoring processes for logs, tests, and task queues.
 
 2. **Planning and Coordination (AI1):**
    * AI1 receives the project structure and idea.md content from the MCP API.
@@ -81,9 +78,6 @@ The AI3 system uses a two-stage approach to project structure generation:
    * Produces detailed documentation following language standards
    * Features intelligent provider fallback mechanism
    * Validates generated content quality with extensive checks
-   * Maintains context awareness using project documentation
-   * Handles Git integration for test management
-   * Supports multiple programming languages with specialized patterns
 
 4. **Automatic Test Execution and Fixing (AI3):**
    * Runs tests without user intervention.
@@ -96,42 +90,30 @@ The AI3 system uses a two-stage approach to project structure generation:
    * Makes decisions about task reassignment in case of errors.
    * Tracks the number of refinement attempts and determines when manual intervention is needed.
 
-## Enhanced Autonomous System Features
+## Areas for Improvement
 
-### Complete Production-Ready Program Generation
-* **End-to-End Automation**: System now creates fully functioning production-ready applications without human intervention
-* **Deployment-Ready Code**: Generated code is packaged and ready for deployment with proper structure
-* **Production Quality Standards**: Code adheres to industry best practices and quality standards
-* **Self-Contained Solutions**: Complete systems with all required components (frontend, backend, database, etc.)
-* **Zero-Intervention Workflow**: From idea to working product with no human input required
+The current implementation has several areas that need improvement:
 
-### Advanced Self-Correction of Code and Tests (AI3)
-* **Automatic Detection and Correction of Errors**: AI3 now has an enhanced TestRunner component that runs all tests and can automatically fix complex errors.
-* **Deep Source Code and Test Analysis**: AI3 uses pattern recognition to analyze code and tests to determine the exact source of errors.
-* **Autonomous Linting and Structural Error Correction**: AI3 automatically fixes formatting, style, and structural errors without user intervention.
-* **Self-Verification and Regression Testing**: After making fixes, AI3 runs comprehensive regression tests to ensure the changes were successful.
-* **Pattern-Based Error Prediction**: System identifies patterns in code that could lead to future errors and proactively fixes them.
+### Web Interface
+* The visualization interface for the development process needs to be completed
+* Dashboard for monitoring task queues, test results, and system status needs enhancement
+* Real-time updates via WebSockets need to be fully implemented
 
-### Enhanced Testing Capabilities
-* **Comprehensive Test Result Analysis**: TestRunner collects detailed information about results and generates reports.
-* **Code Test Coverage**: The system tracks and reports on code test coverage.
-* **Error Prediction**: The system analyzes error patterns to predict potential problems.
-* **Cross-Language Testing**: Support for testing in multiple programming languages (Python, JavaScript, TypeScript, Go, Rust, Java, C++)
-* **Integration Test Automation**: Automatically creates and runs integration tests between components
+### GitHub Integration
+* GitHub Actions for automated code testing needs to be fully implemented
+* Repository dispatch events need to be properly triggered and handled
 
-### Improved Decision Making (AI1)
-* **LLM-Based Evaluation of Test Results**: AI1 uses LLM models to make decisions regarding test results.
-* **Fix History Tracking**: AI1 tracks previous fix attempts to make better decisions.
-* **Critical Error Prioritization**: The system identifies and prioritizes the most important errors.
-* **Strategic Task Delegation**: Optimized distribution of tasks based on worker specialization
-* **Continuous Architecture Evaluation**: Ongoing assessment of system architecture with refinement recommendations
+### Error Handling
+* More robust error handling and recovery mechanisms need to be implemented
+* Automatic recovery from process failures needs enhancement
 
-### Enhanced Interaction Between AI Agents
-* **Extended Context Exchange**: AI agents share extended context for more coordinated work.
-* **Collaborative Problem Solving**: AI3 and AI1 jointly analyze and solve complex problems.
-* **Structured Error Reports**: Standardized detailed error reports for effective decision making.
-* **Proactive System Monitoring**: Automated detection and recovery from process failures
-* **Automatic Queue Rebalancing**: Dynamic rebalancing of task queues to optimize throughput
+### Monitoring and Logging
+* Comprehensive logging system needs improvement
+* Better visualization of system state and progress
+
+### Multi-Repository Structure
+* Better separation between the main system repository and the generated project repository
+* Improved Git integration for both repositories
 
 ## Setup and Launch
 
@@ -154,27 +136,6 @@ echo "GITHUB_TOKEN=ghp_YourGitHubPersonalAccessToken" > .env
 # Start the system
 ./run_async_services.sh --target "Description of your project"
 ```
-
-## System Evaluation
-
-### Strengths
-* **Full Production Autonomy**: The system is capable of creating complete production-ready software from idea to working product without human intervention.
-* **Self-Correction and Optimization**: Automatic detection and correction of errors with continuous optimization of code quality.
-* **Deep Problem Analysis**: Use of LLM to understand complex errors and fix them, with pattern recognition for similar issues.
-* **Flexible Architecture**: Modular structure allows easy extension of system functionality.
-* **Multi-Level Collaboration**: Effective interaction between AI agents to solve complex tasks.
-* **Cross-Language Support**: Handles multiple programming languages and frameworks with specialized knowledge.
-* **System Resilience**: Automatic recovery from failures and process crashes with state preservation.
-
-### Areas for Further Improvement
-* **Handling Super Complex Errors**: Further improving the system's ability to fix complex logical errors.
-* **Resource Usage Optimization**: Balancing computational resources between different system components.
-* **Expanding Supported Technologies**: Adding more programming languages and frameworks.
-* **Provider Integration**: Adding support for more LLM providers and improving fallback mechanisms.
-* **Test Coverage Enhancement**: Further improving automatic test coverage analysis and expansion.
-* **Documentation Quality**: Enhancing semantic understanding of documentation requirements.
-* **Large-Scale System Generation**: Scaling capabilities to generate enterprise-level applications.
-* **Containerization and Deployment**: Adding automatic deployment pipeline generation.
 
 ## Contributing to the Project
 

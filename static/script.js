@@ -347,6 +347,13 @@ function connectWebSocket() {
 
 function updateFullUI(data) {
   console.log("Updating full UI with data:", data);
+
+  // Update project summary with the full data
+  updateProjectSummary(data);
+
+  // Update timeline chart
+  updateTimelineChart(data);
+
   if (data.ai_status) {
     updateAllButtonStates(data.ai_status);
   }
@@ -1875,24 +1882,35 @@ document.addEventListener("DOMContentLoaded", () => {
   // Connect WebSocket
   connectWebSocket();
 
-  // Add theme button listeners (already handled by inline onclick, but could be done here)
-  // document.querySelectorAll('.theme-button').forEach(button => {
-  //     button.addEventListener('click', () => setTheme(button.dataset.theme));
-  // });
+  // Initialize enhanced file explorer
+  setupEnhancedFileExplorer();
+
+  // Initialize timeline chart
+  initializeTimelineChart();
+
+  // Set up editor change tracking
+  setupEditorChangeTracking();
 
   // Initial UI state (optional, WebSocket should provide data)
   updateQueues({ executor: [], tester: [], documenter: [] });
+
   // Initial call to updateStats uses the default actualTotalTasks = 0
   updateStats({}, {});
-  console.log("Initialization complete.");
 
-  // Ініціалізація слайдера навантаження
+  // Set initial project summary with placeholder data
+  updateProjectSummary({
+    target:
+      "AI-SYSTEMS Project\nAn automated multi-agent software development system",
+    structure: {},
+  });
+
+  // Initialize load slider
   const loadSlider = document.getElementById("ai1-buffer-slider");
   if (loadSlider) {
-    // Оновлюємо опис при завантаженні сторінки
+    // Update description on page load
     updateLoadDescription(loadSlider.value);
 
-    // Додаємо обробник події зміни слайдера
+    // Add event listener for slider changes
     loadSlider.addEventListener("input", function () {
       updateLoadDescription(this.value);
     });
@@ -2118,4 +2136,704 @@ function updateQueueItemStatuses(updatedStatuses) {
   });
 
   return anyStatusChanged;
+}
+
+// Project Summary Functions
+function updateProjectSummary(data) {
+  console.log("[ProjectSummary] Updating project summary with data:", data);
+
+  // Update project name and description
+  const projectName = document.getElementById("project-name");
+  const projectDescription = document.getElementById("project-description");
+  const filesCount = document.getElementById("project-files-count");
+  const projectProgress = document.getElementById("project-progress");
+  const lastActivity = document.getElementById("project-last-activity");
+
+  if (
+    !projectName ||
+    !projectDescription ||
+    !filesCount ||
+    !projectProgress ||
+    !lastActivity
+  ) {
+    console.error(
+      "[ProjectSummary] One or more summary elements not found in DOM"
+    );
+    return;
+  }
+
+  // Set default project name if we can't extract it
+  let name = "AI-SYSTEMS Project";
+  let description = "Multi-agent AI system for automated software development";
+
+  // Extract from target if available
+  if (data.target && typeof data.target === "string") {
+    const targetLines = data.target.trim().split("\n");
+    if (targetLines.length > 0) {
+      const firstLine = targetLines[0].trim();
+      // Look for project name patterns like "Project: Name" or just take first line
+      const match = firstLine.match(/^(?:Project:)?\s*(.+)$/i);
+      if (match && match[1]) {
+        name = match[1];
+      } else {
+        name = firstLine;
+      }
+
+      // Get description from remaining lines if available
+      if (targetLines.length > 1) {
+        description = targetLines.slice(1).join(" ").trim();
+      }
+    }
+  }
+
+  // Extract project name from repo structure if target doesn't have it
+  if (name === "AI-SYSTEMS Project" && data.structure && data.structure.repo) {
+    const projectDirs = Object.keys(data.structure.repo);
+    if (projectDirs.length > 0 && projectDirs[0] !== "project_name") {
+      // Use the actual project directory name instead of placeholder
+      name =
+        projectDirs[0].charAt(0).toUpperCase() +
+        projectDirs[0].slice(1) +
+        " Project";
+    }
+  }
+
+  // Update DOM elements
+  projectName.textContent = name;
+  projectDescription.textContent = description;
+
+  // Update files count
+  let fileCount = 0;
+  if (data.structure) {
+    fileCount = countFilesInStructure(data.structure);
+    filesCount.textContent = fileCount;
+  }
+
+  // Update progress percentage
+  let progressPercent = 0;
+  if (data.task_status_distribution) {
+    const total = Object.values(data.task_status_distribution).reduce(
+      (sum, count) => sum + count,
+      0
+    );
+    const completed = data.task_status_distribution.completed || 0;
+
+    if (total > 0) {
+      progressPercent = Math.round((completed / total) * 100);
+    }
+  } else if (data.actual_total_tasks && data.actual_total_tasks > 0) {
+    const completedTasks = parseInt(
+      document.getElementById("completed-tasks")?.textContent || "0"
+    );
+    progressPercent = Math.round(
+      (completedTasks / data.actual_total_tasks) * 100
+    );
+  }
+  projectProgress.textContent = `${progressPercent}%`;
+
+  // Update last activity time
+  const now = new Date();
+  if (data.last_activity_time) {
+    try {
+      const activityTime = new Date(data.last_activity_time);
+      lastActivity.textContent = activityTime.toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+    } catch (e) {
+      console.error("[ProjectSummary] Error parsing timestamp:", e);
+      lastActivity.textContent = now.toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+    }
+  } else {
+    lastActivity.textContent = now.toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  }
+
+  console.log(
+    "[ProjectSummary] Updated with name:",
+    name,
+    "files:",
+    fileCount,
+    "progress:",
+    progressPercent + "%"
+  );
+}
+
+function countFilesInStructure(structure) {
+  let count = 0;
+
+  function traverseStructure(node) {
+    if (!node || typeof node !== "object") return;
+
+    for (const key in node) {
+      if (Object.prototype.hasOwnProperty.call(node, key)) {
+        const value = node[key];
+
+        if (typeof value === "object" && value !== null) {
+          // This is a directory, recursively count its files
+          traverseStructure(value);
+        } else {
+          // This is a file
+          count++;
+        }
+      }
+    }
+  }
+
+  traverseStructure(structure);
+  return count;
+}
+
+// Initialize and update Timeline chart
+let timelineChart;
+
+function initializeTimelineChart() {
+  if (timelineChart) return;
+
+  const ctx = document.getElementById("timelineChart")?.getContext("2d");
+  if (!ctx) return;
+
+  const baseOptions = getBaseChartOptions();
+
+  timelineChart = new Chart(ctx, {
+    type: "line",
+    data: {
+      labels: [], // Time labels
+      datasets: [
+        {
+          label: "Created Files",
+          data: [],
+          borderColor: "rgba(var(--primary-color-rgb), 0.8)",
+          backgroundColor: "rgba(var(--primary-color-rgb), 0.2)",
+          tension: 0.4,
+          fill: true,
+        },
+        {
+          label: "Tasks Completed",
+          data: [],
+          borderColor: "rgba(var(--success-color-rgb), 0.8)",
+          backgroundColor: "rgba(var(--success-color-rgb), 0.2)",
+          tension: 0.4,
+          fill: true,
+        },
+      ],
+    },
+    options: {
+      ...baseOptions,
+      plugins: {
+        ...baseOptions.plugins,
+        title: {
+          ...baseOptions.plugins.title,
+          text: "Task Timeline",
+        },
+      },
+      scales: {
+        ...baseOptions.scales,
+        x: {
+          ...baseOptions.scales.x,
+          title: {
+            display: true,
+            text: "Time",
+            color: baseOptions.plugins.title.color,
+          },
+        },
+      },
+    },
+  });
+}
+
+function updateTimelineChart(data) {
+  if (!timelineChart) {
+    initializeTimelineChart();
+    if (!timelineChart) {
+      console.error("[Timeline] Failed to initialize timeline chart");
+      return;
+    }
+  }
+
+  console.log("[Timeline] Updating timeline chart with data:", data);
+
+  // Create a synthetic timeline if we don't have explicit timeline data
+  if (!data.timeline_data && data.progress_data) {
+    // Extract useful data points
+    const timestamp = data.progress_data.timestamp || new Date().toISOString();
+    const completedTasks = data.progress_data.completed_tasks || 0;
+
+    // Get file count from structure if available
+    let fileCount = 0;
+    if (data.structure) {
+      fileCount = countFilesInStructure(data.structure);
+    } else if (data.git_activity?.values?.length > 0) {
+      // Fallback to git activity for file count estimate
+      fileCount = data.git_activity.values[data.git_activity.values.length - 1];
+    }
+
+    // Formatted time label
+    let timeLabel;
+    try {
+      timeLabel = new Date(timestamp).toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+    } catch (e) {
+      console.error("[Timeline] Error formatting timestamp:", e);
+      timeLabel = new Date().toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+    }
+
+    // Add data point to chart
+    if (!timelineChart.data.labels.includes(timeLabel)) {
+      // Add new time label
+      timelineChart.data.labels.push(timeLabel);
+
+      // Add file count data point
+      timelineChart.data.datasets[0].data.push(fileCount);
+
+      // Add completed tasks data point
+      timelineChart.data.datasets[1].data.push(completedTasks);
+
+      // Limit to 10 data points to avoid overcrowding
+      const MAX_POINTS = 10;
+      if (timelineChart.data.labels.length > MAX_POINTS) {
+        timelineChart.data.labels.shift();
+        timelineChart.data.datasets[0].data.shift();
+        timelineChart.data.datasets[1].data.shift();
+      }
+
+      // Apply current theme colors
+      updateChartTheme(timelineChart, getChartFontColor());
+
+      // Update the chart
+      timelineChart.update();
+      console.log("[Timeline] Added data point:", {
+        time: timeLabel,
+        files: fileCount,
+        tasks: completedTasks,
+      });
+    }
+  } else if (data.timeline_data) {
+    // Use explicit timeline data if available
+    timelineChart.data.labels = data.timeline_data.labels || [];
+
+    if (data.timeline_data.files_created) {
+      timelineChart.data.datasets[0].data = data.timeline_data.files_created;
+    }
+
+    if (data.timeline_data.tasks_completed) {
+      timelineChart.data.datasets[1].data = data.timeline_data.tasks_completed;
+    }
+
+    // Apply current theme colors
+    updateChartTheme(timelineChart, getChartFontColor());
+
+    // Update the chart
+    timelineChart.update();
+    console.log("[Timeline] Updated from explicit timeline data");
+  }
+}
+
+// Enhanced File Explorer Functions
+function setupEnhancedFileExplorer() {
+  // File search functionality
+  const searchInput = document.getElementById("file-search-input");
+  const searchButton = document.getElementById("file-search-button");
+
+  if (searchInput && searchButton) {
+    searchButton.addEventListener("click", () =>
+      performFileSearch(searchInput.value)
+    );
+    searchInput.addEventListener("keyup", (e) => {
+      if (e.key === "Enter") {
+        performFileSearch(searchInput.value);
+      } else if (searchInput.value === "") {
+        // Clear search highlighting if search field is emptied
+        clearFileSearchHighlighting();
+      }
+    });
+  }
+
+  // Expand/collapse all functionality
+  const expandAllButton = document.getElementById("expand-all-button");
+  const collapseAllButton = document.getElementById("collapse-all-button");
+
+  if (expandAllButton) {
+    expandAllButton.addEventListener("click", expandAllFolders);
+  }
+
+  if (collapseAllButton) {
+    collapseAllButton.addEventListener("click", collapseAllFolders);
+  }
+
+  // Refresh structure button
+  const refreshButton = document.getElementById("refresh-structure-button");
+  if (refreshButton) {
+    refreshButton.addEventListener("click", refreshFileStructure);
+  }
+
+  // Editor actions
+  const saveFileButton = document.getElementById("save-file-button");
+  const copyContentButton = document.getElementById("copy-content-button");
+
+  if (saveFileButton) {
+    saveFileButton.addEventListener("click", saveCurrentFile);
+  }
+
+  if (copyContentButton) {
+    copyContentButton.addEventListener("click", copyEditorContent);
+  }
+}
+
+function performFileSearch(query) {
+  if (!query) return;
+
+  query = query.toLowerCase();
+  console.log(`[FileSearch] Searching for: ${query}`);
+
+  const fileStructure = document.getElementById("file-structure");
+  if (!fileStructure) return;
+
+  // Clear previous search highlights
+  clearFileSearchHighlighting();
+
+  // Search through all file elements
+  const fileElements = fileStructure.querySelectorAll(".file");
+  let matchFound = false;
+
+  fileElements.forEach((fileElement) => {
+    const fileName = fileElement.textContent.toLowerCase();
+
+    if (fileName.includes(query)) {
+      fileElement.classList.add("search-match");
+
+      // Expand parent folders to show the match
+      let parent = fileElement.closest("li");
+      while (parent) {
+        if (parent.classList.contains("folder-item")) {
+          parent.classList.add("expanded");
+        }
+        parent = parent.parentElement.closest("li");
+      }
+
+      matchFound = true;
+    }
+  });
+
+  if (!matchFound) {
+    showNotification(`No files found containing "${query}"`, "warning");
+  } else {
+    // Scroll to first match
+    const firstMatch = fileStructure.querySelector(".search-match");
+    if (firstMatch) {
+      firstMatch.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }
+}
+
+function clearFileSearchHighlighting() {
+  const fileStructure = document.getElementById("file-structure");
+  if (!fileStructure) return;
+
+  const highlightedElements = fileStructure.querySelectorAll(".search-match");
+  highlightedElements.forEach((element) => {
+    element.classList.remove("search-match");
+  });
+}
+
+function expandAllFolders() {
+  const fileStructure = document.getElementById("file-structure");
+  if (!fileStructure) return;
+
+  const folderItems = fileStructure.querySelectorAll(".folder-item");
+  folderItems.forEach((item) => {
+    item.classList.add("expanded");
+  });
+
+  showNotification("All folders expanded", "info");
+}
+
+function collapseAllFolders() {
+  const fileStructure = document.getElementById("file-structure");
+  if (!fileStructure) return;
+
+  const folderItems = fileStructure.querySelectorAll(".folder-item");
+  folderItems.forEach((item) => {
+    item.classList.remove("expanded");
+  });
+
+  showNotification("All folders collapsed", "info");
+}
+
+function refreshFileStructure() {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ action: "get_file_structure" }));
+    showNotification("Refreshing file structure...", "info");
+  } else {
+    showNotification("Cannot refresh: WebSocket connection is closed", "error");
+  }
+}
+
+// Current file tracking
+let currentFilePath = "";
+
+function saveCurrentFile() {
+  if (!currentFilePath || !editor) {
+    showNotification("No file selected to save", "warning");
+    return;
+  }
+
+  const content = editor.getValue();
+
+  // Send save request to server
+  fetchWithTimeout(
+    "/save_file",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        path: currentFilePath,
+        content: content,
+      }),
+    },
+    10000
+  )
+    .then((response) => {
+      if (response.ok) {
+        showNotification(`File saved: ${currentFilePath}`, "success");
+        document.getElementById("save-file-button").disabled = true;
+      } else {
+        return response.text().then((text) => {
+          throw new Error(`Failed to save file: ${text}`);
+        });
+      }
+    })
+    .catch((error) => {
+      console.error("Error saving file:", error);
+      showNotification(`Error saving file: ${error.message}`, "error");
+    });
+}
+
+async function fetchWithTimeout(resource, options, timeout = 8000) {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeout);
+
+  try {
+    const response = await fetch(resource, {
+      ...options,
+      signal: controller.signal,
+    });
+    clearTimeout(id);
+    return response;
+  } catch (error) {
+    clearTimeout(id);
+    throw error;
+  }
+}
+
+function copyEditorContent() {
+  if (!editor) {
+    showNotification("Editor not available", "warning");
+    return;
+  }
+
+  const content = editor.getValue();
+
+  if (!content) {
+    showNotification("No content to copy", "warning");
+    return;
+  }
+
+  // Use modern clipboard API with fallback
+  if (navigator.clipboard) {
+    navigator.clipboard
+      .writeText(content)
+      .then(() => {
+        showNotification("Content copied to clipboard", "success");
+      })
+      .catch((err) => {
+        console.error("Could not copy text:", err);
+        fallbackCopyTextToClipboard(content);
+      });
+  } else {
+    fallbackCopyTextToClipboard(content);
+  }
+}
+
+function fallbackCopyTextToClipboard(text) {
+  // Fallback for browsers without clipboard API
+  const textArea = document.createElement("textarea");
+  textArea.value = text;
+
+  // Make the textarea out of viewport
+  textArea.style.position = "fixed";
+  textArea.style.left = "-999999px";
+  textArea.style.top = "-999999px";
+  document.body.appendChild(textArea);
+  textArea.focus();
+  textArea.select();
+
+  try {
+    const successful = document.execCommand("copy");
+    const msg = successful
+      ? "Content copied to clipboard"
+      : "Unable to copy content";
+    showNotification(msg, successful ? "success" : "warning");
+  } catch (err) {
+    console.error("Fallback: Oops, unable to copy", err);
+    showNotification("Failed to copy content", "error");
+  }
+
+  document.body.removeChild(textArea);
+}
+
+// Track editor changes
+function setupEditorChangeTracking() {
+  if (!editor) return;
+
+  editor.onDidChangeModelContent((e) => {
+    // Enable save button when content changes
+    const saveButton = document.getElementById("save-file-button");
+    if (saveButton) {
+      saveButton.disabled = false;
+    }
+  });
+}
+
+// Enhanced file structure renderer
+function updateFileStructure(structure) {
+  const fileStructureDiv = document.getElementById("file-structure");
+  if (!fileStructureDiv) {
+    console.error("File structure container not found!");
+    return;
+  }
+
+  console.log("Updating file structure with data:", structure);
+
+  fileStructureDiv.innerHTML = "";
+
+  if (
+    !structure ||
+    typeof structure !== "object" ||
+    Object.keys(structure).length === 0
+  ) {
+    fileStructureDiv.innerHTML =
+      "<p><em>Project structure is empty or unavailable.</em></p>";
+    return;
+  }
+
+  const rootUl = document.createElement("ul");
+  fileStructureDiv.appendChild(rootUl);
+
+  renderNode(structure, rootUl);
+
+  // Update project summary with file count
+  const fileCount = countFilesInStructure(structure);
+  const filesCountElement = document.getElementById("project-files-count");
+  if (filesCountElement) {
+    filesCountElement.textContent = fileCount;
+  }
+}
+
+function renderNode(node, parentUl, currentPath = "") {
+  if (typeof node !== "object" || node === null) {
+    console.error(`Invalid node at path '${currentPath}'`);
+    return;
+  }
+
+  const entries = Object.entries(node).sort(
+    ([keyA, valueA], [keyB, valueB]) => {
+      const isDirA = typeof valueA === "object" && valueA !== null;
+      const isDirB = typeof valueB === "object" && valueB !== null;
+
+      // Folders first, then files
+      if (isDirA !== isDirB) {
+        return isDirA ? -1 : 1;
+      }
+
+      // Alphabetical sorting
+      return String(keyA).localeCompare(String(keyB));
+    }
+  );
+
+  for (const [key, value] of entries) {
+    const li = document.createElement("li");
+    parentUl.appendChild(li);
+
+    const isDirectory = typeof value === "object" && value !== null;
+    const itemPath = currentPath ? `${currentPath}/${key}` : key;
+
+    if (isDirectory) {
+      // Directory
+      li.classList.add("folder-item");
+      li.innerHTML = `<span class="folder"><i class="fas fa-folder"></i> ${key}</span>`;
+
+      const folderSpan = li.querySelector(".folder");
+      folderSpan.addEventListener("click", (e) => {
+        li.classList.toggle("expanded");
+
+        // Change icon when expanded/collapsed
+        const icon = folderSpan.querySelector("i");
+        if (li.classList.contains("expanded")) {
+          icon.classList.remove("fa-folder");
+          icon.classList.add("fa-folder-open");
+        } else {
+          icon.classList.remove("fa-folder-open");
+          icon.classList.add("fa-folder");
+        }
+
+        e.stopPropagation();
+      });
+
+      const subUl = document.createElement("ul");
+      li.appendChild(subUl);
+
+      if (Object.keys(value).length > 0) {
+        renderNode(value, subUl, itemPath);
+      } else {
+        // Empty folder
+        const emptyLi = document.createElement("li");
+        emptyLi.innerHTML = "<em>Empty folder</em>";
+        emptyLi.style.color = "var(--secondary-color)";
+        emptyLi.style.fontStyle = "italic";
+        subUl.appendChild(emptyLi);
+      }
+    } else {
+      // File
+      const iconClass = getFileIcon(key);
+      li.innerHTML = `<span class="file" data-path="${itemPath}"><i class="fas ${iconClass}"></i> ${key}</span>`;
+
+      const fileSpan = li.querySelector(".file");
+      fileSpan.addEventListener("click", (e) => {
+        // Remove previous selection
+        const previouslySelected = document.querySelectorAll(".file.selected");
+        previouslySelected.forEach((el) => el.classList.remove("selected"));
+
+        // Mark as selected
+        fileSpan.classList.add("selected");
+
+        // Load file content
+        loadFileContent(itemPath);
+
+        // Update current file path display
+        const currentFilePathElement =
+          document.getElementById("current-file-path");
+        if (currentFilePathElement) {
+          currentFilePathElement.textContent = itemPath;
+        }
+
+        // Update global tracking variable
+        currentFilePath = itemPath;
+
+        e.stopPropagation();
+      });
+    }
+  }
 }

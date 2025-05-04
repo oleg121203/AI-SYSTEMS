@@ -43,6 +43,31 @@
       </div>
     </div>
 
+    <!-- Project Summary Banner -->
+    <div class="project-summary-banner">
+      <div class="project-summary-info">
+        <div class="project-icon"><i class="fas fa-project-diagram"></i></div>
+        <div class="project-details">
+          <h2 id="project-name">Project: Loading...</h2>
+          <p id="project-description">Gathering project information...</p>
+        </div>
+      </div>
+      <div class="project-stats">
+        <div class="stat-item">
+          <span class="stat-value" id="project-files-count">-</span>
+          <span class="stat-label">Files</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-value" id="project-progress">0%</span>
+          <span class="stat-label">Complete</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-value" id="project-last-activity">-</span>
+          <span class="stat-label">Last Activity</span>
+        </div>
+      </div>
+    </div>
+
     <!-- Основний контейнер вмісту -->
     <div class="container">
       <!-- Control Panel -->
@@ -108,18 +133,25 @@
           <p>Completed: <span id="completed-tasks">0</span></p>
           <p>Efficiency: <span id="efficiency">0%</span></p>
         </div>
+        <!-- Task Timeline -->
+        <div class="task-timeline">
+          <h3><i class="fas fa-clock"></i> Task Timeline</h3>
+          <div class="timeline-container">
+            <div id="timeline-chart-container">
+              <canvas id="timelineChart"></canvas>
+            </div>
+          </div>
+        </div>
         <!-- Поле для налаштування навантаження системи -->
         <div class="config-item load-control">
-          <h3>
-            <i class="fas fa-tachometer-alt"></i> Рівень навантаження системи
-          </h3>
+          <h3><i class="fas fa-tachometer-alt"></i> System Load Level</h3>
           <div class="load-slider-container">
             <div class="load-level-labels">
-              <span class="load-label">Мінімальне</span>
-              <span class="load-label">Низьке</span>
-              <span class="load-label">Середнє</span>
-              <span class="load-label">Високе</span>
-              <span class="load-label">Максимальне</span>
+              <span class="load-label">Minimal</span>
+              <span class="load-label">Low</span>
+              <span class="load-label">Medium</span>
+              <span class="load-label">High</span>
+              <span class="load-label">Maximum</span>
             </div>
             <input
               type="range"
@@ -132,12 +164,12 @@
             />
             <div class="load-description">
               <p id="load-description-text">
-                <strong>Рівень 4 (Високе навантаження):</strong> Швидка
-                генерація, висока продуктивність, значне навантаження на MCP.
+                <strong>Level 4 (High Load):</strong> Fast generation, high
+                productivity, significant MCP load.
               </p>
             </div>
           </div>
-          <button onclick="saveLoadLevel()">Зберегти налаштування</button>
+          <button onclick="saveLoadLevel()">Save Settings</button>
         </div>
         <div class="charts">
           <div class="chart-item">
@@ -146,25 +178,63 @@
           <div class="chart-item">
             <canvas id="statusPieChart"></canvas>
           </div>
-            <div class="chart-item doughnut-container">
+          <div class="chart-item doughnut-container">
             <canvas id="progressChart"></canvas>
           </div>
-            <div class="chart-item">
+          <div class="chart-item">
             <canvas id="gitChart"></canvas>
           </div>
         </div>
       </section>
 
-      <!-- File Panel -->
+      <!-- File Panel with Enhanced Structure -->
       <section class="panel file-panel">
         <h2><i class="fas fa-folder-open"></i> Files & Editor</h2>
         <div class="file-panel-content">
-          <div id="file-structure">
-            <!-- File structure will be populated by JS -->
-            <p><em>Loading file structure...</em></p>
+          <div class="file-explorer-header">
+            <div class="file-search">
+              <input
+                type="text"
+                id="file-search-input"
+                placeholder="Search files..."
+              />
+              <button id="file-search-button">
+                <i class="fas fa-search"></i>
+              </button>
+            </div>
+            <div class="file-actions">
+              <button id="expand-all-button" title="Expand All">
+                <i class="fas fa-expand-alt"></i>
+              </button>
+              <button id="collapse-all-button" title="Collapse All">
+                <i class="fas fa-compress-alt"></i>
+              </button>
+              <button id="refresh-structure-button" title="Refresh Structure">
+                <i class="fas fa-sync-alt"></i>
+              </button>
+            </div>
           </div>
-          <div id="editor">
-            <!-- Monaco Editor will be initialized here -->
+          <div class="file-explorer-container">
+            <div id="file-structure">
+              <!-- File structure will be populated by JS -->
+              <p><em>Loading file structure...</em></p>
+            </div>
+          </div>
+          <div class="editor-container">
+            <div class="editor-header">
+              <span id="current-file-path">No file selected</span>
+              <div class="editor-actions">
+                <button id="save-file-button" title="Save File" disabled>
+                  <i class="fas fa-save"></i>
+                </button>
+                <button id="copy-content-button" title="Copy Content">
+                  <i class="fas fa-copy"></i>
+                </button>
+              </div>
+            </div>
+            <div id="editor">
+              <!-- Monaco Editor will be initialized here -->
+            </div>
           </div>
         </div>
       </section>
