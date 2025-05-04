@@ -18,7 +18,31 @@
     <div class="log-panel-container">
       <div class="log-panel-trigger"></div>
       <div class="panel log-panel" id="log-panel">
-        <h2><i class="fas fa-terminal"></i> System Logs</h2>
+        <div class="log-panel-header">
+          <h2><i class="fas fa-terminal"></i> System Logs</h2>
+          <div class="log-panel-config">
+            <div class="log-config-item">
+              <label for="log-display-seconds">Show Duration (s):</label>
+              <input
+                type="number"
+                id="log-display-seconds"
+                min="1"
+                max="10"
+                value="3"
+              />
+            </div>
+            <div class="log-config-item">
+              <label for="log-max-lines">Max Lines:</label>
+              <input
+                type="number"
+                id="log-max-lines"
+                min="20"
+                max="500"
+                value="60"
+              />
+            </div>
+          </div>
+        </div>
         <div id="log-content">
           <p><em>Connecting to server...</em></p>
         </div>

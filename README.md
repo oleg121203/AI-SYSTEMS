@@ -14,6 +14,40 @@ The system consists of the following main components:
 - **MCP API**: Central API for interaction between components, manages task queues and provides status monitoring.
 - **Web Interface**: Visualization of the development process and system management (work in progress).
 
+## Web Interface
+
+The system includes a modern, responsive web interface that provides visualization and management of the development process. Key features include:
+
+- **Dashboard Overview**: Provides a summary of the project status, including total files, completion percentage, and recent activity.
+- **Control Center**: Allows starting/stopping individual AI agents or the entire system, with visual status indicators.
+- **Prompt Management**: Edit and configure AI agent prompts directly from the interface.
+- **Real-time Monitoring**: Charts and visualizations showing task distribution, completion status, and progress over time.
+- **File Explorer & Editor**: Browse and edit project files directly in the browser with syntax highlighting.
+- **Task Queues**: Monitor and track tasks in the executor, tester, and documenter queues.
+- **System Logs**: View real-time logs with configurable display settings.
+- **Theme Selection**: Multiple theme options including dark and light modes, and seasonal themes.
+
+The interface is built with modern web technologies:
+- Pure JavaScript for frontend logic
+- Chart.js for data visualization
+- Monaco Editor for code editing
+- WebSockets for real-time updates
+- Responsive design for desktop and mobile use
+
+### Web Interface Setup
+
+The web interface is automatically launched when starting the system with the `run_async_services.sh` script. By default, it's accessible at:
+
+```
+http://localhost:8000
+```
+
+You can interact with the interface to:
+1. View real-time progress of your project development
+2. Manually adjust AI agent configurations if needed
+3. Browse and edit generated files
+4. Monitor system performance and task distribution
+
 ## Repository Structure
 
 The system currently uses the following structure:

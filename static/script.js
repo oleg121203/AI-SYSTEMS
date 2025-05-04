@@ -194,7 +194,9 @@ function handleLogUpdate(logLine) {
       logContent.innerHTML = "";
     }
     logContent.appendChild(logEntry);
-    while (logContent.childElementCount > MAX_LOG_LINES) {
+
+    // Use configurable maxLogLines
+    while (logContent.childElementCount > maxLogLines) {
       if (logContent.firstChild) {
         logContent.removeChild(logContent.firstChild);
       }
@@ -2048,36 +2050,90 @@ function saveLoadLevel() {
   }
 }
 
-// --- Log Panel Auto-Retract ---
-let logPanelTimeoutId = null; // Variable to hold the timeout ID
+// --- Log Panel Configuration and Behavior ---
+let logDisplaySeconds = 3; // Default display duration in seconds
+let maxLogLines = 60; // Default maximum lines to display
+let logPanelMouseIsOver = false; // Track if mouse is over the panel
 
 function setupLogPanelBehavior() {
   const logPanelContainer = document.querySelector(".log-panel-container");
+  const logDisplaySecondsInput = document.getElementById("log-display-seconds");
+  const logMaxLinesInput = document.getElementById("log-max-lines");
+
+  // Load saved settings from localStorage if available
+  if (localStorage.getItem("logDisplaySeconds")) {
+    logDisplaySeconds = parseInt(localStorage.getItem("logDisplaySeconds"), 10);
+    if (logDisplaySecondsInput)
+      logDisplaySecondsInput.value = logDisplaySeconds;
+  }
+
+  if (localStorage.getItem("maxLogLines")) {
+    maxLogLines = parseInt(localStorage.getItem("maxLogLines"), 10);
+    if (logMaxLinesInput) logMaxLinesInput.value = maxLogLines;
+  }
+
+  // Save settings when inputs change
+  if (logDisplaySecondsInput) {
+    logDisplaySecondsInput.addEventListener("change", function () {
+      logDisplaySeconds = parseInt(this.value, 10);
+      localStorage.setItem("logDisplaySeconds", logDisplaySeconds);
+      console.log(`Log display duration set to ${logDisplaySeconds} seconds`);
+    });
+  }
+
+  if (logMaxLinesInput) {
+    logMaxLinesInput.addEventListener("change", function () {
+      maxLogLines = parseInt(this.value, 10);
+      localStorage.setItem("maxLogLines", maxLogLines);
+      console.log(`Maximum log lines set to ${maxLogLines}`);
+
+      // Trim existing logs if needed
+      if (logContent) {
+        while (logContent.childElementCount > maxLogLines) {
+          if (logContent.firstChild) {
+            logContent.removeChild(logContent.firstChild);
+          }
+        }
+      }
+    });
+  }
 
   if (logPanelContainer) {
+    // Show log panel when mouse enters trigger area
     logPanelContainer.addEventListener("mouseenter", () => {
-      // Clear any existing timeout when the mouse enters the area
-      if (logPanelTimeoutId) {
-        clearTimeout(logPanelTimeoutId);
-        logPanelTimeoutId = null;
-        console.log("Log panel retract timer cleared (mouse entered).");
-      }
-      // Add a class to ensure it's visible (CSS handles the transition)
+      logPanelMouseIsOver = true;
       logPanelContainer.classList.add("log-panel-hover");
     });
 
+    // Handle mouse leave
     logPanelContainer.addEventListener("mouseleave", () => {
-      // Start a timer to retract the panel when the mouse leaves
-      logPanelTimeoutId = setTimeout(() => {
-        logPanelContainer.classList.remove("log-panel-hover");
-        console.log("Log panel retracted after 3s timeout.");
-        logPanelTimeoutId = null;
-      }, 3000); // 3000 milliseconds = 3 seconds
-      console.log("Log panel retract timer started (3s).");
+      logPanelMouseIsOver = false;
+      retractLogPanel();
+    });
+
+    // Handle click anywhere on the document to close log panel
+    document.addEventListener("click", (e) => {
+      // Only close if the panel is visible and the click is not on the panel
+      if (
+        logPanelContainer.classList.contains("log-panel-hover") &&
+        !logPanelContainer.contains(e.target)
+      ) {
+        logPanelMouseIsOver = false;
+        retractLogPanel();
+      }
     });
   } else {
     console.error("Log panel container not found for setting up behavior.");
   }
+}
+
+function retractLogPanel() {
+  const logPanelContainer = document.querySelector(".log-panel-container");
+  if (!logPanelContainer || logPanelMouseIsOver) return;
+
+  // Immediately remove hover class since we want it to close on click
+  logPanelContainer.classList.remove("log-panel-hover");
+  console.log("Log panel retracted immediately.");
 }
 
 // --- New function to update queue item statuses dynamically ---

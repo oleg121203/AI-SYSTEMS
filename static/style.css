@@ -713,18 +713,20 @@ body {
   flex-direction: column;
   flex-grow: 1; /* Allow content to fill panel */
   min-height: 0; /* Necessary for flex-grow in column */
+  overflow: visible; /* Allow content to expand */
 }
 
 #file-structure {
   font-family: monospace;
   background: var(--bg-color);
   padding: 10px;
-  border: 1px solid var(--border-color);
+  border: none; /* Remove border as it's now on the container */
   border-radius: 4px;
-  margin-bottom: 15px;
+  margin-bottom: 0; /* Remove margin-bottom */
   font-size: 0.9em;
   flex-shrink: 0; /* Prevent shrinking */
   flex-grow: 1; /* Allow to grow within the resizable panel */
+  overflow: visible; /* Allow content to be fully visible */
 }
 
 #file-structure > ul {
@@ -1446,7 +1448,10 @@ body {
   padding: 10px;
   background-color: var(--bg-color);
   overflow: auto;
-  max-height: 250px;
+  max-height: none; /* Remove max-height limitation to allow vertical expansion */
+  flex-grow: 1; /* Allow container to grow */
+  display: flex; /* Use flex layout */
+  flex-direction: column; /* Stack content vertically */
 }
 
 .editor-container {
@@ -1578,4 +1583,46 @@ body {
   .file-search {
     max-width: 100%;
   }
+}
+
+/* Log Panel - Configuration Controls */
+.log-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.log-panel-header h2 {
+  margin: 0;
+  padding: 0;
+  border: none;
+}
+
+.log-panel-config {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+}
+
+.log-config-item {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.log-config-item label {
+  font-size: 0.8rem;
+  color: var(--secondary-color);
+  white-space: nowrap;
+}
+
+.log-config-item input {
+  width: 60px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  border: 1px solid var(--input-border);
+  background: var(--input-bg);
+  color: var(--input-text);
+  font-size: 0.8rem;
 }

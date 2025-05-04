@@ -68,7 +68,8 @@
         "DavidAnson.vscode-markdownlint",
         "SonarSource.sonarlint-vscode",
         "ciiqr.note",
-        "GitHub.vscode-github-actions"
+        "GitHub.vscode-github-actions",
+        "ms-azuretools.vscode-containers"
       ]
     }
   },
