@@ -473,12 +473,13 @@ function createTaskListItem(task) {
   const li = document.createElement("li");
   li.setAttribute("data-task-id", task.id);
   li.setAttribute("data-status", status);
-  li.classList.add("queue-item");
+  li.classList.add("task-item");
 
-  // Summary Row
+  // Create the task summary section (always visible)
   const summaryDiv = document.createElement("div");
   summaryDiv.className = "task-summary";
 
+  // Create status icon with appropriate styling
   const statusIcon = document.createElement("span");
   statusIcon.className = "status-icon";
   try {
@@ -488,27 +489,39 @@ function createTaskListItem(task) {
     statusIcon.innerHTML = '<i class="fas fa-question-circle"></i>';
   }
 
+  // Create filename display
   const taskFilename = document.createElement("span");
   taskFilename.className = "task-filename";
   taskFilename.textContent = task.filename || `Task ${task.id.substring(0, 8)}`;
 
+  // Create task ID display (shortened)
   const taskIdSpan = document.createElement("span");
   taskIdSpan.className = "task-id";
-  taskIdSpan.textContent = `(ID: ${task.id.substring(0, 8)})`;
+  taskIdSpan.textContent = `ID: ${task.id.substring(0, 8)}`;
 
+  // Assemble the summary section
   summaryDiv.appendChild(statusIcon);
   summaryDiv.appendChild(taskFilename);
   summaryDiv.appendChild(taskIdSpan);
   li.appendChild(summaryDiv);
 
-  // Details Div (Hidden)
+  // Create details section (initially hidden)
   const detailsDiv = document.createElement("div");
   detailsDiv.className = "task-details";
-  detailsDiv.textContent = task.text;
+  detailsDiv.textContent = task.text || "No details available";
   li.appendChild(detailsDiv);
 
-  // Click Listener
-  li.addEventListener("click", () => li.classList.toggle("expanded"));
+  // Add click handler to toggle expanded state
+  li.addEventListener("click", () => {
+    li.classList.toggle("expanded");
+
+    // If it was just expanded, scroll to ensure it's fully visible
+    if (li.classList.contains("expanded")) {
+      setTimeout(() => {
+        li.scrollIntoView({ behavior: "smooth", block: "nearest" });
+      }, 100);
+    }
+  });
 
   return li;
 }
@@ -2171,24 +2184,60 @@ function updateQueueItemStatuses(updatedStatuses) {
 
         // Only update if status has changed
         if (newStatus !== currentStatus) {
-          li.setAttribute("data-status", newStatus);
+          // Apply transition class for animation
+          li.classList.add("status-changing");
 
-          // Update the status icon
-          const statusIcon = li.querySelector(".status-icon");
-          if (statusIcon) {
-            try {
-              statusIcon.innerHTML = getStatusIcon(newStatus);
-              anyStatusChanged = true;
-              console.log(
-                `[Queue Dynamic Update] Task ${taskId} in ${role} queue updated to status: ${newStatus}`
-              );
-            } catch (e) {
-              console.error(
-                `Error updating status icon for task ${taskId} to ${newStatus}:`,
-                e
-              );
+          // Update the status after a short delay (for transition effect)
+          setTimeout(() => {
+            li.setAttribute("data-status", newStatus);
+
+            // Update the status icon
+            const statusIcon = li.querySelector(".status-icon");
+            if (statusIcon) {
+              try {
+                statusIcon.innerHTML = getStatusIcon(newStatus);
+                anyStatusChanged = true;
+
+                // Add appropriate animation based on status
+                if (newStatus === "processing") {
+                  li.classList.add("pulse-animation");
+                } else if (
+                  newStatus === "completed" ||
+                  newStatus === "accepted" ||
+                  newStatus === "code_received"
+                ) {
+                  li.classList.add("success-animation");
+                  setTimeout(
+                    () => li.classList.remove("success-animation"),
+                    2000
+                  );
+                } else if (
+                  newStatus === "failed" ||
+                  newStatus === "needs_rework"
+                ) {
+                  li.classList.add("error-animation");
+                  setTimeout(
+                    () => li.classList.remove("error-animation"),
+                    2000
+                  );
+                }
+
+                console.log(
+                  `[Queue Dynamic Update] Task ${taskId} in ${role} queue updated to status: ${newStatus}`
+                );
+              } catch (e) {
+                console.error(
+                  `Error updating status icon for task ${taskId} to ${newStatus}:`,
+                  e
+                );
+              }
             }
-          }
+
+            // Remove transition class after update is complete
+            setTimeout(() => {
+              li.classList.remove("status-changing");
+            }, 300);
+          }, 150); // Short delay for transition effect
         }
       }
     });

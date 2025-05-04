@@ -413,6 +413,11 @@ async def broadcast_monitoring_stats():
                 "type": "monitoring_update",
                 "total_tasks": actual_total_tasks,
                 "completed_tasks": completed_tasks,
+                "queues": {
+                    "executor": [t for t in executor_queue._queue],
+                    "tester": [t for t in tester_queue._queue],
+                    "documenter": [t for t in documenter_queue._queue],
+                },
             }
             await broadcast_specific_update(update_data)
             logger.debug(

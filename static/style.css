@@ -71,7 +71,7 @@ body[data-theme="dark"] {
   ); /* Invert gradient for press */
   --button-shadow: 0 3px 5px rgba(0, 0, 0, 0.4);
   --button-inset-shadow: inset 0 1px 2px rgba(255, 255, 255, 0.1),
-    inset 0 -1px 1px rgba(0, 0, 0, 0.4);
+    inset 0 -1px 1px rgba(0, 0, 0, 4);
   --button-hover-shadow: 0 4px 7px rgba(0, 0, 0, 0.5);
   --button-active-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.6);
   --heading-color-rgb: 199, 146, 234; /* Purple */
@@ -786,136 +786,272 @@ body {
 
 /* Queue Panel */
 .queue-list {
-  display: flex; /* Use flexbox */
-  flex-direction: column; /* Stack items vertically */
+  display: flex;
+  flex-direction: column;
   gap: 15px;
   flex-grow: 1;
-  min-height: 0; /* Allow shrinking */
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 5px;
 }
 
 .queue-list > div {
-  /* Target the direct div children containing h4 and ul */
-  width: 100%; /* Ensure each queue section takes full width */
+  width: 100%;
+  margin-bottom: 15px;
 }
 
-.queue-list h3 {
-  margin-bottom: 10px;
+.queue-list h4 {
+  margin: 0 0 10px 0;
   color: var(--heading-color);
-  font-size: 1.1em;
+  font-size: 1rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.queue-list h4 i {
+  margin-right: 8px;
+  opacity: 0.8;
+}
+
+.queue-list h4 span {
+  background-color: rgba(var(--primary-color-rgb), 0.1);
+  color: var(--primary-color);
+  border-radius: 12px;
+  padding: 2px 8px;
+  font-size: 0.85rem;
+  margin-left: 8px;
+  min-width: 24px;
+  text-align: center;
 }
 
 .queue-item {
   list-style: none;
   padding: 0;
   margin: 0;
-  border: 1px solid var(--border-color);
-  border-radius: 4px;
-  padding: 10px;
-  background-color: var(--bg-color);
-  flex-shrink: 0;
-}
-
-.queue-item h4 {
-  /* Role title */
-  margin-top: 0;
-  margin-bottom: 8px;
-  font-size: 1em;
-  color: var(--secondary-color);
+  /* Remove max-height and overflow-y to allow vertical expansion */
+  border-radius: 6px;
+  background-color: rgba(var(--bg-color-rgb), 0.5);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 
 .queue-item li {
-  padding: 6px 8px;
-  margin-bottom: 5px;
-  border-radius: 3px;
-  font-size: 0.85em;
-  border: 1px solid transparent;
-  display: flex; /* Keep flex */
-  flex-direction: column; /* Add this to stack summary and details vertically */
-  gap: 5px;
-  background-color: var(--container-bg); /* Background for items */
+  margin: 8px;
+  border-radius: 6px;
+  background-color: var(--container-bg);
   border: 1px solid var(--border-color);
-  cursor: pointer; /* Indicate clickable */
-  transition: background-color 0.2s ease;
+  overflow: hidden;
+  transition: all 0.2s ease;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
 }
 
 .queue-item li:hover {
-  background-color: rgba(128, 128, 128, 0.1); /* Subtle hover */
-}
-
-.queue-item li .task-details {
-  display: none; /* Hide details by default */
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px dashed var(--border-color);
-  font-size: 0.95em; /* Slightly larger for readability */
-  white-space: pre-wrap; /* Preserve formatting */
-  word-break: break-word;
-  color: var(--secondary-color); /* Dimmer color for details */
-}
-
-.queue-item li.expanded .task-details {
-  display: block; /* Show details when expanded */
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.15);
+  transform: translateY(-1px);
 }
 
 .queue-item li .task-summary {
   display: flex;
   align-items: center;
-  width: 100%;
+  padding: 12px;
+  cursor: pointer;
+  position: relative;
 }
 
 .queue-item li .task-filename {
-  margin-left: 8px;
-  font-weight: bold;
+  font-weight: 600;
+  color: var(--text-color);
+  margin: 0 8px;
+  flex-grow: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  flex-grow: 1; /* Take available space */
+}
+
+.queue-item li .task-id {
+  color: var(--secondary-color);
+  font-size: 0.8rem;
+  margin-left: auto;
+  opacity: 0.8;
 }
 
 .queue-item li .status-icon {
-  font-size: 1.1em;
+  font-size: 1.1rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  flex-shrink: 0;
 }
-.queue-item li .task-text {
-  flex-grow: 1;
-  word-break: break-word; /* Prevent long text overflow */
+
+.queue-item li .task-details {
+  display: none;
+  padding: 0 12px 12px 44px;
+  color: var(--text-color);
+  opacity: 0.9;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  border-top: 1px dashed var(--border-color);
+  margin-top: 0;
+  background-color: rgba(var(--bg-color-rgb), 0.3);
+  word-break: break-word;
+  white-space: pre-wrap;
+  overflow: hidden;
 }
-.queue-item li .task-id {
-  font-size: 0.9em;
+
+.queue-item li.expanded .task-details {
+  display: block;
+  animation: fadeIn 0.3s ease;
+}
+
+.queue-item li.expanded .task-summary {
+  background-color: rgba(var(--heading-color-rgb), 0.05);
+}
+
+.queue-item li.expanded .task-summary::after {
+  content: "\f078";
+  font-family: "Font Awesome 6 Free";
+  font-weight: 900;
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
   color: var(--secondary-color);
-  margin-left: auto; /* Push ID to the right */
-  white-space: nowrap;
+  font-size: 0.8rem;
+  opacity: 0.6;
 }
 
 /* Status colors for queue items */
 .queue-item li[data-status="pending"] {
-  border-left: 3px solid var(--warning-color);
-  background-color: rgba(var(--warning-color-rgb), 0.05);
+  border-left: 4px solid var(--warning-color);
 }
+
+.queue-item li[data-status="pending"] .status-icon {
+  color: var(--warning-color);
+  background-color: rgba(var(--warning-color-rgb), 0.1);
+}
+
 .queue-item li[data-status="processing"] {
-  border-left: 3px solid var(--primary-color);
-  background-color: rgba(var(--primary-color-rgb), 0.05);
+  border-left: 4px solid var(--primary-color);
+  animation: subtle-glow 2s infinite;
+}
+
+.queue-item li[data-status="processing"] .status-icon {
+  color: var(--primary-color);
+  background-color: rgba(var(--primary-color-rgb), 0.1);
+}
+
+.queue-item li[data-status="accepted"],
+.queue-item li[data-status="code_received"],
+.queue-item li[data-status="completed"] {
+  border-left: 4px solid var(--success-color);
+}
+
+.queue-item li[data-status="accepted"] .status-icon,
+.queue-item li[data-status="code_received"] .status-icon,
+.queue-item li[data-status="completed"] .status-icon {
+  color: var(--success-color);
+  background-color: rgba(var(--success-color-rgb), 0.1);
+}
+
+.queue-item li[data-status="failed"],
+.queue-item li[data-status="needs_rework"] {
+  border-left: 4px solid var(--error-color);
+}
+
+.queue-item li[data-status="failed"] .status-icon,
+.queue-item li[data-status="needs_rework"] .status-icon {
+  color: var(--error-color);
+  background-color: rgba(var(--error-color-rgb), 0.1);
+}
+
+/* Queue Item Status Transitions and Animations */
+.queue-item li.status-changing {
+  transition: all 0.3s ease;
+  opacity: 0.7;
+}
+
+.queue-item li.pulse-animation {
   animation: pulse 2s infinite;
 }
-.queue-item li[data-status="accepted"],
-.queue-item li[data-status="code_received"], /* Treat code_received visually similar to accepted */
-.queue-item li[data-status="completed"] {
-  border-left: 3px solid var(--success-color);
-  background-color: rgba(var(--success-color-rgb), 0.05);
+
+.queue-item li.success-animation {
+  animation: success-flash 1.5s ease;
 }
-.queue-item li[data-status="failed"] {
-  border-left: 3px solid var(--error-color);
-  background-color: rgba(var(--error-color-rgb), 0.05);
+
+.queue-item li.error-animation {
+  animation: error-flash 1.5s ease;
 }
 
 @keyframes pulse {
   0% {
-    box-shadow: 0 0 0 0 rgba(var(--primary-color-rgb), 0.2);
+    box-shadow: 0 0 0 0 rgba(var(--primary-color-rgb), 0.5);
   }
   70% {
     box-shadow: 0 0 0 6px rgba(var(--primary-color-rgb), 0);
   }
   100% {
     box-shadow: 0 0 0 0 rgba(var(--primary-color-rgb), 0);
+  }
+}
+
+@keyframes success-flash {
+  0% {
+    background-color: transparent;
+  }
+  30% {
+    background-color: rgba(var(--success-color-rgb), 0.2);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+@keyframes error-flash {
+  0% {
+    background-color: transparent;
+  }
+  30% {
+    background-color: rgba(var(--error-color-rgb), 0.2);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+/* Empty queue state */
+.queue-item:empty::before {
+  content: "No tasks in queue";
+  display: block;
+  padding: 15px;
+  text-align: center;
+  color: var(--secondary-color);
+  font-style: italic;
+  opacity: 0.7;
+}
+
+@keyframes subtle-glow {
+  0% {
+    box-shadow: 0 0 5px rgba(var(--primary-color-rgb), 0);
+  }
+  50% {
+    box-shadow: 0 0 8px rgba(var(--primary-color-rgb), 0.3);
+  }
+  100% {
+    box-shadow: 0 0 5px rgba(var(--primary-color-rgb), 0);
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
   }
 }
 
