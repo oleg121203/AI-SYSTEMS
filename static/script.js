@@ -66,97 +66,70 @@ function handleWebSocketMessage(event) {
 function routeMessageByType(data) {
   switch (data.type) {
     case "full_status_update":
-      console.log("Processing full_status_update");
+      // This message contains everything, update the entire UI
       updateFullUI(data);
-      // Переконайтеся, що full_status_update також оновлює ці значення
-      if (data.actual_total_tasks !== undefined) {
-        const totalTasksElem = document.getElementById("total-tasks");
-        if (totalTasksElem)
-          totalTasksElem.textContent = data.actual_total_tasks;
-      }
-      // Потрібно отримати completed_tasks звідкись у full_status_update
-      // Наприклад, з task_status_distribution або progress_data
-      let completedCount = 0;
-      if (
-        data.task_status_distribution &&
-        data.task_status_distribution.completed !== undefined
-      ) {
-        // Якщо використовуємо task_status_distribution.completed
-        completedCount = data.task_status_distribution.completed;
-      } else if (
-        data.progress_data &&
-        data.progress_data.completed_tasks !== undefined
-      ) {
-        // Якщо використовуємо progress_data.completed_tasks
-        completedCount = data.progress_data.completed_tasks;
-      }
-      const completedTasksElem = document.getElementById("completed-tasks");
-      if (completedTasksElem) completedTasksElem.textContent = completedCount;
+      break; // Added break statement
 
-      const efficiencyElem = document.getElementById("efficiency");
-      const totalTasks =
-        data.actual_total_tasks !== undefined ? data.actual_total_tasks : 0;
-      if (efficiencyElem && totalTasks > 0) {
-        const efficiency = ((completedCount / totalTasks) * 100).toFixed(1);
-        efficiencyElem.textContent = `${efficiency}%`;
-      } else if (efficiencyElem) {
-        efficiencyElem.textContent = "0.0%";
-      }
-      break;
     case "status_update":
+      // Assume this might be a partial status, handle specifically
+      // It might contain ai_status, subtasks, queues etc.
+      console.log("Processing status_update via handleSpecificUpdate:", data);
+      // Update AI button states if present
       if (data.ai_status) {
-        console.log("Processing status_update (AI status only)");
         updateAllButtonStates(data.ai_status);
       }
+      // Delegate the rest to handleSpecificUpdate for consistency
+      handleSpecificUpdate(data);
+      break; // Added break statement
 
-      // If status_update also contains subtask status updates, process them
-      if (data.subtasks) {
-        console.log("Processing status_update (includes subtask updates)");
-        Object.assign(subtask_status, data.subtasks);
-        updateQueueItemStatuses(data.subtasks);
-      }
-      break;
     case "log_update":
-      handleLogUpdate(data.log_line);
-      break;
+      // Handle single log line updates
+      if (data.log_line) {
+        handleLogUpdate(data.log_line);
+      }
+      break; // Added break statement
+
     case "structure_update":
+      // Handle file structure updates
       if (data.structure) {
         updateFileStructure(data.structure);
       }
-      break;
+      break; // Added break statement
+
     case "queue_update":
+      // Handle queue-only updates
+      console.log("Processing queue_update:", data);
       if (data.queues) {
         updateQueues(data.queues);
+        // Also update charts that depend on queue data (Task Distribution)
+        // Pass only necessary data to updateCharts
+        updateCharts({ queues: data.queues });
       }
-      break;
-    case "specific_update":
-      handleSpecificUpdate(data);
-      break;
-    case "ping":
-      console.log("Ping received");
-      break;
-    case "monitoring_update":
-      // Оновлюємо елементи статистики
-      const totalTasksElement = document.getElementById("total-tasks");
-      const completedTasksElement = document.getElementById("completed-tasks");
-      const efficiencyElement = document.getElementById("efficiency");
+      break; // Added break statement
 
-      if (totalTasksElement) {
-        totalTasksElement.textContent = data.total_tasks;
+    case "specific_update":
+      // Handle messages with a mix of specific data points
+      handleSpecificUpdate(data);
+      break; // Added break statement
+
+    case "ping":
+      // Server ping, no UI update needed, maybe log?
+      // console.log("Received ping from server");
+      break; // Added break statement
+
+    case "monitoring_update":
+      // Handle updates specifically for monitoring charts/data
+      console.log("Processing monitoring_update:", data);
+      // This usually contains chart-related data like progress, git, status distribution
+      updateCharts(data);
+      // It might also contain subtask status updates needed for stats
+      if (data.subtasks) {
+        Object.assign(subtask_status, data.subtasks);
+        updateQueueItemStatuses(data.subtasks); // Update queue item visuals
+        updateStats(subtask_status, null); // Update stats display (pass null for queues if not present)
       }
-      if (completedTasksElement) {
-        completedTasksElement.textContent = data.completed_tasks;
-      }
-      if (efficiencyElement && data.total_tasks > 0) {
-        const efficiency = (
-          (data.completed_tasks / data.total_tasks) *
-          100
-        ).toFixed(1);
-        efficiencyElement.textContent = `${efficiency}%`;
-      } else if (efficiencyElement) {
-        efficiencyElement.textContent = "0.0%"; // Або 'N/A'
-      }
-      break;
+      break; // Added break statement
+
     default:
       console.warn("Received unhandled message type:", data.type, data);
   }
@@ -599,7 +572,6 @@ function updateQueues(queuesData) {
         const newText = incomingTask?.text || "";
         if (detailsDiv && detailsDiv.textContent !== newText) {
           detailsDiv.textContent = newText;
-          // listChanged = true; // Details change might not require chart update
         }
       }
     });
@@ -2379,7 +2351,7 @@ function countFilesInStructure(structure) {
     if (!node || typeof node !== "object") return;
 
     for (const key in node) {
-      if (Object.prototype.hasOwnProperty.call(node, key)) {
+      if (Object.hasOwn(node, key)) {
         const value = node[key];
 
         if (typeof value === "object" && value !== null) {
