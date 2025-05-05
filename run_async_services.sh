@@ -8,7 +8,7 @@ mkdir -p tmp
 
 # Запуск MCP API
 echo "Starting MCP API service..."
-python3 mcp_api.py >logs/mcp_api.log 2>&1 &
+uvicorn mcp_api:app --host 0.0.0.0 --port 7860 >logs/mcp_api.log 2>&1 &
 MCP_PID=$!
 echo $MCP_PID >logs/mcp_api.pid
 echo "MCP API has been started in background with PID $MCP_PID"

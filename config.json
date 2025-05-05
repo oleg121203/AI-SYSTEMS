@@ -100,7 +100,7 @@
     "ollama1": {
       "type": "ollama",
       "endpoint": "http://46.219.108.236:11434",
-      "model": "qwen2:1.5b"
+      "model": "llama3.2:latest"
     },
     "codestral": {
       "type": "codestral",

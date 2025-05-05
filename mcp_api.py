@@ -1,9 +1,12 @@
 import asyncio
+import heapq  # Add import for heapq
 import json
 import logging
 import os
 import subprocess
-from collections import Counter, deque
+import time  # Add import for time
+import uuid  # Add import for uuid
+from collections import deque  # Remove Counter
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Union  # Add Any here
@@ -34,8 +37,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from git import GitCommandError, Repo
-from json_log_formatter import JSONFormatter  # Corrected import
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field  # Remove ValidationError
 
 from utils import log_message
 
@@ -126,18 +128,21 @@ logger = logging.getLogger(__name__)  # Use specific logger
 # Add a handler to send logs via WebSocket
 class WebSocketLogHandler(logging.Handler):
     def emit(self, record):
-        # Використовуємо синхронну версію, щоб уникнути RuntimeWarning
+        # Use the newer asyncio approach to avoid deprecation warning
         log_entry = self.format(record)
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # Якщо цикл подій запущений, створюємо завдання
-                asyncio.create_task(broadcast_specific_update({"log_line": log_entry}))
-            else:
-                # Якщо цикл не запущений, просто логуємо без відправки
-                pass  # Можна просто мовчки ігнорувати в цьому випадку
-        except Exception:
-            # Тихо ігноруємо помилки при логуванні
+            # Use proper error handling with asyncio.create_task
+            asyncio.create_task(self._send_log(log_entry))
+        except Exception as e:
+            # Log the error but continue
+            logging.error(f"Error creating log broadcast task: {e}")
+
+    async def _send_log(self, log_entry):
+        """Helper method to safely await the broadcast call"""
+        try:
+            await broadcast_specific_update({"log_line": log_entry})
+        except Exception as e:
+            # Silently ignore errors during logging
             pass
 
 
@@ -226,7 +231,6 @@ async def run_restart_script(action: str):
             command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
         stdout, stderr = await process.communicate()
-
         if stdout:
             logger.info(f"[{command} stdout]\n{stdout.decode()}")
         if stderr:
@@ -448,78 +452,25 @@ async def periodic_chart_updates():
 
 
 async def _determine_adjusted_path(
-    repo_path: Path, file_rel_path: str, repo_dir: str
+    repo_path: Path, file_rel_path: str, _repo_dir: str  # Mark repo_dir as unused
 ) -> str:
-    """Determines the adjusted relative path within the repo, respecting the structure from AI3.
+    """Determines the adjusted relative path within the repo.
+       Currently, this function assumes the input file_rel_path is correct
+       relative to the repo_path and performs no adjustments.
+       It primarily serves as a placeholder for potential future adjustments
+       and logging.
 
     Args:
         repo_path: Повний шлях до репозиторію (/repo)
-        file_rel_path: Відносний шлях файлу, який потрібно створити
-        repo_dir: Ім'я директорії репозиторію (зазвичай "repo")
+        file_rel_path: Відносний шлях файлу, який потрібно створити/оновити
+        _repo_dir: Ім'я директорії репозиторію (зазвичай "repo") - Marked unused
 
     Returns:
-        Скоригований відносний шлях в межах repo_path
+        The input file_rel_path without modification.
     """
-    global current_structure
-
-    # Перевіряємо, чи ім'я проекту є верхнім рівнем поза репозиторієм
-    # Зараз використовуємо реальне ім'я проекту з структури, а не хардкодоване "project"
-    project_names = [
-        k for k in current_structure.keys() if isinstance(current_structure[k], dict)
-    ]
-    # Встановлюємо ім'я проекту, якщо є саме один основний проект у структурі
-    project_name = project_names[0] if len(project_names) == 1 else None
-
-    # Визначаємо, чи початковий шлях містить ім'я проекту поза репо
-    is_outside_repo = False
+    logger.info(f"[API-Write] Using provided path relative to repo: '{file_rel_path}'")
+    # Placeholder for potential future logic if adjustments are needed based on AI1 behavior.
     adjusted_rel_path = file_rel_path
-
-    # Якщо існує імя проекту, і шлях починається з нього, але не як шлях в репо
-    if project_name and file_rel_path.startswith(project_name + "/"):
-        # Перевіряємо, чи файл не є явно в структурі репозиторію
-        repo_file_exists = False
-        repo_path_check = repo_path / file_rel_path
-        if repo_path_check.exists():
-            repo_file_exists = True
-            logger.info(
-                f"[API-Write] File {file_rel_path} already exists in repo, keeping path as is."
-            )
-
-        if not repo_file_exists:
-            is_outside_repo = True
-            logger.warning(
-                f"[API-Write] Path '{file_rel_path}' appears to be outside repo (starts with '{project_name}/')"
-            )
-
-    # Якщо шлях здається зовнішнім, виправляємо його
-    if is_outside_repo:
-        # Залишаємо шлях як є, MCP записує його у внутрішню директорію repo/
-        logger.info(f"[API-Write] Using path '{file_rel_path}' as is in repo.")
-    else:
-        # Для всіх інших випадків, перевіряємо, чи є у нас структура з ім'ям проекту
-        if project_name and project_name in current_structure:
-            potential_project_root = repo_path / project_name
-
-            # Якщо директорія проекту існує в репо і шлях НЕ починається з неї
-            if potential_project_root.is_dir() and not file_rel_path.startswith(
-                f"{project_name}/"
-            ):
-                # Додаємо ім'я проекту на початок шляху, якщо він не порожній і не є самим ім'ям проекту
-                if file_rel_path and file_rel_path != project_name:
-                    adjusted_rel_path = os.path.join(project_name, file_rel_path)
-                    logger.info(
-                        f"[API-Write] Prepending '{project_name}/' to path '{file_rel_path}'. New path: '{adjusted_rel_path}'"
-                    )
-
-    if not adjusted_rel_path and file_rel_path:
-        adjusted_rel_path = file_rel_path
-        logger.warning(
-            f"[API-Write] Adjusted path became empty, defaulting back to original: '{file_rel_path}'"
-        )
-
-    logger.info(
-        f"[API-Write] Final adjusted path: '{adjusted_rel_path}' (original: {file_rel_path}')"
-    )
     return adjusted_rel_path
 
 
