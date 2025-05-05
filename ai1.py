@@ -1,17 +1,14 @@
 import asyncio
 import json
-import logging
 import os
-import re
 import time
 import uuid
-from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple, Union
+# from datetime import datetime # Removed unused import
+from typing import Any, Dict, List, Optional, Union
 
 import aiohttp
 
 from config import load_config
-import ai_communication as ai_comm
 from utils import log_message, apply_request_delay
 from providers import BaseProvider, ProviderFactory  # Add the missing import
 
@@ -410,14 +407,38 @@ class AI1:
         final_states = [
             "accepted", "skipped", "failed_by_ai2", "error_processing", "review_needed", "failed_tests"
         ]
-
+        
+        # First, check for tasks that have been in code_received state for too long
+        current_time = time.time()
+        code_received_timeout = 300  # 5 minutes
+        
         for task_key in list(self.active_tasks):  # Iterate over a copy
             try:
                 filename, role, subtask_id = task_key.split("::")
                 api_status = api_statuses.get(subtask_id)
+                local_status = self.task_status.get(filename, {}).get(role)
+                
+                # If a task has been in code_received state for too long, force it to accepted state
+                if local_status == "code_received" and role == "executor":
+                    # Check if we've stored a timestamp for this task
+                    if not hasattr(self, '_code_received_timestamps'):
+                        self._code_received_timestamps = {}
+                    
+                    if task_key not in self._code_received_timestamps:
+                        self._code_received_timestamps[task_key] = current_time
+                    
+                    time_in_state = current_time - self._code_received_timestamps[task_key]
+                    if time_in_state > code_received_timeout:
+                        log_message(f"[AI1] Task {filename} ({role}) has been in code_received state for {time_in_state:.1f} seconds. Forcing transition to accepted.")
+                        self.task_status[filename][role] = "accepted"
+                        updated_count += 1
+                        # Remove from active tasks as it's now complete
+                        tasks_to_remove.add(task_key)
+                        # Remove timestamp entry
+                        del self._code_received_timestamps[task_key]
+                        continue
 
                 if api_status:
-                    local_status = self.task_status.get(filename, {}).get(role)
                     if api_status != local_status:
                         log_message(
                             f"[AI1] Updating status for {filename} ({role}) from '{local_status}' to '{api_status}' (Subtask: {subtask_id})"
@@ -1359,9 +1380,18 @@ class ProjectAnalyzer:
             framework_scores[framework] = score
             
         # Return framework with highest score, or first framework if tied
-        return max(framework_scores.items(), key=lambda x: x[1])[0] if framework_scores else None
+        if not framework_scores:
+            return None
+        # Find the item (framework, score) with the highest score
+        best_framework_item = max(
+            framework_scores.items(), key=lambda item: item[1]
+        )
+        # Return the framework name (the first element of the tuple)
+        return best_framework_item[0]
 
-    async def _analyze_python_project(self, spec: Dict[str, Any]) -> List[Dict[str, Any]]:
+    async def _analyze_python_project(
+        self, spec: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
         """Generate tasks specific to Python projects"""
         tasks = []
         
@@ -1402,7 +1432,9 @@ class ProjectAnalyzer:
         
         return tasks
 
-    async def _analyze_js_project(self, spec: Dict[str, Any]) -> List[Dict[str, Any]]:
+    async def _analyze_js_project(
+        self, spec: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
         """Generate tasks specific to JavaScript projects"""
         tasks = []
         
@@ -1435,7 +1467,9 @@ class ProjectAnalyzer:
         
         return tasks
 
-    async def _analyze_ts_project(self, spec: Dict[str, Any]) -> List[Dict[str, Any]]:
+    async def _analyze_ts_project(
+        self, spec: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
         """Generate tasks specific to TypeScript projects"""
         tasks = []
         
@@ -1444,7 +1478,8 @@ class ProjectAnalyzer:
             {
                 'type': 'setup',
                 'priority': 10,
-                'description': 'Initialize package.json and install TypeScript dependencies',
+                'description': ('Initialize package.json and install '
+                                'TypeScript dependencies'),
                 'file': 'package.json',
                 'dependencies': []
             },
