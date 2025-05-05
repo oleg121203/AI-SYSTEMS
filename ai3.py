@@ -2006,38 +2006,60 @@ class AI3:
                         json_str = json_match.group(1) or json_match.group(0)
                         try:
                             fix_data = json.loads(json_str)
-                            # Apply the fixes
-                            if fix_data.get("test_file"):
+                            test_fix_content = fix_data.get("test_file")
+                            code_fix_content = fix_data.get("code_file")
+
+                            # Apply the fixes only if content is provided
+                            if test_fix_content:
                                 async with aiofiles.open(
                                     test_file_path, "w", encoding="utf-8"
                                 ) as f:
-                                    await f.write(fix_data["test_file"])
+                                    await f.write(test_fix_content)
                                 logger.info(f"[AI3] Updated test file: {test_file}")
+                            else:
+                                logger.warning(f"[AI3] No test file fix provided by LLM for {test_file}")
 
-                            if fix_data.get("code_file"):
+                            if code_fix_content:
                                 async with aiofiles.open(
                                     code_file_path, "w", encoding="utf-8"
                                 ) as f:
-                                    await f.write(fix_data["code_file"])
+                                    await f.write(code_fix_content)
                                 logger.info(f"[AI3] Updated code file: {code_file}")
+                            else:
+                                logger.warning(f"[AI3] No code file fix provided by LLM for {code_file} (related to test {test_file})")
 
-                            # Commit the changes
-                            commit_message = (
-                                f"AI3: Auto-fix for failing test {test_file}"
-                            )
-                            _commit_changes(
-                                self.repo,
-                                [test_file_path, code_file_path],
-                                commit_message,
-                            )
+                            # Commit the changes if any file was updated
+                            files_to_commit = []
+                            if test_fix_content:
+                                files_to_commit.append(test_file_path)
+                            if code_fix_content:
+                                files_to_commit.append(code_file_path)
 
-                        except json.JSONDecodeError:
+                            if files_to_commit:
+                                commit_message = (
+                                    f"AI3: Auto-fix attempt for failing test {test_file}"
+                                )
+                                _commit_changes(
+                                    self.repo,
+                                    files_to_commit,
+                                    commit_message,
+                                )
+                            else:
+                                logger.info(f"[AI3] No files were updated by LLM for test {test_file}, skipping commit.")
+
+                        except json.JSONDecodeError as json_err:
                             logger.error(
-                                f"[AI3] Invalid JSON in provider response for {test_file}"
+                                f"[AI3] Invalid JSON in provider response for {test_file}. Error: {json_err}. Response: {response[:500]}..." # Log part of the response
                             )
+                        except KeyError as key_err:
+                            logger.error(
+                                f"[AI3] Missing expected key in JSON response for {test_file}. Error: {key_err}. JSON: {json_str}"
+                            )
+                        except Exception as write_err:
+                            logger.error(f"[AI3] Error writing fixes for {test_file} or {code_file}: {write_err}", exc_info=True)
                     else:
                         logger.warning(
-                            f"[AI3] No JSON found in provider response for {test_file}"
+                            f"[AI3] No JSON found or extracted in provider response for {test_file}. Response: {response[:500]}..." # Log part of the response
                         )
                 finally:
                     if hasattr(provider, "close_session") and callable(
@@ -3035,38 +3057,60 @@ class CodeAnalyzer:
                         json_str = json_match.group(1) or json_match.group(0)
                         try:
                             fix_data = json.loads(json_str)
-                            # Apply the fixes
-                            if fix_data.get("test_file"):
+                            test_fix_content = fix_data.get("test_file")
+                            code_fix_content = fix_data.get("code_file")
+
+                            # Apply the fixes only if content is provided
+                            if test_fix_content:
                                 async with aiofiles.open(
                                     test_file_path, "w", encoding="utf-8"
                                 ) as f:
-                                    await f.write(fix_data["test_file"])
+                                    await f.write(test_fix_content)
                                 logger.info(f"[AI3] Updated test file: {test_file}")
+                            else:
+                                logger.warning(f"[AI3] No test file fix provided by LLM for {test_file}")
 
-                            if fix_data.get("code_file"):
+                            if code_fix_content:
                                 async with aiofiles.open(
                                     code_file_path, "w", encoding="utf-8"
                                 ) as f:
-                                    await f.write(fix_data["code_file"])
+                                    await f.write(code_fix_content)
                                 logger.info(f"[AI3] Updated code file: {code_file}")
+                            else:
+                                logger.warning(f"[AI3] No code file fix provided by LLM for {code_file} (related to test {test_file})")
 
-                            # Commit the changes
-                            commit_message = (
-                                f"AI3: Auto-fix for failing test {test_file}"
-                            )
-                            _commit_changes(
-                                self.repo,
-                                [test_file_path, code_file_path],
-                                commit_message,
-                            )
+                            # Commit the changes if any file was updated
+                            files_to_commit = []
+                            if test_fix_content:
+                                files_to_commit.append(test_file_path)
+                            if code_fix_content:
+                                files_to_commit.append(code_file_path)
 
-                        except json.JSONDecodeError:
+                            if files_to_commit:
+                                commit_message = (
+                                    f"AI3: Auto-fix attempt for failing test {test_file}"
+                                )
+                                _commit_changes(
+                                    self.repo,
+                                    files_to_commit,
+                                    commit_message,
+                                )
+                            else:
+                                logger.info(f"[AI3] No files were updated by LLM for test {test_file}, skipping commit.")
+
+                        except json.JSONDecodeError as json_err:
                             logger.error(
-                                f"[AI3] Invalid JSON in provider response for {test_file}"
+                                f"[AI3] Invalid JSON in provider response for {test_file}. Error: {json_err}. Response: {response[:500]}..." # Log part of the response
                             )
+                        except KeyError as key_err:
+                            logger.error(
+                                f"[AI3] Missing expected key in JSON response for {test_file}. Error: {key_err}. JSON: {json_str}"
+                            )
+                        except Exception as write_err:
+                            logger.error(f"[AI3] Error writing fixes for {test_file} or {code_file}: {write_err}", exc_info=True)
                     else:
                         logger.warning(
-                            f"[AI3] No JSON found in provider response for {test_file}"
+                            f"[AI3] No JSON found or extracted in provider response for {test_file}. Response: {response[:500]}..." # Log part of the response
                         )
                 finally:
                     if hasattr(provider, "close_session") and callable(

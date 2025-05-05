@@ -905,11 +905,9 @@ function updateProgressChartData(progressData, gitActivityData) {
     (ds) => ds.label === "Successful Tests"
   );
   const gitActionsDataset = datasets.find((ds) => ds.label === "Git Actions");
-  // --- ADDED: Find Rejected Files Dataset ---
   const rejectedFilesDataset = datasets.find(
     (ds) => ds.label === "Rejected Files"
   );
-  // --- END ADDED ---
 
   if (!successfulTestsDataset || !rejectedFilesDataset) {
     // Check both datasets
