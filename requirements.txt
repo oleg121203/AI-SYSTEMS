@@ -38,6 +38,7 @@ isort
 # Logging & Config
 python-json-logger
 python-dotenv
+json-log-formatter
 
 # Data & Media Processing
 pillow==10.4.0
