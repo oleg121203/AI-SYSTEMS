@@ -1015,7 +1015,7 @@ function initializeGitChart() {
             borderColor: "rgba(255, 159, 64, 1)",
             // --- END MODIFIED ---
             borderWidth: 2,
-            tension: 0.4,
+            tension: 4,
             fill: true,
           },
         ],
@@ -3019,3 +3019,178 @@ function saveLogPanelConfig(type) {
     }
   }, 1000); // Longer delay to give user time to see the notification
 }
+
+// --- System Load Level Functions ---
+function handleSystemLoadChange(value) {
+  const loadDescriptionElement = document.getElementById("load-description");
+  const loadValue = parseInt(value);
+
+  // Define descriptions for each load level
+  const descriptions = {
+    1: "Minimal Load (5): Minimal system resources usage, slower but more reliable execution",
+    2: "Low Load (10): Low resource usage with balanced reliability",
+    3: "Medium Load (15): Balanced resource usage and performance",
+    4: "High Load (20): High performance with increased resource usage",
+    5: "Maximum Load (25): Maximum throughput with highest resource requirements",
+  };
+
+  // Update the description text
+  if (loadValue >= 1 && loadValue <= 5) {
+    loadDescriptionElement.textContent = descriptions[loadValue];
+  }
+
+  // Convert slider value (1-5) to actual buffer size (5, 10, 15, 20, 25)
+  const bufferSize = loadValue * 5;
+
+  // Send the update to the server
+  fetch("/update_config_item", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ ai1_desired_active_buffer: bufferSize }),
+  })
+    .then((response) => response.json())
+    .then((data) => {
+      // Show a toast or notification
+      showToast(
+        `System Load Level updated to ${loadValue}/5 (Buffer: ${bufferSize})`,
+        "success"
+      );
+
+      // Update any UI elements that should reflect the new load level
+      updateLoadLevelIndicators(loadValue, bufferSize);
+    })
+    .catch((error) => {
+      console.error("Error updating system load:", error);
+      showToast("Failed to update System Load Level", "error");
+    });
+}
+
+function updateLoadLevelIndicators(levelValue, bufferSize) {
+  // Update any additional UI elements that reflect the system load
+  // For example, update a badge or status indicator
+  const loadBadgeElement = document.getElementById("system-load-badge");
+  if (loadBadgeElement) {
+    loadBadgeElement.textContent = `${levelValue}/5`;
+
+    // Update badge color based on load level
+    loadBadgeElement.className = "badge"; // Reset classes
+    if (levelValue <= 2) {
+      loadBadgeElement.classList.add("bg-success"); // Green for low load
+    } else if (levelValue <= 4) {
+      loadBadgeElement.classList.add("bg-warning"); // Yellow for medium load
+    } else {
+      loadBadgeElement.classList.add("bg-danger"); // Red for high load
+    }
+  }
+
+  // You could also update a gauge or progress visualization if you have one
+  const loadIndicator = document.getElementById("load-indicator");
+  if (loadIndicator) {
+    loadIndicator.style.width = `${(levelValue / 5) * 100}%`;
+  }
+}
+
+function showToast(message, type = "info") {
+  // Use Bootstrap's toast if available
+  if (window.bootstrap && window.bootstrap.Toast) {
+    const toastEl = document.getElementById("systemToast");
+    const toastBody = toastEl.querySelector(".toast-body");
+
+    // Set message and class
+    toastBody.textContent = message;
+    toastEl.className = "toast"; // Reset classes
+    toastEl.classList.add(`bg-${type === "error" ? "danger" : type}`);
+    toastEl.classList.add("text-white");
+
+    // Show the toast
+    const toast = new bootstrap.Toast(toastEl);
+    toast.show();
+  } else {
+    // Fallback to console if Bootstrap's toast is not available
+    console.log(`Toast (${type}): ${message}`);
+
+    // Simple custom toast implementation
+    const toastContainer =
+      document.getElementById("toastContainer") ||
+      (() => {
+        const container = document.createElement("div");
+        container.id = "toastContainer";
+        container.style.position = "fixed";
+        container.style.bottom = "20px";
+        container.style.right = "20px";
+        container.style.zIndex = "9999";
+        document.body.appendChild(container);
+        return container;
+      })();
+
+    const toast = document.createElement("div");
+    toast.className = `custom-toast ${type}`;
+    toast.textContent = message;
+    toast.style.padding = "10px 15px";
+    toast.style.marginBottom = "10px";
+    toast.style.borderRadius = "4px";
+    toast.style.backgroundColor =
+      type === "error"
+        ? "#dc3545"
+        : type === "success"
+        ? "#28a745"
+        : type === "warning"
+        ? "#ffc107"
+        : "#17a2b8";
+    toast.style.color = "#fff";
+    toast.style.boxShadow = "0 0.25rem 0.75rem rgba(0, 0, 0, 0.1)";
+
+    toastContainer.appendChild(toast);
+
+    // Remove toast after 3 seconds
+    setTimeout(() => {
+      toast.style.opacity = "0";
+      toast.style.transition = "opacity 0.5s";
+      setTimeout(() => toastContainer.removeChild(toast), 500);
+    }, 3000);
+  }
+}
+
+// Initialize load level from current config on page load
+function initializeSystemLoadLevel() {
+  // Assuming we can extract the current value from the server-side rendered page
+  // or fetch it from the server
+  fetch("/providers")
+    .then((response) => response.json())
+    .then((data) => {
+      const currentBuffer =
+        data.current_config?.ai1_desired_active_buffer || 10; // Default to 10
+
+      // Convert buffer size (5, 10, 15, 20, 25) to slider value (1-5)
+      const sliderValue = currentBuffer / 5;
+
+      // Set the slider value
+      const slider = document.getElementById("system-load-level");
+      if (slider) {
+        slider.value = sliderValue;
+
+        // Trigger the description update
+        handleSystemLoadChange(sliderValue);
+      }
+    })
+    .catch((error) => {
+      console.error("Error initializing system load level:", error);
+    });
+}
+
+// Register event listeners
+document.addEventListener("DOMContentLoaded", function () {
+  // Set up the system load level slider
+  const systemLoadSlider = document.getElementById("ai1-buffer-slider");
+  if (systemLoadSlider) {
+    // Set initial value from server
+    initializeSystemLoadLevel();
+
+    // Add event listener for changes
+    systemLoadSlider.addEventListener("change", function () {
+      handleSystemLoadChange(this.value);
+    });
+  }
+});

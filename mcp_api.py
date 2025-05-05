@@ -713,7 +713,6 @@ async def create_follow_up_tasks(filename: str, original_executor_subtask_id: st
         "id": documenter_subtask_id,
         "text": documenter_prompt,
         "role": "documenter",
-        "filename": filename,
         # --- CHANGE: Add file content ---
         "code": file_content,  # Add the read content
         # --- END CHANGE ---
@@ -1749,38 +1748,42 @@ async def update_config_item(data: dict):
     #     raise HTTPException(status_code=400, detail=f"Invalid configuration key: {key}")
 
     # Оновлюємо значення, якщо воно змінилося
-    # Використовуємо get для безпечного доступу, якщо ключ може бути вкладеним (потрібна складніша логіка для вкладеності)
     current_value = config.get(key)
     if current_value != value:
         config[key] = value
         logger.info(f"Configuration item '{key}' updated to: {value}")
         try:
-            # --- CHANGE: Use constant ---
+            # Save config file
             with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-                # --- END CHANGE ---
-                json.dump(config, f, indent=4, ensure_ascii=False)
-            logger.info(
-                f"Configuration file updated successfully after changing '{key}'."
-            )
-            # Повідомлення клієнтам про зміну конфігурації (якщо потрібно)
-            # await broadcast_specific_update({"config_update": {key: value}})
-            return {"status": f"'{key}' updated successfully"}
+                json.dump(config, f, indent=2, ensure_ascii=False)
+            logger.info(f"Configuration saved to {CONFIG_FILE}")
+
+            # For ai1_desired_active_buffer, log additional info about load level
+            if key == "ai1_desired_active_buffer":
+                level_descriptions = {
+                    5: "Minimal Load (5)",
+                    10: "Low Load (10)",
+                    15: "Medium Load (15)",
+                    20: "High Load (20)",
+                    25: "Maximum Load (25)",
+                }
+                level_name = level_descriptions.get(value, f"Custom Load ({value})")
+                logger.info(f"System Load Level changed to: {level_name}")
+                # Add WebSocket broadcast to update all clients
+                await broadcast_specific_update(
+                    {
+                        "type": "specific_update",
+                        "message": f"System Load Level changed to: {level_name}",
+                        "config_update": {key: value},
+                    }
+                )
+
+            return {"status": "success", "key": key, "value": value}
         except Exception as e:
-            logger.error(
-                f"Failed to write updated config.json after changing '{key}': {e}"
-            )
-            # Відновлюємо попереднє значення в пам'яті, якщо запис не вдався
-            if current_value is not None:
-                config[key] = current_value
-            else:
-                # Якщо ключа раніше не було, видаляємо його
-                config.pop(key, None)
-            # --- CHANGE: Fix status_code usage ---
+            logger.error(f"Failed to save configuration for {key}: {e}")
             raise HTTPException(
-                status_code=500,
-                detail=f"Failed to save updated configuration file for '{key}'.",
+                status_code=500, detail=f"Failed to save configuration: {e}"
             )
-            # --- END CHANGE ---
     else:
         logger.info(
             f"Configuration item '{key}' already has the value '{value}'. No change."

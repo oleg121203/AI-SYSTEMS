@@ -160,6 +160,8 @@ class ProviderFactory:
             return Gemini3Provider(provider_config)
         elif provider_type == "gemini4":
             return Gemini4Provider(provider_config)
+        elif provider_type == "tugezer":
+            return TugezerProvider(provider_config)
         else:
             raise ValueError(f"Неподдерживаемый тип провайдера: {provider_type}")
 
@@ -1680,6 +1682,8 @@ class CodestralProvider(BaseProvider):
         model: Optional[str] = None,
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
+        retries: int = 3,  # Add retries parameter with default value
+        initial_delay: float = 1.0,  # Add initial delay with default value
     ) -> str:
         if not self.api_key:
             return "Ошибка генерации: API ключ Codestral/Mistral не установлен."
@@ -1713,48 +1717,122 @@ class CodestralProvider(BaseProvider):
 
         api_url = f"{self.endpoint}/chat/completions"
 
-        try:
-            session = await self.get_client_session()
-            # Headers are now managed by get_client_session
-            async with session.post(api_url, json=payload) as response:
-                response_data = await response.json()
-                if response.status == 200:
-                    if response_data.get("choices") and response_data["choices"][0].get(
-                        "message"
-                    ):
-                        return response_data["choices"][0]["message"].get("content", "")
-                    else:
-                        logger.warning(
-                            f"Ответ от Codestral API ({model_to_use}) не содержит ожидаемых данных: {response_data}"
-                        )
-                        return "Ошибка генерации: Не получен корректный ответ от Codestral API."
-                else:
-                    # Attempt to get error message from response
-                    error_message = response_data.get("message", "Unknown API error")
-                    logger.error(
-                        f"Codestral API HTTP Error ({model_to_use}, {response.status}): {error_message}"
-                    )
-                    response.raise_for_status()  # Raise exception for bad status
+        # Implement retry logic with exponential backoff
+        current_retry = 0
+        delay = initial_delay
 
-        except aiohttp.ClientResponseError as e:
-            # Error message already logged above if possible
-            error_message = e.message
+        while current_retry <= retries:
             try:
-                # Try to parse JSON error again just in case
-                response_data = await e.response.json()
-                error_message = response_data.get("message", e.message)
-            except Exception:
-                pass  # Keep original message if JSON parsing fails
-            return f"Ошибка генерации (Codestral API {e.status}): {error_message}"
-        except aiohttp.ClientError as e:
-            logger.error(f"Ошибка соединения с Codestral API {self.endpoint}: {e}")
-            return f"Ошибка генерации: Не удалось подключиться к Codestral API ({e})"
-        except Exception as e:
-            logger.error(
-                f"Неожиданная ошибка при генерации ответа с Codestral ({model_to_use}): {e}",
-                exc_info=True,
-            )
-            return f"Ошибка генерации (Codestral): {str(e)}"
+                session = await self.get_client_session()
+                # Headers are managed by get_client_session
+                async with session.post(api_url, json=payload) as response:
+                    if response.status == 200:
+                        response_data = await response.json()
+                        if response_data.get("choices") and response_data["choices"][
+                            0
+                        ].get("message"):
+                            return response_data["choices"][0]["message"].get(
+                                "content", ""
+                            )
+                        else:
+                            logger.warning(
+                                f"Ответ от Codestral API ({model_to_use}) не содержит ожидаемых данных: {response_data}"
+                            )
+                            return "Ошибка генерации: Не получен корректный ответ от Codestral API."
+                    elif response.status == 429 and current_retry < retries:
+                        # Handle rate limit error with retry
+                        error_text = await response.text()
+                        import random
+
+                        wait_time = delay * (2**current_retry) + random.uniform(0, 0.5)
+                        logger.warning(
+                            f"Codestral API рейт-лимит превышен ({response.status}). Повторная попытка через {wait_time:.2f} секунд. Попытка {current_retry + 1}/{retries}. Сообщение: {error_text[:200]}"
+                        )
+                        # Wait with exponential backoff before retrying
+                        await asyncio.sleep(wait_time)
+                        current_retry += 1
+                        continue
+                    else:
+                        # Attempt to get error message from response for other errors
+                        error_text = await response.text()
+                        error_message = error_text
+                        try:
+                            # Try to parse JSON error if possible
+                            error_data = json.loads(error_text)
+                            if error_data.get("error"):
+                                error_message = error_data.get("error").get(
+                                    "message", error_text
+                                )
+                        except:
+                            pass
+
+                        logger.error(
+                            f"Codestral API HTTP Error ({model_to_use}, {response.status}): {error_message[:200]}"
+                        )
+
+                        # For rate limit errors that have exceeded retries
+                        if response.status == 429:
+                            return f"Ошибка генерации: Превышен лимит запросов к Codestral API (429) после {retries} попыток."
+
+                        response.raise_for_status()  # Raise exception for other bad status
+
+            except aiohttp.ClientResponseError as e:
+                # Error message already logged above if possible
+                error_message = e.message
+                try:
+                    # Try to parse JSON error again just in case
+                    response_data = await e.response.json()
+                    error_message = response_data.get("error", {}).get(
+                        "message", e.message
+                    )
+                except Exception:
+                    pass  # Keep original message if JSON parsing fails
+
+                if e.status == 429 and current_retry < retries:
+                    # Handle rate limit with exponential backoff
+                    import random
+
+                    wait_time = delay * (2**current_retry) + random.uniform(0, 0.5)
+                    logger.warning(
+                        f"Codestral API рейт-лимит превышен ({e.status}). Повторная попытка через {wait_time:.2f} секунд. Попытка {current_retry + 1}/{retries}."
+                    )
+                    await asyncio.sleep(wait_time)
+                    current_retry += 1
+                    continue
+                elif e.status == 429:
+                    # Rate limit exceeded after retries
+                    return f"Ошибка генерации: Превышен лимит запросов к Codestral API (429) после {retries} попыток."
+                else:
+                    return (
+                        f"Ошибка генерации (Codestral API {e.status}): {error_message}"
+                    )
+
+            except aiohttp.ClientError as e:
+                logger.error(f"Ошибка соединения с Codestral API {self.endpoint}: {e}")
+                if current_retry < retries:
+                    # Also retry connection errors
+                    import random
+
+                    wait_time = delay * (2**current_retry) + random.uniform(0, 0.5)
+                    logger.warning(
+                        f"Ошибка соединения с Codestral API. Повторная попытка через {wait_time:.2f} секунд. Попытка {current_retry + 1}/{retries}."
+                    )
+                    await asyncio.sleep(wait_time)
+                    current_retry += 1
+                    continue
+                return (
+                    f"Ошибка генерации: Не удалось подключиться к Codestral API ({e})"
+                )
+
+            except Exception as e:
+                logger.error(
+                    f"Неожиданная ошибка при генерации ответа с Codestral ({model_to_use}): {e}",
+                    exc_info=True,
+                )
+                return f"Ошибка генерации: {str(e)}"
+
+        # If we exhausted all retries
+        return f"Ошибка генерации: Не удалось получить ответ от Codestral API после {retries} попыток."
 
     def get_available_models(self) -> List[str]:
         # Return a default list or the configured model, as we can't query the API without SDK easily
@@ -1978,6 +2056,160 @@ class Gemini4Provider(BaseProvider):
 
     def get_available_models(self) -> List[str]:
         return ["gemini-2.0-pro", "gemini-1.5-pro", "gemini-1.5-flash"]
+
+
+class TugezerProvider(BaseProvider):
+    """Provider for Tugezer API (HTTP API-based, not client-based)."""
+
+    def __init__(self, config: Optional[Dict[str, Any]] = None):
+        super().__init__(config)
+        self.name = "tugezer"
+
+    def setup(self) -> None:
+        if not self.endpoint:
+            self.endpoint = "https://api.tugezer.ai/v1"
+            logger.warning(
+                f"Endpoint for TugezerProvider not specified, using default: {self.endpoint}"
+            )
+        else:
+            # Ensure endpoint doesn't end with a slash
+            self.endpoint = self.endpoint.rstrip("/")
+            logger.info(f"Tugezer endpoint configured: {self.endpoint}")
+
+        # Get API key from config or environment
+        self.api_key = self.config.get("api_key") or os.environ.get("TUGEZER_API_KEY")
+        if not self.api_key:
+            logger.error(
+                "API key for Tugezer not found in configuration or TUGEZER_API_KEY environment variable."
+            )
+        else:
+            logger.info("API key for Tugezer found.")
+
+    async def generate(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        model: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
+        retries: int = 3,
+        initial_delay: float = 1.0,
+    ) -> str:
+        if not self.api_key:
+            return "Error: Tugezer API key not set."
+        if not self.endpoint:
+            return "Error: Tugezer endpoint not set."
+
+        model_to_use = model or self.get_default_model() or "tugezer-latest"
+        max_tokens_to_use = max_tokens or self.config.get("max_tokens", 4096)
+        temperature_to_use = (
+            temperature
+            if temperature is not None
+            else self.config.get("temperature", 0.7)
+        )
+
+        # Create messages array for API format
+        messages = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+
+        # Prepare request payload
+        payload = {
+            "model": model_to_use,
+            "messages": messages,
+            "max_tokens": max_tokens_to_use,
+            "temperature": temperature_to_use,
+        }
+
+        # Remove None values from payload
+        payload = {k: v for k, v in payload.items() if v is not None}
+
+        api_url = f"{self.endpoint}/chat/completions"
+
+        # Implement retry logic with exponential backoff
+        current_retry = 0
+        delay = initial_delay
+
+        while current_retry <= retries:
+            try:
+                # Use session from base provider
+                session = await self.get_client_session()
+                headers = {"Authorization": f"Bearer {self.api_key}"}
+
+                async with session.post(
+                    api_url, json=payload, headers=headers
+                ) as response:
+                    if response.status == 200:
+                        response_data = await response.json()
+                        if response_data.get("choices") and response_data["choices"][
+                            0
+                        ].get("message"):
+                            return response_data["choices"][0]["message"].get(
+                                "content", ""
+                            )
+                        else:
+                            logger.warning(
+                                f"Response from Tugezer API ({model_to_use}) does not contain expected data: {response_data}"
+                            )
+                            return "Error: No valid response received from Tugezer API."
+                    elif response.status == 429 and current_retry < retries:
+                        # Handle rate limit with retry
+                        error_text = await response.text()
+                        wait_time = delay * (2**current_retry) + random.uniform(0, 0.5)
+                        logger.warning(
+                            f"Tugezer API rate limit exceeded ({response.status}). Retrying in {wait_time:.2f} seconds. Attempt {current_retry + 1}/{retries}. Message: {error_text[:200]}"
+                        )
+                        await asyncio.sleep(wait_time)
+                        current_retry += 1
+                        continue
+                    else:
+                        # Handle other errors
+                        error_text = await response.text()
+                        try:
+                            error_data = json.loads(error_text)
+                            error_message = error_data.get("error", {}).get(
+                                "message", error_text
+                            )
+                        except:
+                            error_message = error_text
+
+                        logger.error(
+                            f"Tugezer API HTTP Error ({model_to_use}, {response.status}): {error_message[:200]}"
+                        )
+
+                        return f"Error ({response.status}): {error_message}"
+
+            except aiohttp.ClientError as e:
+                logger.error(f"Connection error with Tugezer API {self.endpoint}: {e}")
+                if current_retry < retries:
+                    wait_time = delay * (2**current_retry) + random.uniform(0, 0.5)
+                    logger.warning(
+                        f"Connection error with Tugezer API. Retrying in {wait_time:.2f} seconds. Attempt {current_retry + 1}/{retries}."
+                    )
+                    await asyncio.sleep(wait_time)
+                    current_retry += 1
+                    continue
+                return f"Error: Could not connect to Tugezer API ({e})"
+
+            except Exception as e:
+                logger.error(
+                    f"Unexpected error generating response with Tugezer ({model_to_use}): {e}",
+                    exc_info=True,
+                )
+                return f"Error: {str(e)}"
+
+        # If we exhausted all retries
+        return (
+            f"Error: Failed to get response from Tugezer API after {retries} attempts."
+        )
+
+    def get_available_models(self) -> List[str]:
+        known = ["tugezer-latest", "tugezer-7b", "tugezer-13b"]
+        default_model = self.get_default_model()
+        if default_model and default_model not in known:
+            known.append(default_model)
+        return known
 
 
 try:
