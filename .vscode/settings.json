@@ -113,14 +113,11 @@
   },
   "[rust]": {
     "editor.defaultFormatter": "rust-lang.rust-analyzer"
-    // "editor.formatOnSave": true // Redundant, already enabled globally
   },
   "[go]": {
     "editor.defaultFormatter": "golang.go"
-    // "editor.formatOnSave": true // Redundant, already enabled globally
   },
 
-  // Token Color Customizations (for 'note' file type)
   "editor.tokenColorCustomizations": {
     "textMateRules": [
       {

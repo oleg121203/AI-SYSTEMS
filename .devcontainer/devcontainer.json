@@ -20,8 +20,7 @@
   ],
   "containerEnv": {
     "OLLAMA_HOST": "http://host.docker.internal:11434",
-    "TZ": "Europe/Kyiv" // Змініть, якщо потрібно
-    // JAVA_HOME видалено, оскільки встановлюється функцією Java
+    "TZ": "Europe/Kyiv"
   },
   "mounts": [
     "source=my-app-data,target=/data,type=volume",
@@ -75,7 +74,6 @@
   },
   "forwardPorts": [3000, 7860, 11434],
   "portsAttributes": {
-    // Видалено атрибути для порту 9000
     "3000": {
       "label": "Node.js Application",
       "onAutoForward": "notify"
