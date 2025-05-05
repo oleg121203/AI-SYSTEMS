@@ -23,6 +23,7 @@
   "python.testing.pytestEnabled": true,
   "python.testing.unittestEnabled": false,
   "python.testing.nosetestsEnabled": false,
+  "python.envFile": "${workspaceFolder}/.env",
 
   // JavaScript/TypeScript Settings
   "eslint.validate": [
@@ -44,9 +45,23 @@
     "*.todo": "note"
   },
 
-  // Java/SonarLint Settings
+  // Java/SonarLint Settings from devcontainer
   "sonarlint.ls.javaHome": "${env:JAVA_HOME}",
   "java.home": "${env:JAVA_HOME}",
+
+  // Terminal Settings
+  "terminal.integrated.defaultProfile.linux": "bash",
+  "terminal.integrated.defaultProfile.osx": "bash",
+  "terminal.integrated.profiles.osx": {
+    "bash": {
+      "path": "bash",
+      "args": ["-l"],
+      "icon": "terminal-bash"
+    }
+  },
+
+  // Docker Settings
+  "docker.showStartPage": false,
 
   // Language Specific Settings
   "[python]": {

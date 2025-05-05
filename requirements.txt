@@ -1,13 +1,16 @@
+# Combined Requirements
+
 # Core & Web
 fastapi
 uvicorn[standard]
 websockets
 aiohttp
 jinja2
-requests # Для GitHub API
+requests
 
 # Async & Files
 aiofiles
+async-timeout==5.0.1
 
 # LLM Providers
 google-generativeai
@@ -36,7 +39,7 @@ isort
 python-json-logger
 python-dotenv
 
-# Data & Media Processing (from async reqs)
+# Data & Media Processing
 pillow==10.4.0
 numpy==1.26.4
 pydub==0.25.1
