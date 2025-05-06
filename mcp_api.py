@@ -575,16 +575,46 @@ async def _trigger_repository_dispatch(
         "client_payload": {"file": adjusted_rel_path, "subtask_id": subtask_id},
     }
     dispatch_url = f"https://api.github.com/repos/{GITHUB_MAIN_REPO}/dispatches"
-    try:
-        response = requests.post(dispatch_url, headers=headers, json=data, timeout=15)
-        response.raise_for_status()
-        logger.info(
-            f"[API-GitHub] Successfully triggered repository_dispatch event 'code-committed-in-repo' for {adjusted_rel_path}"
-        )
-    except requests.exceptions.RequestException as e:
-        logger.error(f"[API-GitHub] Failed to trigger repository_dispatch: {e}")
-    except Exception as e:
-        logger.error(f"[API-GitHub] Unexpected error during repository_dispatch: {e}")
+
+    # Added retry mechanism for DNS resolution issues
+    max_retries = 3
+    retry_delay = 2  # seconds
+
+    for attempt in range(max_retries):
+        try:
+            response = requests.post(
+                dispatch_url, headers=headers, json=data, timeout=15
+            )
+            response.raise_for_status()
+            logger.info(
+                f"[API-GitHub] Successfully triggered repository_dispatch event 'code-committed-in-repo' for {adjusted_rel_path}"
+            )
+            return  # Success, exit the function
+        except requests.exceptions.ConnectionError as e:
+            # Handle DNS resolution and other connection errors
+            if "NameResolutionError" in str(e) or "Failed to resolve" in str(e):
+                logger.warning(
+                    f"[API-GitHub] DNS resolution error on attempt {attempt+1}/{max_retries}: {e}"
+                )
+                if attempt < max_retries - 1:
+                    logger.info(f"[API-GitHub] Retrying in {retry_delay} seconds...")
+                    await asyncio.sleep(retry_delay)
+                    retry_delay *= 2  # Exponential backoff
+                else:
+                    logger.error(
+                        f"[API-GitHub] Failed to trigger repository_dispatch after {max_retries} attempts: {e}"
+                    )
+            else:
+                logger.error(f"[API-GitHub] Connection error: {e}")
+                break  # Don't retry other connection errors
+        except requests.exceptions.RequestException as e:
+            logger.error(f"[API-GitHub] Failed to trigger repository_dispatch: {e}")
+            break  # Don't retry other request exceptions
+        except Exception as e:
+            logger.error(
+                f"[API-GitHub] Unexpected error during repository_dispatch: {e}"
+            )
+            break  # Don't retry unexpected errors
 
 
 async def create_follow_up_tasks(filename: str, original_executor_subtask_id: str):
