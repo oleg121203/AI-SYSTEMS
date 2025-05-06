@@ -1,8 +1,10 @@
 import asyncio
+import importlib.util
 import json
 import logging
 import os
 import re
+import sys
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Tuple
 from typing import Type as TypingType
@@ -11,12 +13,25 @@ from typing import Union
 import aiohttp
 from dotenv import load_dotenv
 
-# Import SDKs at the top level
+# Import SDKs at the top level - Simple import for Together with custom error handling
+Together = None
+TogetherError = None
 try:
-    from together import Together, TogetherError
-except ImportError:
-    Together = None
-    TogetherError = None
+    from together import Together
+
+    logging.getLogger(__name__).info("Successfully imported Together module")
+
+    # Define our own TogetherError since it might not exist in the current version
+    class TogetherError(Exception):
+        """Custom error class for Together AI API errors"""
+
+        def __init__(self, message, status_code=None):
+            self.message = message
+            self.status_code = status_code
+            super().__init__(self.message)
+
+except ImportError as e:
+    logging.getLogger(__name__).error(f"Failed to import Together module: {e}")
 
 try:
     import google.generativeai as genai

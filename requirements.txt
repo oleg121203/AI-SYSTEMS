@@ -39,6 +39,7 @@ isort
 python-json-logger
 python-dotenv
 json-log-formatter
+psutil # Added psutil for system monitoring
 
 # Data & Media Processing
 pillow==10.4.0
