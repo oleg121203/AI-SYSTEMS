@@ -1150,11 +1150,11 @@ class AI2:
             "code"
         )  # This will contain idea.md content for the refinement task
 
-        # --- FIX: Extract filename from text if missing ---
+        # Extract filename from text if missing
         if not filename and task_description:
             match = re.search(
-                r"file:\s*([^\s.'\"]+)", task_description
-            )  # Regex to find 'file: path'
+                r"file:\s*([^\s.,\"']+(?:\.[^\s.,\"']+)?)", task_description
+            )
             if match:
                 filename = match.group(1).strip()
                 logger.info(f"Extracted filename '{filename}' from task description.")
@@ -1162,14 +1162,33 @@ class AI2:
                 logger.warning(
                     f"Filename missing and could not be extracted from text: {task_description}"
                 )
-        # --- END FIX ---
+                # Set a default filename to prevent errors
+                if "idea.md" in task_description:
+                    filename = "idea.md"
+                    logger.info(
+                        "Using 'idea.md' as default filename based on task description."
+                    )
 
-        if not subtask_id or not role or not filename:
+        if not subtask_id:
+            logger.error(f"Invalid task information: Missing ID in task.")
+            return {
+                "type": "status_update",
+                "subtask_id": "unknown",
+                "message": "Error: Missing ID in task.",
+                "status": "failed",
+            }
+
+        # If role is still missing but we're running as a specific role worker, assign that role
+        if not role:
+            role = self.role
+            logger.info(f"No role specified in task, using worker role: {self.role}")
+
+        if not filename:
             logger.error(f"Invalid task information: {task_info}")
             return {
                 "type": "status_update",
-                "subtask_id": subtask_id or "unknown",
-                "message": "Error: Missing ID, role, or filename in task.",
+                "subtask_id": subtask_id,
+                "message": "Error: Could not determine filename for task.",
                 "status": "failed",
             }
 
@@ -1241,15 +1260,29 @@ class AI2:
                 report["type"] = (
                     "code"  # Use "code" type as we are updating file content (idea.md or code docs)
                 )
-                if code_content is None:
-                    # For idea.md refinement, code_content holds the initial content
-                    error_message = (
-                        f"Missing content for role documenter (needed for {filename})"
-                    )
-                    logger.error(f"Missing content for documenter: {task_info}")
+
+                # For documenter tasks, handle both file documentation and idea.md
+                if filename == "idea.md":
+                    if code_content is None:
+                        error_message = "Missing content for idea.md refinement"
+                        logger.error(f"Missing content for idea.md: {task_info}")
+                    else:
+                        # Handle idea.md documentation specifically
+                        logger.info(f"[AI2-DOCUMENTER] Generating/refining idea.md")
+                        generated_content = await self._generate_idea_md(
+                            code_content, ""
+                        )
                 else:
-                    # Calls generate_docs, which now handles both code docs and idea.md refinement
-                    generated_content = await self.generate_docs(code_content, filename)
+                    # Standard code documentation
+                    if code_content is None:
+                        error_message = (
+                            f"Missing code content for documenter task for {filename}"
+                        )
+                        logger.error(f"Missing content for documenter: {task_info}")
+                    else:
+                        generated_content = await self.generate_docs(
+                            code_content, filename
+                        )
 
             else:
                 error_message = f"Unknown role: {role}"
