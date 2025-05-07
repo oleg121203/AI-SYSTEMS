@@ -3547,3 +3547,17 @@ async def update_providers(data: dict):
     except Exception as e:
         logger.error(f"Error updating providers: {e}")
         return {"status": "error", "message": f"Error updating providers: {e}"}, 500
+
+
+# Add a proper endpoint to get provider models
+@app.get("/provider_models")
+async def get_provider_models_endpoint(provider: str):
+    """Returns available models for a given provider."""
+    from providers import get_provider_models
+
+    try:
+        models = get_provider_models(provider)
+        return {"status": "success", "models": models}
+    except Exception as e:
+        logger.error(f"Error getting models for provider {provider}: {e}")
+        return {"status": "error", "message": str(e), "models": []}
