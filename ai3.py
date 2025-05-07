@@ -676,7 +676,7 @@ async def create_files_from_structure(
 # ... (similar fixes for generate_initial_idea_md)
 async def generate_initial_idea_md(
     target: str,
-    provider_factory: ProviderFactory,  # Pass factory or provider instance
+    provider_factory: ProviderFactory,
     config: Dict[str, Any],
     session: aiohttp.ClientSession,
 ) -> Optional[str]:
@@ -692,36 +692,68 @@ async def generate_initial_idea_md(
     )
 
     ai3_config = config.get("ai_config", {}).get("ai3", {})
-    # Use the first provider from structure_providers or a default
-    provider_name = ai3_config.get("structure_providers", ["codestral2"])[0]
 
-    try:
-        # provider = provider_factory.create_provider(provider_name) # If factory is passed
-        provider: BaseProvider = ProviderFactory.create_provider(
-            provider_name, config=config.get("providers", {}).get(provider_name)
+    # Get list of providers to try in order for idea.md generation
+    idea_md_providers = ai3_config.get(
+        "idea_md_providers", ["codestral2", "anthropic", "gemini3"]
+    )
+    if not idea_md_providers:
+        idea_md_providers = [
+            "codestral2",
+            "anthropic",
+            "gemini3",
+        ]  # Default fallback providers
+        logger.warning(
+            "[AI3] 'idea_md_providers' not found in ai3 config. "
+            f"Using default providers: {idea_md_providers}"
         )
 
-        # TODO: Implement or import apply_request_delay
-        # await apply_request_delay("ai3")
-        content = await provider.generate_text(
-            prompt,
-            system_prompt=system_prompt,
-            max_tokens=500,
-            temperature=0.7,
-        )
-        if content and content.strip():
-            logger.info("[AI3] Successfully generated initial idea.md content.")
-            return content.strip()
-        else:
-            logger.warning(
-                "[AI3] LLM provider returned empty response for idea.md generation."
+    # Try each provider in sequence until one succeeds
+    for provider_name in idea_md_providers:
+        try:
+            logger.info(
+                f"[AI3] Trying to generate idea.md content with provider: {provider_name}"
             )
-            return f"# Project: {target}\\n\\nInitial description to be filled."
-    except Exception as e:
-        logger.error(
-            f"[AI3] Failed to generate initial idea.md content: {e}", exc_info=True
-        )
-        return f"# Project: {target}\\n\\nError generating description. Please edit."
+            provider_config = config.get("providers", {}).get(provider_name, {})
+
+            # Create the provider instance with explicit config
+            provider: BaseProvider = ProviderFactory.create_provider(
+                provider_name, config=provider_config
+            )
+
+            # TODO: Implement or import apply_request_delay
+            # await apply_request_delay("ai3")
+
+            content = await provider.generate_text(
+                prompt,
+                system_prompt=system_prompt,
+                max_tokens=800,  # Increased for better descriptions
+                temperature=0.7,
+            )
+
+            # Check if we got a valid response
+            if content and content.strip():
+                logger.info(
+                    f"[AI3] Successfully generated initial idea.md content with {provider_name}."
+                )
+                return content.strip()
+            else:
+                logger.warning(
+                    f"[AI3] Provider {provider_name} returned empty response for idea.md generation."
+                )
+        except Exception as e:
+            logger.error(
+                f"[AI3] Failed to generate idea.md content with provider {provider_name}: {e}",
+                exc_info=True,
+            )
+            # Continue to next provider on error
+
+    # If all providers failed, return a simple template
+    default_content = f"# Project: {target}\n\nInitial project description for {target}. This project aims to create a functional application based on the specified requirements."
+    logger.warning(
+        "[AI3] All providers failed to generate idea.md content. Using default template."
+    )
+    return default_content
 
 
 async def ensure_idea_md_exists(

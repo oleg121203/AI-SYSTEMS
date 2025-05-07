@@ -479,9 +479,6 @@ async def _write_file_content(
 ) -> bool:
     """Writes content to the specified file path."""
     try:
-        if adjusted_rel_path and adjusted_rel_path != ".":
-            full_path.parent.mkdir(parents=True, exist_ok=True)
-
         # Check if path is a directory before attempting to write
         if full_path.is_dir():
             logger.warning(
@@ -492,9 +489,16 @@ async def _write_file_content(
         # Check if path ends with / which suggests it's intended as a directory
         if adjusted_rel_path.endswith("/"):
             logger.warning(
-                f"[API-Write] Path '{adjusted_rel_path}' ends with '/' suggesting it's a directory. Cannot write file content."
+                f"[API-Write] Path '{adjusted_rel_path}' ends with '/' suggesting it's a directory. Creating appropriate file instead."
             )
-            return False
+            # Create a default index file for the directory
+            full_path = full_path.parent / (full_path.name + "index.js")
+            adjusted_rel_path = adjusted_rel_path + "index.js"
+            logger.info(f"[API-Write] Redirecting write to {adjusted_rel_path}")
+
+        # Ensure parent directory exists
+        if adjusted_rel_path and adjusted_rel_path != ".":
+            full_path.parent.mkdir(parents=True, exist_ok=True)
 
         async with aiofiles.open(full_path, "w", encoding="utf-8") as f:
             await f.write(content)
