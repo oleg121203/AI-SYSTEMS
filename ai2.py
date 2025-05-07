@@ -1152,22 +1152,40 @@ class AI2:
 
         # Extract filename from text if missing
         if not filename and task_description:
+            # Improved regex to better handle .gitignore and other special files
             match = re.search(
-                r"file:\s*([^\s.,\"']+(?:\.[^\s.,\"']+)?)", task_description
+                r"file:\s*([^\s.,\"']+(?:\.[^\s.,\"']*)?)", task_description
             )
             if match:
                 filename = match.group(1).strip()
                 logger.info(f"Extracted filename '{filename}' from task description.")
             else:
-                logger.warning(
-                    f"Filename missing and could not be extracted from text: {task_description}"
+                # Try another pattern for "filename: X" format
+                match = re.search(
+                    r"filename:\s*([^\s.,\"']+(?:\.[^\s.,\"']*)?)", task_description
                 )
-                # Set a default filename to prevent errors
-                if "idea.md" in task_description:
-                    filename = "idea.md"
+                if match:
+                    filename = match.group(1).strip()
                     logger.info(
-                        "Using 'idea.md' as default filename based on task description."
+                        f"Extracted filename '{filename}' from task description."
                     )
+                # Special case handling for common files
+                elif ".gitignore" in task_description:
+                    filename = ".gitignore"
+                    logger.info("Detected .gitignore file in task description.")
+                elif "Dockerfile" in task_description:
+                    filename = "Dockerfile"
+                    logger.info("Detected Dockerfile in task description.")
+                else:
+                    logger.warning(
+                        f"Filename missing and could not be extracted from text: {task_description}"
+                    )
+                    # Set a default filename to prevent errors
+                    if "idea.md" in task_description:
+                        filename = "idea.md"
+                        logger.info(
+                            "Using 'idea.md' as default filename based on task description."
+                        )
 
         if not subtask_id:
             logger.error(f"Invalid task information: Missing ID in task.")
