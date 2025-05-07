@@ -724,6 +724,68 @@ async def generate_initial_idea_md(
         return f"# Project: {target}\\n\\nError generating description. Please edit."
 
 
+async def ensure_idea_md_exists(
+    repo_dir: str,
+    target: str,
+    provider_factory,
+    config: Dict[str, Any],
+    client_session: aiohttp.ClientSession,
+) -> bool:
+    """
+    Ensures that idea.md exists in the repository root, creating it if needed.
+    This function serves as a safeguard to ensure AI1 always has access to the required idea.md file.
+
+    Args:
+        repo_dir: Repository directory path
+        target: Project target description
+        provider_factory: Factory for creating LLM providers
+        config: Configuration dictionary
+        client_session: aiohttp client session for API calls
+
+    Returns:
+        bool: True if idea.md exists or was created successfully, False otherwise
+    """
+    idea_md_path = os.path.join(repo_dir, "idea.md")
+
+    # Check if idea.md already exists
+    if os.path.exists(idea_md_path):
+        logger.info(f"[AI3] idea.md already exists at {idea_md_path}")
+        return True
+
+    logger.info(f"[AI3] idea.md not found at {idea_md_path}, generating it...")
+
+    # Generate content for idea.md
+    idea_md_content = await generate_initial_idea_md(
+        target, provider_factory, config, client_session
+    )
+
+    if not idea_md_content:
+        # If LLM generation fails, create a basic idea.md with minimal content
+        idea_md_content = f"# Project: {target}\n\nThis project aims to create a {target} as specified in the configuration."
+        logger.warning(
+            "[AI3] Failed to generate idea.md content via LLM, using basic template"
+        )
+
+    # Write idea.md
+    try:
+        async with aiofiles.open(idea_md_path, "w", encoding="utf-8") as f:
+            await f.write(idea_md_content)
+        logger.info(f"[AI3] Successfully created idea.md at {idea_md_path}")
+
+        # Commit the file if repo exists
+        try:
+            repo = Repo(repo_dir)
+            _commit_changes(repo, [idea_md_path], "AI3: Create initial idea.md")
+            logger.info("[AI3] Committed idea.md to the repository")
+        except (InvalidGitRepositoryError, GitCommandError) as e:
+            logger.warning(f"[AI3] Could not commit idea.md: {e}")
+
+        return True
+    except Exception as e:
+        logger.error(f"[AI3] Error creating idea.md: {e}", exc_info=True)
+        return False
+
+
 class AI3:
     # ... (AI3 class definition with fixes)
     def __init__(self, target: str, config_path: Optional[str] = None):
@@ -1086,6 +1148,15 @@ coverage.xml
                     f"[AI3] Error during explicit removal of '{idea_file_path}': {e}",
                     exc_info=True,
                 )
+
+        # Ensure idea.md exists before sending the final structure to MCP
+        await ensure_idea_md_exists(
+            self.repo_dir,
+            self.target,
+            self.provider_factory,
+            self.config,
+            self.client_session,
+        )
 
         if not await send_structure_to_mcp(
             structure, self.target, self.mcp_api_url, self.client_session  # type: ignore

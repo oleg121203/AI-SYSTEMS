@@ -13,16 +13,26 @@ from typing import Any, Dict, List, Optional, Set, Union  # Add Any here
 from uuid import uuid4
 
 import aiofiles
+
 # --- CHANGE: Import Repo and GitCommandError ---
 import git
 import requests  # Додано для repository_dispatch
+
 # --- END CHANGE ---
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import (BackgroundTasks, FastAPI, HTTPException, Request,
-                     WebSocket, WebSocketDisconnect)
+from fastapi import (
+    BackgroundTasks,
+    FastAPI,
+    HTTPException,
+    Request,
+    WebSocket,
+    WebSocketDisconnect,
+)
+
 # --- CHANGE: Define constants ---
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+
 # --- END CHANGE ---
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -3139,3 +3149,39 @@ class StatusMonitor:
                         "message": report.get("message"),
                     }
                 )
+
+
+@app.post("/ai3/repo_cleared")
+async def receive_repo_cleared_report():
+    """Receives a report from AI3 that the repository has been cleared."""
+    logger.info("Received report from AI3: Repository cleared")
+    global ai3_report
+    ai3_report = {"status": "repo_cleared", "timestamp": datetime.now().isoformat()}
+    await broadcast_specific_update({"ai3_report": ai3_report})
+    return {"status": "received"}
+
+
+@app.post("/ai3/structure_creation_completed")
+async def receive_structure_creation_report():
+    """Receives a report from AI3 that the structure creation phase has completed."""
+    logger.info("Received report from AI3: Structure creation completed")
+    global ai3_report
+    ai3_report = {
+        "status": "structure_creation_completed",
+        "timestamp": datetime.now().isoformat(),
+    }
+    await broadcast_specific_update({"ai3_report": ai3_report})
+    return {"status": "received"}
+
+
+@app.post("/ai3/structure_setup_completed")
+async def receive_structure_setup_report():
+    """Receives a report from AI3 that the structure setup phase has completed."""
+    logger.info("Received report from AI3: Structure setup completed")
+    global ai3_report
+    ai3_report = {
+        "status": "structure_setup_completed",
+        "timestamp": datetime.now().isoformat(),
+    }
+    await broadcast_specific_update({"ai3_report": ai3_report})
+    return {"status": "received"}
