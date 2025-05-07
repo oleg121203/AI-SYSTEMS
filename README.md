@@ -11,8 +11,8 @@ The system consists of the following main components:
 - **AI1 (Coordinator)**: Plans and coordinates tasks, makes decisions based on test results. Uses LLM for flexible decision-making, task prioritization, and report analysis.
 - **AI2 (Executors)**: Generates high-quality code, comprehensive tests, and detailed documentation using language-specific patterns and validation. Features multiple provider fallback and quality assurance checks.
 - **AI3 (Monitor/Structure Manager)**: Creates the project structure, proactively monitors the system, provides consultations, identifies problems, initiates their resolution, and independently fixes testing errors.
-- **MCP API**: Central API for interaction between components, manages task queues and provides status monitoring.
-- **Web Interface**: Visualization of the development process and system management (work in progress).
+- **MCP API**: Central API for interaction between components, manages task queues and provides status monitoring with robust error handling.
+- **Web Interface**: Visualization of the development process and system management with real-time updates.
 
 ## Web Interface
 
@@ -39,7 +39,7 @@ The interface is built with modern web technologies:
 The web interface is automatically launched when starting the system with the `run_async_services.sh` script. By default, it's accessible at:
 
 ```
-http://localhost: 7860
+http://localhost:7860
 ```
 
 You can interact with the interface to:
@@ -96,7 +96,9 @@ The AI3 system uses a two-stage approach to project structure generation:
    * AI3 receives the project goal (`target`) from the configuration.
    * Generates initial JSON structure of files and directories for the project using LLM.
    * Creates these files and directories in the local repository (repo).
-   * Generates the initial idea.md file with a project description.
+   * Generates the initial idea.md file with a project description using a robust provider fallback mechanism.
+   * Reports progress to MCP API through dedicated endpoints (`/ai3/repo_cleared`, `/ai3/structure_creation_completed`, `/ai3/structure_setup_completed`).
+   * Ensures idea.md always exists with safety mechanisms even if LLM generation fails.
    * Sends the generated structure to the MCP API.
    * Launches background monitoring processes for logs, tests, and task queues.
 
@@ -124,26 +126,67 @@ The AI3 system uses a two-stage approach to project structure generation:
    * Makes decisions about task reassignment in case of errors.
    * Tracks the number of refinement attempts and determines when manual intervention is needed.
 
+## Communication Protocol
+
+The system uses a robust API-based communication protocol with these key components:
+
+1. **MCP API Endpoints**:
+   * Task management: `/subtask`, `/task/{role}`, `/report`
+   * Structure management: `/structure`, `/file_content`
+   * Status reporting: `/ai3/repo_cleared`, `/ai3/structure_creation_completed`, `/ai3/structure_setup_completed`
+   * Test recommendations: `/test_recommendation`
+   * System management: `/start_ai1`, `/stop_ai1`, etc.
+
+2. **WebSocket Updates**:
+   * Real-time status updates to connected clients
+   * Task status changes
+   * Structure updates
+   * Chart data for visualization
+
+3. **File Operation Safety**:
+   * Path sanitization to prevent directory traversal
+   * Automatic handling of directory path edge cases
+   * Proper file creation and error recovery
+
+## Error Handling and Recovery
+
+The system implements robust error handling mechanisms:
+
+1. **Provider Fallback System**:
+   * Multiple LLM providers are tried in sequence for critical operations
+   * If a primary provider fails, secondary providers are used
+   * Default templates are provided as final fallback options
+
+2. **File Operation Safety**:
+   * Intelligent handling of file paths with trailing slashes
+   * Creation of appropriate index files for directories
+   * Path validation and sanitization
+
+3. **API Communication Resilience**:
+   * Retry logic for API requests
+   * Error tracking and reporting
+   * Graceful degradation when services are unavailable
+
+4. **Resource Management**:
+   * Proper cleanup of resources (e.g., closing aiohttp sessions)
+   * Memory usage monitoring
+   * Rate limiting to prevent API overload
+
 ## Areas for Improvement
 
 The current implementation has several areas that need improvement:
 
 ### Web Interface
-* The visualization interface for the development process needs to be completed
-* Dashboard for monitoring task queues, test results, and system status needs enhancement
-* Real-time updates via WebSockets need to be fully implemented
+* The visualization interface for the development process needs to be enhanced with more detailed metrics
+* Real-time updates via WebSockets need further optimization for large projects
 
 ### GitHub Integration
 * GitHub Actions for automated code testing needs to be fully implemented
 * Repository dispatch events need to be properly triggered and handled
 
-### Error Handling
-* More robust error handling and recovery mechanisms need to be implemented
-* Automatic recovery from process failures needs enhancement
-
 ### Monitoring and Logging
-* Comprehensive logging system needs improvement
-* Better visualization of system state and progress
+* More comprehensive visualization of system state and progress
+* Advanced log analysis for better error prediction
 
 ### Multi-Repository Structure
 * Better separation between the main system repository and the generated project repository
