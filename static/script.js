@@ -3360,24 +3360,31 @@ async function fetchProviderModels(providerName) {
   try {
     // If we already have models for this provider, use the cached data
     if (providerModels[providerName]) {
+      console.log(
+        `Using cached models for ${providerName}:`,
+        providerModels[providerName]
+      );
       return providerModels[providerName];
     }
 
     // Otherwise, fetch from the server
+    console.log(`Fetching models for provider: ${providerName}`);
     const response = await fetch(
       `/provider_models?provider=${encodeURIComponent(providerName)}`
     );
     const data = await response.json();
 
     if (data.models && Array.isArray(data.models)) {
-      providerModels[providerName] = data.models;
+      console.log(`Received models for ${providerName}:`, data.models);
+      providerModels[providerName] = data.models; // Cache the models
       return data.models;
+    } else {
+      console.warn(`No models received for ${providerName}`);
+      return [];
     }
-
-    return []; // Return empty array if no models found
   } catch (error) {
     console.error(`Error fetching models for ${providerName}:`, error);
-    return []; // Return empty array on error
+    return [];
   }
 }
 
@@ -3392,6 +3399,9 @@ async function updateModelOptions(aiComponent) {
   }
 
   const selectedProvider = providerSelect.value;
+  console.log(
+    `Provider changed to ${selectedProvider} for ${aiComponent}, updating models...`
+  );
 
   // Clear existing options
   modelSelect.innerHTML = '<option value="">Loading models...</option>';
@@ -3407,13 +3417,24 @@ async function updateModelOptions(aiComponent) {
     option.value = "";
     option.textContent = "No models available";
     modelSelect.appendChild(option);
+    console.log(`No models available for ${selectedProvider}`);
   } else {
+    // Add a default empty option
+    const defaultOption = document.createElement("option");
+    defaultOption.value = "";
+    defaultOption.textContent = "Select a model";
+    modelSelect.appendChild(defaultOption);
+
+    // Add all available models
     models.forEach((model) => {
       const option = document.createElement("option");
       option.value = model;
       option.textContent = model;
       modelSelect.appendChild(option);
     });
+    console.log(
+      `Added ${models.length} models to select for ${selectedProvider}`
+    );
   }
 }
 

@@ -21,6 +21,7 @@ import requests  # Додано для repository_dispatch
 # --- END CHANGE ---
 import uvicorn
 from dotenv import load_dotenv
+from fastapi import Query  # Add Query import
 from fastapi import (
     BackgroundTasks,
     FastAPI,
@@ -3231,7 +3232,9 @@ async def get_providers():
 async def get_provider_models(provider: str = None):
     """Get available models for a specific provider."""
     if not provider:
-        return {"error": "Provider name is required"}, 400
+        return JSONResponse(
+            content={"error": "Provider name is required"}, status_code=400
+        )
 
     try:
         # Import the provider functions
@@ -3239,10 +3242,10 @@ async def get_provider_models(provider: str = None):
 
         # Get available models
         models = get_models(provider)
-        return {"models": models}
+        return JSONResponse(content={"models": models})
     except Exception as e:
         logger.error(f"Error getting models for provider {provider}: {e}")
-        return {"error": str(e)}, 500
+        return JSONResponse(content={"error": str(e)}, status_code=500)
 
 
 @app.get("/component_fallbacks")
@@ -3551,13 +3554,234 @@ async def update_providers(data: dict):
 
 # Add a proper endpoint to get provider models
 @app.get("/provider_models")
-async def get_provider_models_endpoint(provider: str):
-    """Returns available models for a given provider."""
-    from providers import get_provider_models
+async def get_provider_models_endpoint(
+    provider: str = Query(..., description="The name of the provider")
+):
+    """
+    Retrieves the available models for a specified provider.
+    Ensures that the provider name is correctly passed as a string.
+    """
+    try:
+        models = providers.get_provider_models(provider)
+        return JSONResponse(content=models)
+    except ValueError as ve:  # Catch specific errors like unsupported provider
+        logger.warning(f"Error getting models for provider '{provider}': {ve}")
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception as e:
+        logger.error(
+            f"API Error getting models for provider '{provider}': {e}", exc_info=True
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error while getting models for provider '{provider}'.",
+        )
+
+
+@app.get("/component_fallbacks")
+async def get_component_fallbacks(component: str = None):
+    """Get fallback providers for a specific AI component."""
+    if not component:
+        return {"error": "Component parameter is required"}, 400
 
     try:
-        models = get_provider_models(provider)
-        return {"status": "success", "models": models}
+        # Parse component to get AI and role
+        parts = component.split("-")
+        ai = parts[0]
+
+        # Handle AI2 with specific role
+        role = parts[1] if len(parts) > 1 else None
+
+        # Import provider functions
+        from providers import get_component_fallbacks as get_fallbacks
+
+        # Get fallbacks
+        fallbacks = get_fallbacks(ai, role)
+        return {"fallbacks": fallbacks}
     except Exception as e:
-        logger.error(f"Error getting models for provider {provider}: {e}")
-        return {"status": "error", "message": str(e), "models": []}
+        logger.error(f"Error getting fallbacks for component {component}: {e}")
+        return {"error": str(e)}, 500
+
+
+@app.route("/component_fallbacks", methods=["GET"])
+async def get_component_fallbacks():
+    """Get fallback providers for a specific AI component."""
+    try:
+        component = request.args.get("component")
+        if not component:
+            return jsonify({"error": "Component name is required"}), 400
+
+        # Load configuration
+        config_data = await load_config()
+
+        # Parse component to get AI and role
+        ai, role = parse_component_name(component)
+
+        # Get fallbacks
+        fallbacks = get_component_fallbacks_config(config_data, ai, role)
+
+        return jsonify({"fallbacks": fallbacks})
+    except Exception as e:
+        logger.error(f"Error getting fallbacks for component {component}: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/update_providers", methods=["POST"])
+async def update_providers():
+    """Update provider configuration for all AI components."""
+    try:
+        # Get request data
+        data = request.json
+        if not data:
+            return jsonify({"error": "No data provided"}), 400
+
+        # Load current configuration
+        config_data = await load_config()
+
+        # Update AI1 provider
+        if "ai1" in data:
+            update_ai_provider_config(config_data, "ai1", data["ai1"])
+
+        # Update AI2 providers
+        if "ai2" in data:
+            if "executor" in data["ai2"]:
+                update_ai_provider_config(
+                    config_data, "ai2", data["ai2"]["executor"], "executor"
+                )
+            if "tester" in data["ai2"]:
+                update_ai_provider_config(
+                    config_data, "ai2", data["ai2"]["tester"], "tester"
+                )
+            if "documenter" in data["ai2"]:
+                update_ai_provider_config(
+                    config_data, "ai2", data["ai2"]["documenter"], "documenter"
+                )
+
+        # Update AI3 provider
+        if "ai3" in data:
+            update_ai_provider_config(config_data, "ai3", data["ai3"])
+
+        # Save configuration
+        await save_config(config_data)
+
+        # Return success
+        return jsonify({"status": "success"})
+    except Exception as e:
+        logger.error(f"Error updating providers: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+# Helper functions for provider configuration
+
+
+def get_available_provider_types():
+    """Get all available provider types."""
+    # List of all provider types supported by our system
+    return [
+        "openai",
+        "anthropic",
+        "groq",
+        "local",
+        "ollama",
+        "openrouter",
+        "cohere",
+        "gemini",
+        "together",
+        "codestral",
+        "gemini3",
+        "gemini4",
+        "tugezer",
+        "fallback",
+    ]
+
+
+def parse_component_name(component):
+    """Parse component name into AI and role."""
+    if component == "ai1":
+        return "ai1", None
+    elif component == "ai3":
+        return "ai3", None
+    elif component.startswith("ai2-"):
+        role = component.split("-")[1]
+        return "ai2", role
+    else:
+        raise ValueError(f"Invalid component name: {component}")
+
+
+def get_ai_provider_config(config, ai, role=None):
+    """Get provider configuration for an AI component."""
+    if ai == "ai1":
+        provider_config = config.get("ai1_provider", {})
+    elif ai == "ai2" and role:
+        providers = config.get("ai2_providers", {})
+        provider_config = providers.get(role, {})
+    elif ai == "ai3":
+        provider_config = config.get("ai3_provider", {})
+    else:
+        provider_config = {}
+
+    return {
+        "provider": provider_config.get("type", "openai"),
+        "model": provider_config.get("model", ""),
+        "fallbacks": get_component_fallbacks_config(config, ai, role),
+    }
+
+
+def get_component_fallbacks_config(config, ai, role=None):
+    """Get fallback providers for an AI component."""
+    if ai == "ai1":
+        provider_config = config.get("ai1_provider", {})
+    elif ai == "ai2" and role:
+        providers = config.get("ai2_providers", {})
+        provider_config = providers.get(role, {})
+    elif ai == "ai3":
+        provider_config = config.get("ai3_provider", {})
+    else:
+        provider_config = {}
+
+    fallbacks = []
+    if provider_config.get("type") == "fallback":
+        fallback_providers = provider_config.get("providers", [])
+        for p in fallback_providers:
+            fallbacks.append(
+                {"provider": p.get("type", ""), "model": p.get("model", "")}
+            )
+
+    return fallbacks
+
+
+def update_ai_provider_config(config, ai, provider_data, role=None):
+    """Update provider configuration for an AI component."""
+    provider_type = provider_data.get("provider", "openai")
+    model = provider_data.get("model", "")
+    fallbacks = provider_data.get("fallbacks", [])
+
+    # Create provider config
+    if fallbacks and len(fallbacks) > 0:
+        # Use fallback provider with the specified providers
+        provider_config = {"type": "fallback", "providers": []}
+
+        # Add first provider
+        provider_config["providers"].append({"type": provider_type, "model": model})
+
+        # Add fallback providers
+        for fallback in fallbacks:
+            fallback_type = fallback.get("provider")
+            fallback_model = fallback.get("model", "")
+
+            if fallback_type:
+                provider_config["providers"].append(
+                    {"type": fallback_type, "model": fallback_model}
+                )
+    else:
+        # Use a single provider
+        provider_config = {"type": provider_type, "model": model}
+
+    # Update config
+    if ai == "ai1":
+        config["ai1_provider"] = provider_config
+    elif ai == "ai2" and role:
+        if "ai2_providers" not in config:
+            config["ai2_providers"] = {}
+        config["ai2_providers"][role] = provider_config
+    elif ai == "ai3":
+        config["ai3_provider"] = provider_config

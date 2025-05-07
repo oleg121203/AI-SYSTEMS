@@ -166,7 +166,7 @@ class ProviderFactory:
 
     @staticmethod
     def create_provider(
-        provider_name: str, config: Optional[Dict[str, Any]] = None
+        provider_name: str, config_arg: Optional[Dict[str, Any]] = None
     ) -> "BaseProvider":
         """
         Создает экземпляр провайдера AI по имени.
@@ -174,15 +174,15 @@ class ProviderFactory:
         Args:
             provider_name: Имя провайдера из секции "providers" в config.json
                            или прямое название типа провайдера
-            config: Дополнительная конфигурация для провайдера (необязательно)
+            config_arg: Дополнительная конфигурация для провайдера (необязательно),
+                        будет объединена с конфигурацией из файла.
 
         Returns:
             BaseProvider: Экземпляр провайдера
 
         Raises:
-            ValueError: Если тип провайдера не поддерживается или конфигурация отсутствует
+            ValueError: Если тип провайдера не поддерживается или конфигурация некорректна.
         """
-        # Загружаем общую конфигурацию
         try:
             from config import load_config
 
@@ -190,67 +190,106 @@ class ProviderFactory:
             providers_config = all_config.get("providers", {})
         except Exception as e:
             logger.warning(
-                f"Не удалось загрузить конфигурацию: {e}. Используем переданную конфигурацию."
+                f"Не удалось загрузить общую конфигурацию: {e}. Будут использованы только переданные аргументы."
             )
             providers_config = {}
 
-        # Пытаемся найти конфигурацию провайдера
-        provider_config = None
+        effective_config = {}
+        provider_type_from_config = None
 
-        # Сначала ищем напрямую в секции "providers"
+        # 1. Check if provider_name is a key in the global providers_config
         if provider_name in providers_config:
-            provider_config = providers_config[provider_name]
-        else:
-            # Если не нашли, ищем провайдер по типу
-            for name, cfg in providers_config.items():
-                if cfg.get("type") == provider_name:
-                    provider_config = cfg
-                    break
+            candidate_config = providers_config[provider_name]
+            if isinstance(candidate_config, dict):
+                effective_config = candidate_config.copy()  # Start with this config
+                provider_type_from_config = effective_config.get("type")
+            elif isinstance(candidate_config, str):
+                # This case handles when the config for a provider_name is just a string (the type)
+                # e.g., "ai1_fallback": "fallback"
+                # We treat this string as the provider type.
+                provider_type_from_config = candidate_config
+                # effective_config remains empty for now, to be populated by config_arg or defaults
+                logger.info(
+                    f"Configuration for provider key '{provider_name}' is a string: '{candidate_config}'. "
+                    f"Using this as the provider type."
+                )
+            else:
+                logger.warning(
+                    f"Configuration for provider key '{provider_name}' in 'providers' section "
+                    f"is not a dictionary or string: {candidate_config}. "
+                    f"Assuming '{provider_name}' is the type and ignoring this config entry."
+                )
+                # effective_config remains empty; type will be inferred from provider_name or config_arg
 
-        # Если конфигурация всё еще не найдена, используем переданную
-        if not provider_config:
-            provider_config = config or {}
+        # 2. Merge with config_arg if it's a dictionary.
+        # This allows overriding or providing config directly.
+        if isinstance(config_arg, dict):
+            effective_config.update(config_arg)
+        elif config_arg is not None:
+            logger.warning(
+                f"Non-dictionary 'config_arg' provided for provider '{provider_name}': {config_arg}. "
+                "This argument will be ignored for merging."
+            )
 
-        # Если передана дополнительная конфигурация, применяем её
-        if config:
-            provider_config = {**provider_config, **config}
+        # 3. Determine the provider type.
+        # Priority:
+        #   a) type from config_arg (if config_arg was a dict and had 'type')
+        #   b) type from providers_config (if provider_name was a key and its value was a dict with 'type' or a string)
+        #   c) provider_name itself as the type (if no 'type' was found above)
+        provider_type = effective_config.get(
+            "type", provider_type_from_config or provider_name
+        ).lower()
 
-        # Убеждаемся, что есть тип провайдера
-        provider_type = provider_config.get("type", provider_name).lower()
+        # If effective_config is still empty (e.g. provider_name was a type, and no config_arg)
+        # and provider_type matches a key in providers_config that IS a dict, use that dict.
+        # This handles cases like create_provider("openai") where "openai" is a type, but also a key to a config dict.
+        if (
+            not effective_config
+            and provider_type in providers_config
+            and isinstance(providers_config[provider_type], dict)
+        ):
+            effective_config = providers_config[provider_type].copy()
+            logger.info(
+                f"Using config from 'providers.{provider_type}' as base for type '{provider_type}'."
+            )
+            # Re-merge config_arg in case it was meant for this specific type config
+            if isinstance(config_arg, dict):
+                effective_config.update(config_arg)
 
         logger.info(
-            f"Creating provider instance for '{provider_name}' with type '{provider_type}'"
+            f"Creating provider instance for '{provider_name}' (resolved type: '{provider_type}') "
+            # f"with effective config: {effective_config}" # Config can be verbose
         )
 
-        # Создаем экземпляр провайдера в зависимости от типа
+        # 4. Instantiate the provider based on provider_type
         if provider_type == "openai":
-            return OpenAIProvider(provider_config)
+            return OpenAIProvider(effective_config)
         elif provider_type == "anthropic":
-            return AnthropicProvider(provider_config)
+            return AnthropicProvider(effective_config)
         elif provider_type == "groq":
-            return GroqProvider(provider_config)
+            return GroqProvider(effective_config)
         elif provider_type == "local":
-            return LocalProvider(provider_config)
+            return LocalProvider(effective_config)
         elif provider_type == "ollama":
-            return OllamaProvider(provider_config)
+            return OllamaProvider(effective_config)
         elif provider_type == "openrouter":
-            return OpenRouterProvider(provider_config)
+            return OpenRouterProvider(effective_config)
         elif provider_type == "cohere":
-            return CohereProvider(provider_config)
+            return CohereProvider(effective_config)
         elif provider_type == "gemini":
-            return GeminiProvider(provider_config)
+            return GeminiProvider(effective_config)
         elif provider_type == "together":
-            return TogetherProvider(provider_config)
+            return TogetherProvider(effective_config)
         elif provider_type == "codestral":
-            return CodestralProvider(provider_config)
+            return CodestralProvider(effective_config)
         elif provider_type == "gemini3":
-            return Gemini3Provider(provider_config)
+            return Gemini3Provider(effective_config)
         elif provider_type == "gemini4":
-            return Gemini4Provider(provider_config)
+            return Gemini4Provider(effective_config)
         elif provider_type == "tugezer":
-            return TugezerProvider(provider_config)
+            return TugezerProvider(effective_config)
         elif provider_type == "fallback":
-            return FallbackProvider(provider_config)
+            return FallbackProvider(effective_config)
         else:
             raise ValueError(f"Неподдерживаемый тип провайдера: {provider_type}")
 
@@ -271,7 +310,7 @@ class BaseProvider(ABC):
         self.api_key = self.config.get("api_key")
         self.endpoint = self.config.get("endpoint")
         self._session: Optional[aiohttp.ClientSession] = None
-        self.setup()
+        # self.setup() # Removed: Subclasses should call setup() after their own initialization
 
     @abstractmethod
     def setup(self) -> None:
@@ -376,6 +415,7 @@ class OpenAIProvider(BaseProvider):
         super().__init__(config)
         self.name = "openai"
         self._client = None
+        self.setup()  # Ensure setup is called
 
     def setup(self) -> None:
         try:
@@ -474,6 +514,7 @@ class AnthropicProvider(BaseProvider):
         super().__init__(config)
         self.name = "anthropic"
         self._client = None
+        self.setup()  # Ensure setup is called
 
     def setup(self) -> None:
         if not anthropic:
@@ -591,6 +632,7 @@ class GroqProvider(BaseProvider):
                 "llama-3.3-70b-versatile",
             ],  # Потужні моделі
         }
+        self.setup()  # Ensure setup is called
 
     def setup(self) -> None:
         if not groq or not AsyncGroq:  # Check both groq and AsyncGroq
@@ -871,6 +913,7 @@ class LocalProvider(BaseProvider):
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         super().__init__(config)
         self.name = "local"
+        self.setup()  # Ensure setup is called
 
     def setup(self) -> None:
         if not self.endpoint:
@@ -994,6 +1037,7 @@ class OllamaProvider(BaseProvider):
         self.name = "ollama"
         self._client = None
         # self._session is managed by BaseProvider
+        self.setup()  # Ensure setup is called
 
     def setup(self) -> None:
         if not self.endpoint:
@@ -1214,6 +1258,7 @@ class OpenRouterProvider(BaseProvider):
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         super().__init__(config)
         self.name = "openrouter"
+        self.setup()  # Ensure setup is called
 
     def setup(self) -> None:
         if not self.endpoint:
@@ -1365,6 +1410,7 @@ class CohereProvider(BaseProvider):
         super().__init__(config)
         self.name = "cohere"
         self._client = None
+        self.setup()  # Ensure setup is called
 
     def setup(self) -> None:
         if not cohere:
@@ -1461,6 +1507,7 @@ class GeminiProvider(BaseProvider):
         super().__init__(config)
         self.name = "gemini"
         self._model_instance = None
+        self.setup()  # Ensure setup is called
 
     def setup(self) -> None:
         if not genai:
@@ -1640,6 +1687,7 @@ class TogetherProvider(BaseProvider):
         super().__init__(config)
         self.name = "together"
         self._client = None
+        self.setup()  # Ensure setup is called
 
     def setup(self) -> None:
         if not Together:
@@ -1741,14 +1789,11 @@ class CodestralProvider(BaseProvider):
         self.name = "codestral"
         # Ensure endpoint is set, default if not provided
         if not self.endpoint:
-            self.endpoint = "https://codestral.mistral.ai/v1"
-            logger.info(
-                f"Codestral endpoint not specified, using default: {self.endpoint}"
-            )
+            self.endpoint = self.config.get("endpoint", "https://api.mistral.ai/v1")
         else:
-            # Ensure endpoint doesn't end with a slash
-            self.endpoint = self.endpoint.rstrip("/")
-            logger.info(f"Codestral endpoint configured: {self.endpoint}")
+            # Ensure endpoint from config is used if provided
+            self.endpoint = self.config.get("endpoint", self.endpoint)
+        self.setup()  # Ensure setup is called
 
     def setup(self) -> None:
         # Check if this is the codestral2 provider and use its specific API key
@@ -1958,6 +2003,7 @@ class Gemini3Provider(BaseProvider):
         self.api_key = os.environ.get(
             "GEMINI3_API_KEY"
         )  # Використовуємо змінну оточення
+        self.setup()  # Ensure setup is called
 
     def setup(self) -> None:
         logger.info("Gemini3Provider налаштований через прямі API запити")
@@ -2067,6 +2113,7 @@ class Gemini4Provider(BaseProvider):
         self.api_key = os.environ.get(
             "GEMINI4_API_KEY"
         )  # Використовуємо змінну оточення
+        self.setup()  # Ensure setup is called
 
     def setup(self) -> None:
         logger.info(
@@ -2170,6 +2217,7 @@ class TugezerProvider(BaseProvider):
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         super().__init__(config)
         self.name = "tugezer"
+        self.setup()  # Ensure setup is called
 
     def setup(self) -> None:
         if not self.endpoint:
@@ -2467,6 +2515,57 @@ class FallbackProvider(BaseProvider):
                 await provider.close_session()
             except Exception as e:
                 logger.error(f"Error closing session for provider {provider.name}: {e}")
+
+
+def get_component_fallbacks(ai: str, role: Optional[str] = None) -> List[Dict]:
+    """Gets fallback providers for a specific AI component.
+
+    Args:
+        ai: The AI component name (ai1, ai2, ai3)
+        role: For AI2, the specific role (executor, tester, documenter)
+
+    Returns:
+        List of provider configs with their models
+    """
+    try:
+        # Load config
+        from config import load_config
+
+        config = load_config()
+
+        # Get AI config
+        ai_config = config.get("ai_config", {})
+
+        # Handle AI2 with role
+        if ai == "ai2" and role:
+            if role in ai_config.get("ai2", {}):
+                provider_config = ai_config["ai2"][role]
+            else:
+                return []
+        # Handle AI1/AI3
+        elif ai in ai_config:
+            provider_config = ai_config[ai]
+        else:
+            return []
+
+        # Check if using fallback provider
+        if provider_config.get("provider") != "fallback":
+            return []
+
+        # Get fallback providers
+        fallbacks = []
+        for provider in provider_config.get("fallback_providers", []):
+            if provider and "provider" in provider and "model" in provider:
+                fallbacks.append(
+                    {"provider": provider["provider"], "model": provider["model"]}
+                )
+
+        return fallbacks
+    except Exception as e:
+        logger.error(
+            f"Error getting fallbacks for component {ai}{'-'+role if role else ''}: {e}"
+        )
+        return []
 
 
 try:
