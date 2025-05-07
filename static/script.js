@@ -3351,3 +3351,1017 @@ document.addEventListener("DOMContentLoaded", function () {
     updateLoadDescription(systemLoadSlider.value);
   }
 });
+
+// Provider Management Logic
+let providerModels = {}; // Object to store available models for each provider
+
+// Fetch available models for a provider
+async function fetchProviderModels(providerName) {
+  try {
+    // If we already have models for this provider, use the cached data
+    if (providerModels[providerName]) {
+      return providerModels[providerName];
+    }
+
+    // Otherwise, fetch from the server
+    const response = await fetch(
+      `/provider_models?provider=${encodeURIComponent(providerName)}`
+    );
+    const data = await response.json();
+
+    if (data.models && Array.isArray(data.models)) {
+      providerModels[providerName] = data.models;
+      return data.models;
+    }
+
+    return []; // Return empty array if no models found
+  } catch (error) {
+    console.error(`Error fetching models for ${providerName}:`, error);
+    return []; // Return empty array on error
+  }
+}
+
+// Update model options when provider changes
+async function updateModelOptions(aiComponent) {
+  const providerSelect = document.getElementById(`${aiComponent}-provider`);
+  const modelSelect = document.getElementById(`${aiComponent}-model`);
+
+  if (!providerSelect || !modelSelect) {
+    console.error(`Couldn't find provider or model select for ${aiComponent}`);
+    return;
+  }
+
+  const selectedProvider = providerSelect.value;
+
+  // Clear existing options
+  modelSelect.innerHTML = '<option value="">Loading models...</option>';
+
+  // Fetch models for the selected provider
+  const models = await fetchProviderModels(selectedProvider);
+
+  // Populate model select
+  modelSelect.innerHTML = "";
+
+  if (models.length === 0) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "No models available";
+    modelSelect.appendChild(option);
+  } else {
+    models.forEach((model) => {
+      const option = document.createElement("option");
+      option.value = model;
+      option.textContent = model;
+      modelSelect.appendChild(option);
+    });
+  }
+}
+
+// Initialize provider fallbacks from current configuration
+function initializeFallbacks() {
+  // Initialize fallbacks for all AI components
+  initializeComponentFallbacks("ai1");
+  initializeComponentFallbacks("ai2-executor");
+  initializeComponentFallbacks("ai2-tester");
+  initializeComponentFallbacks("ai2-documenter");
+  initializeComponentFallbacks("ai3");
+}
+
+// Initialize fallbacks for a specific AI component
+async function initializeComponentFallbacks(aiComponent) {
+  try {
+    const response = await fetch(
+      `/component_fallbacks?component=${encodeURIComponent(aiComponent)}`
+    );
+    const data = await response.json();
+
+    if (data.fallbacks && Array.isArray(data.fallbacks)) {
+      const fallbackList = document.getElementById(
+        `${aiComponent}-fallback-list`
+      );
+      if (!fallbackList) return;
+
+      // Clear existing fallbacks
+      fallbackList.innerHTML = "";
+
+      // Add each fallback provider
+      data.fallbacks.forEach((fallback, index) => {
+        addFallbackToUI(aiComponent, fallback.provider, fallback.model, index);
+      });
+    }
+  } catch (error) {
+    console.error(`Error initializing fallbacks for ${aiComponent}:`, error);
+  }
+}
+
+// Add a new fallback provider
+function addFallbackProvider(aiComponent) {
+  // Get the main provider for this component to use as initial fallback
+  const mainProviderSelect = document.getElementById(`${aiComponent}-provider`);
+  if (!mainProviderSelect) return;
+
+  const mainProvider = mainProviderSelect.value;
+
+  // Count existing fallbacks to determine position
+  const fallbackList = document.getElementById(`${aiComponent}-fallback-list`);
+  const position = fallbackList.children.length;
+
+  // Add to UI
+  addFallbackToUI(aiComponent, mainProvider, "", position);
+}
+
+// Add a fallback provider to the UI
+function addFallbackToUI(aiComponent, provider, model, position) {
+  const fallbackList = document.getElementById(`${aiComponent}-fallback-list`);
+  if (!fallbackList) return;
+
+  const fallbackId = `${aiComponent}-fallback-${position}`;
+
+  // Create fallback item
+  const fallbackItem = document.createElement("div");
+  fallbackItem.className = "fallback-item";
+  fallbackItem.id = fallbackId;
+  fallbackItem.dataset.position = position;
+
+  // Create provider select
+  const providerSelect = document.createElement("select");
+  providerSelect.className = "provider-select";
+  providerSelect.id = `${fallbackId}-provider`;
+
+  // We'll need to fetch available providers from the server
+  // For now, add the current provider
+  const providerOption = document.createElement("option");
+  providerOption.value = provider;
+  providerOption.textContent = provider;
+  providerSelect.appendChild(providerOption);
+
+  // Fetch all providers and populate the select
+  fetch("/providers")
+    .then((response) => response.json())
+    .then((data) => {
+      if (data.available_providers) {
+        providerSelect.innerHTML = "";
+        data.available_providers.forEach((p) => {
+          const option = document.createElement("option");
+          option.value = p;
+          option.textContent = p;
+          option.selected = p === provider;
+          providerSelect.appendChild(option);
+        });
+      }
+    })
+    .catch((error) => console.error("Error fetching providers:", error));
+
+  // Create model select
+  const modelSelect = document.createElement("select");
+  modelSelect.className = "model-select";
+  modelSelect.id = `${fallbackId}-model`;
+
+  // Add a placeholder option
+  const placeholderOption = document.createElement("option");
+  placeholderOption.value = "";
+  placeholderOption.textContent = "Default model";
+  modelSelect.appendChild(placeholderOption);
+
+  // If model is provided, add it as an option
+  if (model) {
+    const modelOption = document.createElement("option");
+    modelOption.value = model;
+    modelOption.textContent = model;
+    modelOption.selected = true;
+    modelSelect.appendChild(modelOption);
+  }
+
+  // Set up provider change event to update models
+  providerSelect.addEventListener("change", () => {
+    updateFallbackModelOptions(fallbackId);
+  });
+
+  // Create control buttons container
+  const fallbackControls = document.createElement("div");
+  fallbackControls.className = "fallback-controls";
+
+  // Create remove button
+  const removeButton = document.createElement("button");
+  removeButton.className = "fallback-remove-btn";
+  removeButton.title = "Remove fallback";
+  removeButton.innerHTML = '<i class="fas fa-times"></i>';
+  removeButton.addEventListener("click", () =>
+    removeFallback(aiComponent, fallbackId)
+  );
+
+  // Create move up button
+  const moveUpButton = document.createElement("button");
+  moveUpButton.className = "fallback-move-btn";
+  moveUpButton.title = "Move up";
+  moveUpButton.innerHTML = '<i class="fas fa-arrow-up"></i>';
+  moveUpButton.addEventListener("click", () =>
+    moveFallback(aiComponent, fallbackId, "up")
+  );
+
+  // Create move down button
+  const moveDownButton = document.createElement("button");
+  moveDownButton.className = "fallback-move-btn";
+  moveDownButton.title = "Move down";
+  moveDownButton.innerHTML = '<i class="fas fa-arrow-down"></i>';
+  moveDownButton.addEventListener("click", () =>
+    moveFallback(aiComponent, fallbackId, "down")
+  );
+
+  // Add buttons to controls
+  fallbackControls.appendChild(moveUpButton);
+  fallbackControls.appendChild(moveDownButton);
+  fallbackControls.appendChild(removeButton);
+
+  // Add elements to the fallback item
+  fallbackItem.appendChild(providerSelect);
+  fallbackItem.appendChild(modelSelect);
+  fallbackItem.appendChild(fallbackControls);
+
+  // Add fallback item to the list
+  fallbackList.appendChild(fallbackItem);
+
+  // Update model options
+  updateFallbackModelOptions(fallbackId);
+}
+
+// Update model options for a fallback provider
+async function updateFallbackModelOptions(fallbackId) {
+  const providerSelect = document.getElementById(`${fallbackId}-provider`);
+  const modelSelect = document.getElementById(`${fallbackId}-model`);
+
+  if (!providerSelect || !modelSelect) return;
+
+  const selectedProvider = providerSelect.value;
+
+  // Clear existing options
+  modelSelect.innerHTML = '<option value="">Loading models...</option>';
+
+  // Fetch models for the selected provider
+  const models = await fetchProviderModels(selectedProvider);
+
+  // Populate model select
+  modelSelect.innerHTML = '<option value="">Default model</option>';
+
+  if (models.length > 0) {
+    models.forEach((model) => {
+      const option = document.createElement("option");
+      option.value = model;
+      option.textContent = model;
+      modelSelect.appendChild(option);
+    });
+  }
+}
+
+// Remove a fallback provider
+function removeFallback(aiComponent, fallbackId) {
+  const fallbackItem = document.getElementById(fallbackId);
+  if (!fallbackItem) return;
+
+  fallbackItem.remove();
+
+  // Update positions of remaining fallbacks
+  updateFallbackPositions(aiComponent);
+}
+
+// Move a fallback provider up or down
+function moveFallback(aiComponent, fallbackId, direction) {
+  const fallbackItem = document.getElementById(fallbackId);
+  if (!fallbackItem) return;
+
+  const fallbackList = document.getElementById(`${aiComponent}-fallback-list`);
+  if (!fallbackList) return;
+
+  const currentPosition = parseInt(fallbackItem.dataset.position);
+
+  if (direction === "up" && currentPosition > 0) {
+    // Find the previous fallback
+    const previousFallback = document.querySelector(
+      `#${aiComponent}-fallback-list [data-position="${currentPosition - 1}"]`
+    );
+    if (previousFallback) {
+      fallbackList.insertBefore(fallbackItem, previousFallback);
+    }
+  } else if (
+    direction === "down" &&
+    currentPosition < fallbackList.children.length - 1
+  ) {
+    // Find the next fallback
+    const nextFallback = document.querySelector(
+      `#${aiComponent}-fallback-list [data-position="${currentPosition + 1}"]`
+    );
+    if (nextFallback && nextFallback.nextSibling) {
+      fallbackList.insertBefore(fallbackItem, nextFallback.nextSibling);
+    } else {
+      fallbackList.appendChild(fallbackItem);
+    }
+  }
+
+  // Update positions of all fallbacks
+  updateFallbackPositions(aiComponent);
+}
+
+// Update positions of all fallbacks in a component
+function updateFallbackPositions(aiComponent) {
+  const fallbackList = document.getElementById(`${aiComponent}-fallback-list`);
+  if (!fallbackList) return;
+
+  // Update positions and IDs
+  Array.from(fallbackList.children).forEach((fallback, index) => {
+    const oldId = fallback.id;
+    const newId = `${aiComponent}-fallback-${index}`;
+
+    // Update position data attribute
+    fallback.dataset.position = index;
+
+    // Update ID if changed
+    if (oldId !== newId) {
+      // Update fallback item ID
+      fallback.id = newId;
+
+      // Update provider select ID
+      const providerSelect = fallback.querySelector(".provider-select");
+      if (providerSelect) {
+        providerSelect.id = `${newId}-provider`;
+      }
+
+      // Update model select ID
+      const modelSelect = fallback.querySelector(".model-select");
+      if (modelSelect) {
+        modelSelect.id = `${newId}-model`;
+      }
+    }
+  });
+}
+
+// Save provider configuration
+async function saveProviderConfig() {
+  // Create configuration object
+  const config = {
+    ai1: {
+      provider: document.getElementById("ai1-provider").value,
+      model: document.getElementById("ai1-model").value,
+      fallbacks: getFallbacksConfig("ai1"),
+    },
+    ai2: {
+      executor: {
+        provider: document.getElementById("ai2-executor-provider").value,
+        model: document.getElementById("ai2-executor-model").value,
+        fallbacks: getFallbacksConfig("ai2-executor"),
+      },
+      tester: {
+        provider: document.getElementById("ai2-tester-provider").value,
+        model: document.getElementById("ai2-tester-model").value,
+        fallbacks: getFallbacksConfig("ai2-tester"),
+      },
+      documenter: {
+        provider: document.getElementById("ai2-documenter-provider").value,
+        model: document.getElementById("ai2-documenter-model").value,
+        fallbacks: getFallbacksConfig("ai2-documenter"),
+      },
+    },
+    ai3: {
+      provider: document.getElementById("ai3-provider").value,
+      model: document.getElementById("ai3-model").value,
+      fallbacks: getFallbacksConfig("ai3"),
+    },
+  };
+
+  try {
+    // Send configuration to server
+    const response = await fetch("/update_providers", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(config),
+    });
+
+    const result = await response.json();
+
+    if (result.status === "success") {
+      showNotification("Provider configuration saved successfully", "success");
+    } else {
+      showNotification(
+        `Error saving provider configuration: ${result.message}`,
+        "error"
+      );
+    }
+  } catch (error) {
+    console.error("Error saving provider configuration:", error);
+    showNotification(
+      "Error saving provider configuration. See console for details.",
+      "error"
+    );
+  }
+}
+
+// Get fallbacks configuration for a component
+function getFallbacksConfig(aiComponent) {
+  const fallbackList = document.getElementById(`${aiComponent}-fallback-list`);
+  if (!fallbackList) return [];
+
+  const fallbacks = [];
+
+  Array.from(fallbackList.children).forEach((fallback) => {
+    const providerSelect = fallback.querySelector(".provider-select");
+    const modelSelect = fallback.querySelector(".model-select");
+
+    if (providerSelect && providerSelect.value) {
+      fallbacks.push({
+        provider: providerSelect.value,
+        model: modelSelect ? modelSelect.value : "",
+      });
+    }
+  });
+
+  return fallbacks;
+}
+
+// Initialize model dropdowns when page loads
+document.addEventListener("DOMContentLoaded", function () {
+  // Initialize provider model selects
+  updateModelOptions("ai1");
+  updateModelOptions("ai2-executor");
+  updateModelOptions("ai2-tester");
+  updateModelOptions("ai2-documenter");
+  updateModelOptions("ai3");
+
+  // Initialize fallbacks
+  initializeFallbacks();
+});
+
+// Add notification function if not already defined
+function showNotification(message, type = "info") {
+  if (typeof showNotification.counter === "undefined") {
+    showNotification.counter = 0;
+  }
+
+  const id = `notification-${showNotification.counter++}`;
+  const notification = document.createElement("div");
+  notification.className = `notification ${type}`;
+  notification.id = id;
+  notification.textContent = message;
+
+  document.body.appendChild(notification);
+
+  // Remove after 5 seconds
+  setTimeout(() => {
+    const notificationElement = document.getElementById(id);
+    if (notificationElement) {
+      notificationElement.style.opacity = "0";
+      setTimeout(() => {
+        if (notificationElement.parentNode) {
+          notificationElement.parentNode.removeChild(notificationElement);
+        }
+      }, 300);
+    }
+  }, 5000);
+}
+
+// Provider Configuration Functions
+let availableProviders = [];
+let currentConfig = {
+  ai1: { provider: "", model: "", fallbacks: [] },
+  ai2: {
+    executor: { provider: "", model: "", fallbacks: [] },
+    tester: { provider: "", model: "", fallbacks: [] },
+    documenter: { provider: "", model: "", fallbacks: [] },
+  },
+  ai3: { provider: "", model: "", fallbacks: [] },
+};
+
+// Initialize provider configuration on page load
+async function initProviderConfig() {
+  try {
+    const response = await fetch("/providers");
+    const data = await response.json();
+
+    availableProviders = data.available_providers || [];
+    currentConfig = data.current_config || {
+      ai1: { provider: "openai", model: "", fallbacks: [] },
+      ai2: {
+        executor: { provider: "openai", model: "", fallbacks: [] },
+        tester: { provider: "openai", model: "", fallbacks: [] },
+        documenter: { provider: "openai", model: "", fallbacks: [] },
+      },
+      ai3: { provider: "openai", model: "", fallbacks: [] },
+    };
+
+    // Populate provider dropdowns
+    populateProviderDropdowns();
+
+    // Initialize model dropdowns for each provider
+    await Promise.all([
+      updateModelOptions("ai1"),
+      updateModelOptions("ai2-executor"),
+      updateModelOptions("ai2-tester"),
+      updateModelOptions("ai2-documenter"),
+      updateModelOptions("ai3"),
+    ]);
+
+    // Set fallbacks for each component
+    updateFallbackLists();
+  } catch (error) {
+    console.error("Error initializing provider configuration:", error);
+    showNotification("Error loading provider configuration", "error");
+  }
+}
+
+// Populate all provider dropdown selects
+function populateProviderDropdowns() {
+  const selectors = [
+    "#ai1-provider",
+    "#ai2-executor-provider",
+    "#ai2-tester-provider",
+    "#ai2-documenter-provider",
+    "#ai3-provider",
+  ];
+
+  selectors.forEach((selector) => {
+    const dropdown = document.querySelector(selector);
+    if (dropdown) {
+      // Clear existing options
+      dropdown.innerHTML = "";
+
+      // Add available providers
+      availableProviders.forEach((provider) => {
+        const option = document.createElement("option");
+        option.value = provider;
+        option.textContent = provider;
+        dropdown.appendChild(option);
+      });
+
+      // Set current selection
+      let currentValue = "";
+      if (selector === "#ai1-provider") {
+        currentValue = currentConfig.ai1.provider;
+      } else if (selector === "#ai2-executor-provider") {
+        currentValue = currentConfig.ai2.executor.provider;
+      } else if (selector === "#ai2-tester-provider") {
+        currentValue = currentConfig.ai2.tester.provider;
+      } else if (selector === "#ai2-documenter-provider") {
+        currentValue = currentConfig.ai2.documenter.provider;
+      } else if (selector === "#ai3-provider") {
+        currentValue = currentConfig.ai3.provider;
+      }
+
+      if (
+        currentValue &&
+        dropdown.querySelector(`option[value="${currentValue}"]`)
+      ) {
+        dropdown.value = currentValue;
+      }
+    }
+  });
+}
+
+// Update model options when provider changes
+async function updateModelOptions(componentId) {
+  const providerSelect = document.querySelector(`#${componentId}-provider`);
+  const modelSelect = document.querySelector(`#${componentId}-model`);
+
+  if (!providerSelect || !modelSelect) {
+    console.error(`Could not find selects for component ${componentId}`);
+    return;
+  }
+
+  const provider = providerSelect.value;
+  let models = [];
+
+  // Check if we've already loaded models for this provider
+  if (providerModels[provider]) {
+    models = providerModels[provider];
+  } else {
+    try {
+      const response = await fetch(`/provider_models?provider=${provider}`);
+      const data = await response.json();
+      models = data.models || [];
+      providerModels[provider] = models; // Cache the models
+    } catch (error) {
+      console.error(`Error fetching models for provider ${provider}:`, error);
+      models = [];
+    }
+  }
+
+  // Clear existing options
+  modelSelect.innerHTML = "";
+
+  // Add models
+  models.forEach((model) => {
+    const option = document.createElement("option");
+    option.value = model;
+    option.textContent = model;
+    modelSelect.appendChild(option);
+  });
+
+  // Set current selection
+  let currentModel = "";
+  if (componentId === "ai1") {
+    currentModel = currentConfig.ai1.model;
+  } else if (componentId === "ai2-executor") {
+    currentModel = currentConfig.ai2.executor.model;
+  } else if (componentId === "ai2-tester") {
+    currentModel = currentConfig.ai2.tester.model;
+  } else if (componentId === "ai2-documenter") {
+    currentModel = currentConfig.ai2.documenter.model;
+  } else if (componentId === "ai3") {
+    currentModel = currentConfig.ai3.model;
+  }
+
+  if (
+    currentModel &&
+    modelSelect.querySelector(`option[value="${currentModel}"]`)
+  ) {
+    modelSelect.value = currentModel;
+  }
+}
+
+// Add fallback provider for a component
+async function addFallbackProvider(componentId) {
+  const fallbacksList = document.querySelector(`#${componentId}-fallback-list`);
+  if (!fallbacksList) return;
+
+  // Create the fallback item
+  const fallbackItem = document.createElement("div");
+  fallbackItem.className = "fallback-item";
+
+  // Create provider select
+  const providerSelect = document.createElement("select");
+  providerSelect.className = "provider-select";
+  availableProviders.forEach((provider) => {
+    const option = document.createElement("option");
+    option.value = provider;
+    option.textContent = provider;
+    providerSelect.appendChild(option);
+  });
+
+  // Create model select
+  const modelSelect = document.createElement("select");
+  modelSelect.className = "model-select";
+
+  // Create control buttons
+  const controlsDiv = document.createElement("div");
+  controlsDiv.className = "fallback-controls";
+
+  const moveUpBtn = document.createElement("button");
+  moveUpBtn.className = "fallback-move-btn";
+  moveUpBtn.title = "Move up";
+  moveUpBtn.innerHTML = '<i class="fas fa-arrow-up"></i>';
+  moveUpBtn.onclick = () => moveFallback(fallbackItem, "up");
+
+  const moveDownBtn = document.createElement("button");
+  moveDownBtn.className = "fallback-move-btn";
+  moveDownBtn.title = "Move down";
+  moveDownBtn.innerHTML = '<i class="fas fa-arrow-down"></i>';
+  moveDownBtn.onclick = () => moveFallback(fallbackItem, "down");
+
+  const removeBtn = document.createElement("button");
+  removeBtn.className = "fallback-remove-btn";
+  removeBtn.title = "Remove fallback";
+  removeBtn.innerHTML = '<i class="fas fa-times"></i>';
+  removeBtn.onclick = () => removeFallback(fallbackItem);
+
+  controlsDiv.appendChild(moveUpBtn);
+  controlsDiv.appendChild(moveDownBtn);
+  controlsDiv.appendChild(removeBtn);
+
+  // Add event listener to update models when provider changes
+  providerSelect.addEventListener("change", async () => {
+    const provider = providerSelect.value;
+    let models = [];
+
+    // Check if we've already loaded models for this provider
+    if (providerModels[provider]) {
+      models = providerModels[provider];
+    } else {
+      try {
+        const response = await fetch(`/provider_models?provider=${provider}`);
+        const data = await response.json();
+        models = data.models || [];
+        providerModels[provider] = models; // Cache the models
+      } catch (error) {
+        console.error(`Error fetching models for provider ${provider}:`, error);
+        models = [];
+      }
+    }
+
+    // Update model select
+    modelSelect.innerHTML = "";
+    models.forEach((model) => {
+      const option = document.createElement("option");
+      option.value = model;
+      option.textContent = model;
+      modelSelect.appendChild(option);
+    });
+  });
+
+  // Load initial models for the provider
+  await updateFallbackModelOptions(providerSelect, modelSelect);
+
+  // Assemble the fallback item
+  fallbackItem.appendChild(providerSelect);
+  fallbackItem.appendChild(modelSelect);
+  fallbackItem.appendChild(controlsDiv);
+
+  // Add to the list
+  fallbacksList.appendChild(fallbackItem);
+}
+
+// Update fallback model options
+async function updateFallbackModelOptions(providerSelect, modelSelect) {
+  const provider = providerSelect.value;
+  let models = [];
+
+  // Check if we've already loaded models for this provider
+  if (providerModels[provider]) {
+    models = providerModels[provider];
+  } else {
+    try {
+      const response = await fetch(`/provider_models?provider=${provider}`);
+      const data = await response.json();
+      models = data.models || [];
+      providerModels[provider] = models; // Cache the models
+    } catch (error) {
+      console.error(`Error fetching models for provider ${provider}:`, error);
+      models = [];
+    }
+  }
+
+  // Clear existing options
+  modelSelect.innerHTML = "";
+
+  // Add models
+  models.forEach((model) => {
+    const option = document.createElement("option");
+    option.value = model;
+    option.textContent = model;
+    modelSelect.appendChild(option);
+  });
+}
+
+// Move fallback up or down
+function moveFallback(fallbackItem, direction) {
+  const fallbacksList = fallbackItem.parentElement;
+  const items = Array.from(fallbacksList.children);
+  const index = items.indexOf(fallbackItem);
+
+  if (direction === "up" && index > 0) {
+    fallbacksList.insertBefore(fallbackItem, items[index - 1]);
+  } else if (direction === "down" && index < items.length - 1) {
+    fallbacksList.insertBefore(fallbackItem, items[index + 1].nextSibling);
+  }
+}
+
+// Remove fallback
+function removeFallback(fallbackItem) {
+  fallbackItem.parentElement.removeChild(fallbackItem);
+}
+
+// Update fallback lists based on current configuration
+function updateFallbackLists() {
+  // Clear existing fallbacks
+  const fallbackLists = [
+    document.querySelector("#ai1-fallback-list"),
+    document.querySelector("#ai2-executor-fallback-list"),
+    document.querySelector("#ai2-tester-fallback-list"),
+    document.querySelector("#ai2-documenter-fallback-list"),
+    document.querySelector("#ai3-fallback-list"),
+  ];
+
+  fallbackLists.forEach((list) => {
+    if (list) {
+      list.innerHTML = "";
+    }
+  });
+
+  // Add fallbacks for AI1
+  if (currentConfig.ai1.fallbacks && currentConfig.ai1.fallbacks.length > 0) {
+    const list = document.querySelector("#ai1-fallback-list");
+    currentConfig.ai1.fallbacks.forEach(async (fallback) => {
+      await addConfiguredFallback("ai1", list, fallback);
+    });
+  }
+
+  // Add fallbacks for AI2 Executor
+  if (
+    currentConfig.ai2.executor.fallbacks &&
+    currentConfig.ai2.executor.fallbacks.length > 0
+  ) {
+    const list = document.querySelector("#ai2-executor-fallback-list");
+    currentConfig.ai2.executor.fallbacks.forEach(async (fallback) => {
+      await addConfiguredFallback("ai2-executor", list, fallback);
+    });
+  }
+
+  // Add fallbacks for AI2 Tester
+  if (
+    currentConfig.ai2.tester.fallbacks &&
+    currentConfig.ai2.tester.fallbacks.length > 0
+  ) {
+    const list = document.querySelector("#ai2-tester-fallback-list");
+    currentConfig.ai2.tester.fallbacks.forEach(async (fallback) => {
+      await addConfiguredFallback("ai2-tester", list, fallback);
+    });
+  }
+
+  // Add fallbacks for AI2 Documenter
+  if (
+    currentConfig.ai2.documenter.fallbacks &&
+    currentConfig.ai2.documenter.fallbacks.length > 0
+  ) {
+    const list = document.querySelector("#ai2-documenter-fallback-list");
+    currentConfig.ai2.documenter.fallbacks.forEach(async (fallback) => {
+      await addConfiguredFallback("ai2-documenter", list, fallback);
+    });
+  }
+
+  // Add fallbacks for AI3
+  if (currentConfig.ai3.fallbacks && currentConfig.ai3.fallbacks.length > 0) {
+    const list = document.querySelector("#ai3-fallback-list");
+    currentConfig.ai3.fallbacks.forEach(async (fallback) => {
+      await addConfiguredFallback("ai3", list, fallback);
+    });
+  }
+}
+
+// Add a configured fallback to a list
+async function addConfiguredFallback(componentId, fallbacksList, fallback) {
+  if (!fallbacksList) return;
+
+  // Create the fallback item
+  const fallbackItem = document.createElement("div");
+  fallbackItem.className = "fallback-item";
+
+  // Create provider select
+  const providerSelect = document.createElement("select");
+  providerSelect.className = "provider-select";
+  availableProviders.forEach((provider) => {
+    const option = document.createElement("option");
+    option.value = provider;
+    option.textContent = provider;
+    providerSelect.appendChild(option);
+  });
+
+  // Select the configured provider
+  if (
+    fallback.provider &&
+    providerSelect.querySelector(`option[value="${fallback.provider}"]`)
+  ) {
+    providerSelect.value = fallback.provider;
+  }
+
+  // Create model select
+  const modelSelect = document.createElement("select");
+  modelSelect.className = "model-select";
+
+  // Create control buttons
+  const controlsDiv = document.createElement("div");
+  controlsDiv.className = "fallback-controls";
+
+  const moveUpBtn = document.createElement("button");
+  moveUpBtn.className = "fallback-move-btn";
+  moveUpBtn.title = "Move up";
+  moveUpBtn.innerHTML = '<i class="fas fa-arrow-up"></i>';
+  moveUpBtn.onclick = () => moveFallback(fallbackItem, "up");
+
+  const moveDownBtn = document.createElement("button");
+  moveDownBtn.className = "fallback-move-btn";
+  moveDownBtn.title = "Move down";
+  moveDownBtn.innerHTML = '<i class="fas fa-arrow-down"></i>';
+  moveDownBtn.onclick = () => moveFallback(fallbackItem, "down");
+
+  const removeBtn = document.createElement("button");
+  removeBtn.className = "fallback-remove-btn";
+  removeBtn.title = "Remove fallback";
+  removeBtn.innerHTML = '<i class="fas fa-times"></i>';
+  removeBtn.onclick = () => removeFallback(fallbackItem);
+
+  controlsDiv.appendChild(moveUpBtn);
+  controlsDiv.appendChild(moveDownBtn);
+  controlsDiv.appendChild(removeBtn);
+
+  // Add event listener to update models when provider changes
+  providerSelect.addEventListener("change", async () => {
+    await updateFallbackModelOptions(providerSelect, modelSelect);
+  });
+
+  // Load initial models for the provider
+  await updateFallbackModelOptions(providerSelect, modelSelect);
+
+  // Set the model if configured
+  if (fallback.model) {
+    // Wait for models to load
+    setTimeout(() => {
+      if (modelSelect.querySelector(`option[value="${fallback.model}"]`)) {
+        modelSelect.value = fallback.model;
+      }
+    }, 100);
+  }
+
+  // Assemble the fallback item
+  fallbackItem.appendChild(providerSelect);
+  fallbackItem.appendChild(modelSelect);
+  fallbackItem.appendChild(controlsDiv);
+
+  // Add to the list
+  fallbacksList.appendChild(fallbackItem);
+}
+
+// Save the provider configuration
+async function saveProviderConfig() {
+  // Collect configuration from the UI
+  const config = {
+    ai1: getComponentConfig("ai1"),
+    ai2: {
+      executor: getComponentConfig("ai2-executor"),
+      tester: getComponentConfig("ai2-tester"),
+      documenter: getComponentConfig("ai2-documenter"),
+    },
+    ai3: getComponentConfig("ai3"),
+  };
+
+  try {
+    const response = await fetch("/update_providers", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(config),
+    });
+
+    const data = await response.json();
+
+    if (data.status === "success") {
+      showNotification("Provider configuration saved successfully", "success");
+      // Update current config
+      currentConfig = config;
+    } else {
+      showNotification(`Error saving configuration: ${data.message}`, "error");
+    }
+  } catch (error) {
+    console.error("Error saving provider configuration:", error);
+    showNotification("Error saving provider configuration", "error");
+  }
+}
+
+// Get configuration for a component
+function getComponentConfig(componentId) {
+  const providerSelect = document.querySelector(`#${componentId}-provider`);
+  const modelSelect = document.querySelector(`#${componentId}-model`);
+  const fallbacksList = document.querySelector(`#${componentId}-fallback-list`);
+
+  if (!providerSelect || !modelSelect) {
+    return { provider: "openai", model: "", fallbacks: [] };
+  }
+
+  const provider = providerSelect.value;
+  const model = modelSelect.value;
+  const fallbacks = [];
+
+  // Collect fallbacks
+  if (fallbacksList) {
+    const fallbackItems = fallbacksList.querySelectorAll(".fallback-item");
+    fallbackItems.forEach((item) => {
+      const providerSelect = item.querySelector(".provider-select");
+      const modelSelect = item.querySelector(".model-select");
+
+      if (providerSelect && modelSelect) {
+        fallbacks.push({
+          provider: providerSelect.value,
+          model: modelSelect.value,
+        });
+      }
+    });
+  }
+
+  return { provider, model, fallbacks };
+}
+
+// Show notification
+function showNotification(message, type = "info") {
+  const notification = document.createElement("div");
+  notification.className = `notification ${type}`;
+  notification.textContent = message;
+
+  document.body.appendChild(notification);
+
+  // Remove after 3 seconds
+  setTimeout(() => {
+    notification.style.opacity = "0";
+    setTimeout(() => {
+      document.body.removeChild(notification);
+    }, 300);
+  }, 3000);
+}
+
+// Call initProviderConfig when the page loads
+document.addEventListener("DOMContentLoaded", () => {
+  // Initialize existing functions first
+  if (typeof initDashboard === "function") {
+    initDashboard();
+  }
+
+  // Then initialize provider configuration
+  initProviderConfig();
+});

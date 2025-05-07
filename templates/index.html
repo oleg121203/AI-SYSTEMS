@@ -153,6 +153,263 @@
             Clear Repo
           </button>
         </div>
+
+        <!-- AI Provider Configuration -->
+        <div class="provider-config">
+          <h3><i class="fas fa-plug"></i> AI Provider Configuration</h3>
+
+          <!-- AI1 Provider -->
+          <div class="provider-section">
+            <h4>AI1 (Curator)</h4>
+            <div class="provider-controls">
+              <div class="provider-row">
+                <select
+                  id="ai1-provider"
+                  class="provider-select"
+                  onchange="updateModelOptions('ai1')"
+                >
+                  {% for provider in providers %}
+                  <option
+                    value="{{ provider }}"
+                    {%
+                    if
+                    ai_config.ai1.providers
+                    and
+                    provider
+                    in
+                    ai_config.ai1.providers
+                    %}selected{%
+                    endif
+                    %}
+                  >
+                    {{ provider }}
+                  </option>
+                  {% endfor %}
+                </select>
+                <select id="ai1-model" class="model-select"></select>
+              </div>
+              <div class="fallback-container" id="ai1-fallbacks">
+                <h5>
+                  Fallbacks
+                  <button
+                    type="button"
+                    class="add-fallback-btn"
+                    onclick="addFallbackProvider('ai1')"
+                  >
+                    <i class="fas fa-plus"></i>
+                  </button>
+                </h5>
+                <div class="fallback-list" id="ai1-fallback-list">
+                  <!-- Fallbacks will be added here dynamically -->
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- AI2 Providers (Executor, Tester, Documenter) -->
+          <div class="provider-section">
+            <h4>AI2 Components</h4>
+
+            <!-- Executor Provider -->
+            <div class="provider-subsection">
+              <h5>Executor</h5>
+              <div class="provider-controls">
+                <div class="provider-row">
+                  <select
+                    id="ai2-executor-provider"
+                    class="provider-select"
+                    onchange="updateModelOptions('ai2-executor')"
+                  >
+                    {% for provider in providers %}
+                    <option
+                      value="{{ provider }}"
+                      {%
+                      if
+                      ai_config.ai2.providers.executor
+                      and
+                      provider
+                      in
+                      ai_config.ai2.providers.executor
+                      %}selected{%
+                      endif
+                      %}
+                    >
+                      {{ provider }}
+                    </option>
+                    {% endfor %}
+                  </select>
+                  <select id="ai2-executor-model" class="model-select"></select>
+                </div>
+                <div class="fallback-container" id="ai2-executor-fallbacks">
+                  <h5>
+                    Fallbacks
+                    <button
+                      type="button"
+                      class="add-fallback-btn"
+                      onclick="addFallbackProvider('ai2-executor')"
+                    >
+                      <i class="fas fa-plus"></i>
+                    </button>
+                  </h5>
+                  <div class="fallback-list" id="ai2-executor-fallback-list">
+                    <!-- Fallbacks will be added here dynamically -->
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Tester Provider -->
+            <div class="provider-subsection">
+              <h5>Tester</h5>
+              <div class="provider-controls">
+                <div class="provider-row">
+                  <select
+                    id="ai2-tester-provider"
+                    class="provider-select"
+                    onchange="updateModelOptions('ai2-tester')"
+                  >
+                    {% for provider in providers %}
+                    <option
+                      value="{{ provider }}"
+                      {%
+                      if
+                      ai_config.ai2.providers.tester
+                      and
+                      provider
+                      in
+                      ai_config.ai2.providers.tester
+                      %}selected{%
+                      endif
+                      %}
+                    >
+                      {{ provider }}
+                    </option>
+                    {% endfor %}
+                  </select>
+                  <select id="ai2-tester-model" class="model-select"></select>
+                </div>
+                <div class="fallback-container" id="ai2-tester-fallbacks">
+                  <h5>
+                    Fallbacks
+                    <button
+                      type="button"
+                      class="add-fallback-btn"
+                      onclick="addFallbackProvider('ai2-tester')"
+                    >
+                      <i class="fas fa-plus"></i>
+                    </button>
+                  </h5>
+                  <div class="fallback-list" id="ai2-tester-fallback-list">
+                    <!-- Fallbacks will be added here dynamically -->
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Documenter Provider -->
+            <div class="provider-subsection">
+              <h5>Documenter</h5>
+              <div class="provider-controls">
+                <div class="provider-row">
+                  <select
+                    id="ai2-documenter-provider"
+                    class="provider-select"
+                    onchange="updateModelOptions('ai2-documenter')"
+                  >
+                    {% for provider in providers %}
+                    <option
+                      value="{{ provider }}"
+                      {%
+                      if
+                      ai_config.ai2.providers.documenter
+                      and
+                      provider
+                      in
+                      ai_config.ai2.providers.documenter
+                      %}selected{%
+                      endif
+                      %}
+                    >
+                      {{ provider }}
+                    </option>
+                    {% endfor %}
+                  </select>
+                  <select
+                    id="ai2-documenter-model"
+                    class="model-select"
+                  ></select>
+                </div>
+                <div class="fallback-container" id="ai2-documenter-fallbacks">
+                  <h5>
+                    Fallbacks
+                    <button
+                      type="button"
+                      class="add-fallback-btn"
+                      onclick="addFallbackProvider('ai2-documenter')"
+                    >
+                      <i class="fas fa-plus"></i>
+                    </button>
+                  </h5>
+                  <div class="fallback-list" id="ai2-documenter-fallback-list">
+                    <!-- Fallbacks will be added here dynamically -->
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- AI3 Provider -->
+          <div class="provider-section">
+            <h4>AI3 (Structure Manager)</h4>
+            <div class="provider-controls">
+              <div class="provider-row">
+                <select
+                  id="ai3-provider"
+                  class="provider-select"
+                  onchange="updateModelOptions('ai3')"
+                >
+                  {% for provider in providers %}
+                  <option
+                    value="{{ provider }}"
+                    {%
+                    if
+                    ai_config.ai3.providers
+                    and
+                    provider
+                    in
+                    ai_config.ai3.providers
+                    %}selected{%
+                    endif
+                    %}
+                  >
+                    {{ provider }}
+                  </option>
+                  {% endfor %}
+                </select>
+                <select id="ai3-model" class="model-select"></select>
+              </div>
+              <div class="fallback-container" id="ai3-fallbacks">
+                <h5>
+                  Fallbacks
+                  <button
+                    type="button"
+                    class="add-fallback-btn"
+                    onclick="addFallbackProvider('ai3')"
+                  >
+                    <i class="fas fa-plus"></i>
+                  </button>
+                </h5>
+                <div class="fallback-list" id="ai3-fallback-list">
+                  <!-- Fallbacks will be added here dynamically -->
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <button id="save-providers-btn" onclick="saveProviderConfig()">
+            Save Provider Configuration
+          </button>
+        </div>
         <div class="prompt-editor">
           <h3><i class="fas fa-edit"></i> Edit Prompts & Target</h3>
           <textarea id="target" placeholder="Project Target Goal">

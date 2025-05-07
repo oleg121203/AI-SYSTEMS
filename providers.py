@@ -3,6 +3,7 @@ import importlib.util
 import json
 import logging
 import os
+import random
 import re
 import sys
 from abc import ABC, abstractmethod
@@ -33,6 +34,7 @@ try:
 except ImportError as e:
     logging.getLogger(__name__).error(f"Failed to import Together module: {e}")
 
+# Import other SDKs with error handling
 try:
     import google.generativeai as genai
 except ImportError:
@@ -59,7 +61,8 @@ except ImportError:
 
 # Initialize logger before using it
 logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levellevelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
 
@@ -87,6 +90,75 @@ if anthropic is None:
 
 
 load_dotenv()
+
+
+# Cache for storing available providers list
+_available_providers_cache = None
+_provider_models_cache = {}
+
+
+def get_available_providers() -> List[str]:
+    """Returns a list of available provider types."""
+    global _available_providers_cache
+
+    if _available_providers_cache is not None:
+        return _available_providers_cache
+
+    # Get all provider types from ProviderFactory
+    available_providers = [
+        "openai",
+        "anthropic",
+        "groq",
+        "local",
+        "ollama",
+        "openrouter",
+        "cohere",
+        "gemini",
+        "together",
+        "codestral",
+        "gemini3",
+        "gemini4",
+        "tugezer",
+        "fallback",
+    ]
+
+    _available_providers_cache = available_providers
+    return available_providers
+
+
+def get_provider_models(provider_name: str) -> List[str]:
+    """Returns a list of available models for a provider."""
+    global _provider_models_cache
+
+    # Check cache first
+    if provider_name in _provider_models_cache:
+        return _provider_models_cache[provider_name]
+
+    # Create a provider instance
+    try:
+        provider = ProviderFactory.create_provider(provider_name)
+        models = provider.get_available_models()
+
+        # Cache the result
+        _provider_models_cache[provider_name] = models
+        return models
+    except Exception as e:
+        logger.error(f"Error getting models for provider {provider_name}: {e}")
+        return []
+
+
+async def reload_providers():
+    """Reload providers and clear caches."""
+    global _available_providers_cache, _provider_models_cache
+
+    _available_providers_cache = None
+    _provider_models_cache = {}
+
+    # Force reload of available providers
+    get_available_providers()
+
+    logger.info("Provider caches cleared and reloaded")
+    return True
 
 
 class ProviderFactory:
@@ -177,6 +249,8 @@ class ProviderFactory:
             return Gemini4Provider(provider_config)
         elif provider_type == "tugezer":
             return TugezerProvider(provider_config)
+        elif provider_type == "fallback":
+            return FallbackProvider(provider_config)
         else:
             raise ValueError(f"Неподдерживаемый тип провайдера: {provider_type}")
 
@@ -2242,6 +2316,157 @@ class TugezerProvider(BaseProvider):
         if default_model and default_model not in known:
             known.append(default_model)
         return known
+
+
+class FallbackProvider(BaseProvider):
+    """Provider that falls back to other providers if the primary one fails."""
+
+    def __init__(self, config: Optional[Dict[str, Any]] = None):
+        super().__init__(config)
+        self.name = "fallback"
+        self.providers = []
+        self.setup()
+
+    def setup(self) -> None:
+        """Initialize the fallback provider chain."""
+        if not self.config:
+            logger.warning("No configuration provided for FallbackProvider")
+            return
+
+        providers_config = self.config.get("providers", [])
+        if not providers_config:
+            logger.warning("No fallback providers configured")
+            return
+
+        # Load providers in the specified order
+        for provider_config in providers_config:
+            provider_type = provider_config.get("type")
+            if not provider_type:
+                logger.warning(
+                    f"Provider type not specified in config: {provider_config}"
+                )
+                continue
+
+            try:
+                # Use ProviderFactory to create each provider
+                provider = ProviderFactory.create_provider(
+                    provider_type, provider_config
+                )
+                self.providers.append(provider)
+                logger.info(f"Added fallback provider: {provider.name}")
+            except Exception as e:
+                logger.error(
+                    f"Failed to create fallback provider of type {provider_type}: {e}"
+                )
+
+        if not self.providers:
+            logger.warning("No fallback providers were successfully created")
+        else:
+            logger.info(
+                f"FallbackProvider initialized with {len(self.providers)} providers"
+            )
+
+    async def generate(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        model: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
+    ) -> str:
+        """Try each provider in order until one succeeds."""
+        if not self.providers:
+            return "Error: No fallback providers configured"
+
+        errors = []
+
+        # Log the fallback chain
+        provider_chain = ", ".join([p.name for p in self.providers])
+        logger.info(f"Attempting generation with fallback chain: {provider_chain}")
+
+        for i, provider in enumerate(self.providers):
+            try:
+                logger.info(
+                    f"Trying provider {i+1}/{len(self.providers)}: {provider.name}"
+                )
+
+                # Get provider-specific model if needed
+                provider_model = model
+                if not provider_model and ":" in (model or ""):
+                    parts = model.split(":", 1)
+                    if parts[0] == provider.name:
+                        provider_model = parts[1]
+
+                result = await provider.generate(
+                    prompt=prompt,
+                    system_prompt=system_prompt,
+                    model=provider_model or provider.get_default_model(),
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                )
+
+                # Check for specific error patterns that indicate we should try fallback
+                error_patterns = [
+                    "Generation error: Codestral API request limit exceeded (429)",
+                    "Error (Groq API 429)",
+                    "Request timed out",
+                    "rate limit",
+                    "capacity",
+                    "overloaded",
+                    "API Error",
+                    "Ошибка генерации:",
+                    "Error generating",
+                    "failed after",
+                    "Too Many Requests",
+                ]
+
+                if any(pattern.lower() in result.lower() for pattern in error_patterns):
+                    logger.warning(f"Provider {provider.name} returned error: {result}")
+                    errors.append(f"{provider.name}: {result}")
+                    continue
+
+                # If we get here, the provider returned a valid result
+                logger.info(f"Provider {provider.name} succeeded")
+                return result
+
+            except Exception as e:
+                logger.error(f"Error with provider {provider.name}: {e}")
+                errors.append(f"{provider.name}: {str(e)}")
+
+        # If we get here, all providers failed
+        error_report = "\n".join(errors)
+        logger.error(f"All fallback providers failed:\n{error_report}")
+        return f"All providers failed. Please check the provider configuration or try again later.\nErrors:\n{error_report}"
+
+    def get_available_models(self) -> List[str]:
+        """Get a list of available models from all providers."""
+        models = []
+        for provider in self.providers:
+            try:
+                provider_models = provider.get_available_models()
+                models.extend([f"{provider.name}:{model}" for model in provider_models])
+            except Exception as e:
+                logger.error(f"Error getting models from provider {provider.name}: {e}")
+        return models
+
+    def get_default_model(self) -> Optional[str]:
+        """Get the default model from the first provider."""
+        if not self.providers:
+            return None
+        try:
+            provider = self.providers[0]
+            model = provider.get_default_model()
+            return f"{provider.name}:{model}" if model else None
+        except Exception:
+            return None
+
+    async def close_session(self):
+        """Close sessions for all providers."""
+        for provider in self.providers:
+            try:
+                await provider.close_session()
+            except Exception as e:
+                logger.error(f"Error closing session for provider {provider.name}: {e}")
 
 
 try:
