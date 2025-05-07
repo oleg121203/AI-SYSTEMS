@@ -1,40 +1,34 @@
+from abc import ABC, abstractmethod
 import asyncio
-import importlib.util
-import json
 import logging
 import os
-import random
-import re
-import sys
-from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Tuple
-from typing import Type as TypingType
-from typing import Union
+from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Type as TypingType # Keep for now, though seems unused
 
-import aiohttp
 from dotenv import load_dotenv
 
-# Import SDKs at the top level - Simple import for Together with custom error handling
-Together = None
-TogetherError = None
+# Attempt to import SDKs with error handling
+# These will be assigned to None if import fails, and logged later
 try:
-    from together import Together
+    import aiohttp
+except ImportError:
+    aiohttp = None
 
-    logging.getLogger(__name__).info("Successfully imported Together module")
+try:
+    import httpx
+except ImportError:
+    httpx = None
 
-    # Define our own TogetherError since it might not exist in the current version
-    class TogetherError(Exception):
-        """Custom error class for Together AI API errors"""
+try:
+    import openai
+except ImportError:
+    openai = None
 
-        def __init__(self, message, status_code=None):
-            self.message = message
-            self.status_code = status_code
-            super().__init__(self.message)
+try:
+    import anthropic
+except ImportError:
+    anthropic = None
 
-except ImportError as e:
-    logging.getLogger(__name__).error(f"Failed to import Together module: {e}")
-
-# Import other SDKs with error handling
 try:
     import google.generativeai as genai
 except ImportError:
@@ -46,51 +40,72 @@ except ImportError:
     cohere = None
 
 try:
-    import groq  # Ensure groq module itself is imported
+    import groq
     from groq import AsyncGroq, GroqError
 except ImportError:
+    groq = None
     AsyncGroq = None
     GroqError = None
-    groq = None  # Define groq as None if import fails
 
 try:
-    import anthropic
+    import ollama
 except ImportError:
-    anthropic = None
+    ollama = None
 
+Together = None
+TogetherError = None # Custom error for Together
+try:
+    from together import Together
 
-# Initialize logger before using it
+    class TogetherCustomError(Exception): # Renamed to avoid conflict if 'TogetherError' exists in SDK
+        """Custom error class for Together AI API errors"""
+        def __init__(self, message, status_code=None):
+            self.message = message
+            self.status_code = status_code
+            super().__init__(self.message)
+    TogetherError = TogetherCustomError # Assign custom error
+except ImportError:
+    # Together SDK not found, Together remains None
+    pass
+
+# Initialize logger (MUST be done after importing logging module)
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levellevelname)s - %(message)s",
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", # Corrected typo: levellevelname -> levelname
 )
 logger = logging.getLogger(__name__)
 
-# Log warnings for missing optional dependencies
-if Together is None:
-    logger.warning(
-        "Module 'together' is not installed. TogetherProvider will not work. Install it with: pip install together"
-    )
-if genai is None:
-    logger.warning(
-        "Module 'google-generativeai' is not installed. GeminiProvider will not work. Install it with: pip install google-generativeai"
-    )
-if cohere is None:
-    logger.warning(
-        "Module 'cohere' is not installed. CohereProvider will not work. Install it with: pip install cohere"
-    )
-if AsyncGroq is None or groq is None:
-    logger.warning(
-        "Module 'groq' is not installed. GroqProvider will not work. Install it with: pip install groq"
-    )
+# Log warnings for missing optional dependencies (NOW that logger is defined)
+if aiohttp is None:
+    logger.warning("Module 'aiohttp' is not installed. Some providers might not work. Install it with: pip install aiohttp")
+if httpx is None:
+    logger.warning("Module 'httpx' is not installed. Some providers might not work. Install it with: pip install httpx")
+if openai is None:
+    logger.warning("Module 'openai' is not installed. OpenAIProvider will not work. Install it with: pip install openai")
 if anthropic is None:
-    logger.warning(
-        "Module 'anthropic' is not installed. AnthropicProvider will not work. Install it with: pip install anthropic"
-    )
+    logger.warning("Module 'anthropic' is not installed. AnthropicProvider will not work. Install it with: pip install anthropic")
+if genai is None:
+    logger.warning("Module 'google-generativeai' is not installed. GeminiProvider will not work. Install it with: pip install google-generativeai")
+if cohere is None:
+    logger.warning("Module 'cohere' is not installed. CohereProvider will not work. Install it with: pip install cohere")
+if groq is None or AsyncGroq is None: # Check both groq and AsyncGroq
+    logger.warning("Module 'groq' is not installed. GroqProvider will not work. Install it with: pip install groq")
+if ollama is None:
+    logger.warning("Module 'ollama' is not installed. OllamaProvider might fall back to REST or fail. Install it with: pip install ollama")
+if Together is None:
+    logger.warning("Module 'together' is not installed. TogetherProvider will not work. Install it with: pip install together")
 
 
 load_dotenv()
 
+# Import project-specific modules after standard/third-party and logging setup
+try:
+    from config import load_config
+except ImportError:
+    logger.error("CRITICAL: Failed to import load_config from config.py. ProviderFactory will not work correctly.")
+    def load_config(): # Fallback stub
+        logger.error("CRITICAL: load_config stub called because import failed.")
+        return {}
 
 # Cache for storing available providers list
 _available_providers_cache = None
@@ -126,7 +141,7 @@ def get_available_providers() -> List[str]:
     return available_providers
 
 
-def get_provider_models(provider_name: str) -> List[str]:
+async def get_provider_models(provider_name: str) -> List[str]:
     """Returns a list of available models for a provider."""
     global _provider_models_cache
 
@@ -137,7 +152,7 @@ def get_provider_models(provider_name: str) -> List[str]:
     # Create a provider instance
     try:
         provider = ProviderFactory.create_provider(provider_name)
-        models = provider.get_available_models()
+        models = await provider.get_available_models()
 
         # Cache the result
         _provider_models_cache[provider_name] = models
@@ -405,7 +420,7 @@ class BaseProvider(ABC):
     async def __aexit__(self, exc_type, exc, tb):
         await self.close_session()
 
-    def get_available_models(self) -> List[str]:
+    async def get_available_models(self) -> List[str]:
         """Получение списка доступных моделей."""
         return [self.model] if self.model else []
 
@@ -505,7 +520,7 @@ class OpenAIProvider(BaseProvider):
             )
             return f"Ошибка генерации: {str(e)}"
 
-    def get_available_models(self) -> List[str]:
+    async def get_available_models(self) -> List[str]:
         default_model = self.get_default_model()
         known_models = ["gpt-4", "gpt-4-turbo", "gpt-3.5-turbo"]
         if default_model and default_model not in known_models:
@@ -610,7 +625,7 @@ class AnthropicProvider(BaseProvider):
             )
             return f"Ошибка генерации: {str(e)}"
 
-    def get_available_models(self) -> List[str]:
+    async def get_available_models(self) -> List[str]:
         known = [
             "claude-3-opus-20240229",
             "claude-3-sonnet-20240229",
@@ -898,7 +913,7 @@ class GroqProvider(BaseProvider):
             )
             return f"Error: {str(e)}"
 
-    def get_available_models(self) -> List[str]:
+    async def get_available_models(self) -> List[str]:
         # Додаємо модель llama-3.3-70b-versatile із прикладу запиту
         known = [
             "llama3-70b-8192",
@@ -1216,46 +1231,45 @@ class OllamaProvider(BaseProvider):
         default_models = ["llama3", "mistral"]  # Provide some defaults
         try:
             if self.use_sdk and self._client:
-                models_info = await self._client.list()
-                # Ensure models_info and models_info['models'] exist
-                return (
-                    [
-                        model["name"]
-                        for model in models_info.get("models", [])
-                        if "name" in model
+                response = await self._client.list()
+                if response and isinstance(response, dict) and "models" in response:
+                    return [
+                        model.get("name")
+                        for model in response["models"]
+                        if model.get("name")
                     ]
-                    if models_info and isinstance(models_info.get("models"), list)
-                    else default_models
-                )
+                else:
+                    logger.warning(
+                        f"Ollama SDK list response format unexpected: {response}"
+                    )
+                    return default_models
             else:
-                # Use REST API
+                # REST API
+                if aiohttp is None: # Check if aiohttp was imported
+                    logger.error("aiohttp is not available for Ollama REST API call.")
+                    return default_models
                 session = await self.get_client_session()
                 api_url = f"{self.endpoint}/api/tags"
                 async with session.get(api_url) as response:
                     if response.status == 200:
                         data = await response.json()
-                        # Ensure data['models'] exists and is a list
-                        return (
-                            [
-                                model["name"]
-                                for model in data.get("models", [])
-                                if "name" in model
-                            ]
-                            if isinstance(data.get("models"), list)
-                            else default_models
-                        )
+                        return [
+                            model.get("name")
+                            for model in data.get("models", [])
+                            if model.get("name")
+                        ]
                     else:
                         logger.error(
-                            f"Ошибка при получении списка моделей Ollama REST API ({response.status}): {await response.text()}"
+                            f"Ошибка при получении списка моделей Ollama ({response.status}): {await response.text()}"
                         )
-                        # Return defaults + configured model if API fails
-                        base_models = super().get_available_models()
-                        return list(set(default_models + base_models))
+                        return default_models
         except Exception as e:
-            logger.error(f"Ошибка при получении списка моделей Ollama: {e}")
-            # Return defaults + configured model on any exception
-            base_models = super().get_available_models()
-            return list(set(default_models + base_models))
+            logger.error(
+                f"Ошибка при получении списка доступных моделей Ollama ({self.name}): {e}",
+                exc_info=True,
+            )
+            # Fallback to default model from BaseProvider if specific listing fails
+            return await super().get_available_models() # ADDED await here
 
 
 class OpenRouterProvider(BaseProvider):
@@ -1497,7 +1511,7 @@ class CohereProvider(BaseProvider):
             )
             return f"Ошибка генерации: {str(e)}"
 
-    def get_available_models(self) -> List[str]:
+    async def get_available_models(self) -> List[str]:
         # List known Cohere models
         known = ["command-r-plus", "command-r", "command", "command-light"]
         default_model = self.get_default_model()
@@ -1671,7 +1685,7 @@ class GeminiProvider(BaseProvider):
                 return "Ошибка генерации: Недействительный API ключ Gemini/Google."
             return f"Ошибка генерации: {str(e)}"
 
-    def get_available_models(self) -> List[str]:
+    async def get_available_models(self) -> List[str]:
         # List known/common Gemini models
         known = [
             "gemini-1.5-pro-latest",
@@ -1705,7 +1719,7 @@ class TogetherProvider(BaseProvider):
         self._client = None
         self.setup()  # Ensure setup is called
 
-    def setup(self) -> None:
+    def setup(self) -> None:  # Corrected: Added self
         if not Together:
             logger.error(
                 "Модуль 'together' не установлен. Установите его: pip install together"
@@ -1782,7 +1796,7 @@ class TogetherProvider(BaseProvider):
             )
             return f"Ошибка генерации: {str(e)}"
 
-    def get_available_models(self) -> List[str]:
+    async def get_available_models(self) -> List[str]:
         if not self._client:
             logger.warning(
                 "Невозможно получить список моделей: Together SDK не инициализирован."
@@ -2001,7 +2015,7 @@ class CodestralProvider(BaseProvider):
         # If we exhausted all retries
         return f"Ошибка генерации: Не удалось получить ответ от Codestral API после {retries} попыток."
 
-    def get_available_models(self) -> List[str]:
+    async def get_available_models(self) -> List[str]:
         # Return a default list or the configured model, as we can't query the API without SDK easily
         known = ["codestral-latest", "codestral-2405"]
         default_model = self.get_default_model()
@@ -2048,7 +2062,7 @@ class Gemini3Provider(BaseProvider):
         content = {"parts": [{"text": prompt}]}
 
         # Додаємо системний промпт, якщо він є
-        if system_prompt:
+        if (system_prompt):
             payload = {
                 "contents": [{"parts": [{"text": system_prompt}]}, content],
                 "generationConfig": {
@@ -2111,7 +2125,7 @@ class Gemini3Provider(BaseProvider):
             )
             return f"Помилка генерації: {str(e)}"
 
-    def get_available_models(self) -> List[str]:
+    async def get_available_models(self) -> List[str]:
         return [
             "gemini-2.0-flash",
             "gemini-2.0-pro",
@@ -2160,7 +2174,7 @@ class Gemini4Provider(BaseProvider):
         content = {"parts": [{"text": prompt}]}
 
         # Додаємо системний промпт, якщо він є
-        if system_prompt:
+        if (system_prompt):
             payload = {
                 "contents": [{"parts": [{"text": system_prompt}]}, content],
                 "generationConfig": {
@@ -2223,7 +2237,7 @@ class Gemini4Provider(BaseProvider):
             )
             return f"Помилка генерації: {str(e)}"
 
-    def get_available_models(self) -> List[str]:
+    async def get_available_models(self) -> List[str]:
         return ["gemini-2.0-pro", "gemini-1.5-pro", "gemini-1.5-flash"]
 
 
@@ -2374,7 +2388,7 @@ class TugezerProvider(BaseProvider):
             f"Error: Failed to get response from Tugezer API after {retries} attempts."
         )
 
-    def get_available_models(self) -> List[str]:
+    async def get_available_models(self) -> List[str]:
         known = ["tugezer-latest", "tugezer-7b", "tugezer-13b"]
         default_model = self.get_default_model()
         if default_model and default_model not in known:
@@ -2502,12 +2516,12 @@ class FallbackProvider(BaseProvider):
         logger.error(f"All fallback providers failed:\n{error_report}")
         return f"All providers failed. Please check the provider configuration or try again later.\nErrors:\n{error_report}"
 
-    def get_available_models(self) -> List[str]:
+    async def get_available_models(self) -> List[str]:
         """Get a list of available models from all providers."""
         models = []
         for provider in self.providers:
             try:
-                provider_models = provider.get_available_models()
+                provider_models = await provider.get_available_models()
                 models.extend([f"{provider.name}:{model}" for model in provider_models])
             except Exception as e:
                 logger.error(f"Error getting models from provider {provider.name}: {e}")
@@ -2582,18 +2596,6 @@ def get_component_fallbacks(ai: str, role: Optional[str] = None) -> List[Dict]:
             f"Error getting fallbacks for component {ai}{'-'+role if role else ''}: {e}"
         )
         return []
-
-
-try:
-    from config import load_config
-except ImportError:
-    logger.warning(
-        "Не удалось импортировать load_config из config.py. ProviderFactory может не работать без явной передачи config."
-    )
-
-    def load_config():
-        logger.error("Функция load_config не импортирована.")
-        return {}
 
 
 class Report:
