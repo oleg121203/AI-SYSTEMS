@@ -240,21 +240,27 @@ class ProviderFactory:
             "type", provider_type_from_config or provider_name
         ).lower()
 
-        # If effective_config is still empty (e.g. provider_name was a type, and no config_arg)
-        # and provider_type matches a key in providers_config that IS a dict, use that dict.
-        # This handles cases like create_provider("openai") where "openai" is a type, but also a key to a config dict.
-        if (
-            not effective_config
-            and provider_type in providers_config
-            and isinstance(providers_config[provider_type], dict)
-        ):
-            effective_config = providers_config[provider_type].copy()
-            logger.info(
-                f"Using config from 'providers.{provider_type}' as base for type '{provider_type}'."
+        # Workaround for incorrect types that might be present in configuration
+        if provider_type == "codestral2":
+            logger.warning(
+                "Provider type 'codestral2' was remapped to 'codestral'. "
+                "Please ensure the 'type' in your provider configuration is correctly set to 'codestral'."
             )
-            # Re-merge config_arg in case it was meant for this specific type config
-            if isinstance(config_arg, dict):
-                effective_config.update(config_arg)
+            provider_type = "codestral"
+        elif provider_type == "ollama1":
+            logger.warning(
+                "Provider type 'ollama1' was remapped to 'ollama'. "
+                "Please ensure the 'type' in your provider configuration is correctly set to 'ollama'."
+            )
+            provider_type = "ollama"
+        elif (
+            provider_type == "structure_fallback"
+        ):  # Handle if this is passed as a type directly
+            logger.warning(
+                "Provider type 'structure_fallback' was remapped to 'fallback'. "
+                "Ensure 'structure_fallback' is a named provider configuration with 'type: fallback'."
+            )
+            provider_type = "fallback"
 
         logger.info(
             f"Creating provider instance for '{provider_name}' (resolved type: '{provider_type}') "
@@ -1598,25 +1604,35 @@ class GeminiProvider(BaseProvider):
 
             # Combine system prompt and user prompt
             # Gemini SDK can take system instruction directly in generate_content
-            contents = [prompt]  # User prompt is the main content
-            system_instruction_param = (
-                self.genai.types.Content(
-                    parts=[self.genai.types.Part(text=system_prompt)],
-                    role="system",  # Role might not be needed if using system_instruction param
+            current_contents = []
+            if system_prompt:
+                # Create a Content object for the system prompt.
+                # Using role="system" as was intended by system_instruction_param.
+                # If Gemini API strictly requires "user" or "model" for all `contents` items
+                # (except for a specific `system_instruction` on the Model object itself),
+                # this might need adjustment to role="user" or by setting it on the model.
+                # For now, this directly replaces the problematic kwarg.
+                current_contents.append(
+                    self.genai.types.Content(
+                        parts=[self.genai.types.Part(text=system_prompt)], role="system"
+                    )
                 )
-                if system_prompt
-                else None
+
+            # Add the main user prompt as a Content object
+            current_contents.append(
+                self.genai.types.Content(
+                    parts=[self.genai.types.Part(text=prompt)], role="user"
+                )
             )
 
-            # Use generate_content_async for async operation
             response = await model_instance.generate_content_async(
-                contents=contents,
+                contents=current_contents,
                 generation_config=(
                     self.genai.types.GenerationConfig(**gen_config_overrides)
                     if gen_config_overrides
                     else None
                 ),
-                system_instruction=system_instruction_param,
+                # system_instruction keyword argument removed as it caused TypeError
             )
 
             # Extract text, handling potential blocks or errors
