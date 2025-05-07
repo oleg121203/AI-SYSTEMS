@@ -85,21 +85,43 @@ def is_process_running(pid: int) -> bool:
 
 
 def update_load_level():
-    """Update the current load level from config"""
-    global load_level, buffer_size
+    """Update the current load level from config and save if changed."""
+    global load_level, buffer_size  # load_level and buffer_size are module globals
 
     try:
-        cfg = config.load_config()
-        buffer_size = cfg.get("ai1_desired_active_buffer", 5)
-        new_load_level = config.detect_load_level(cfg)
+        cfg = (
+            config.load_config()
+        )  # This cfg has request_delays adjusted by load_config()
+        current_buffer_size = cfg.get(
+            "ai1_desired_active_buffer", 5
+        )  # Get the buffer that load_config used
+        new_load_level = config.detect_load_level(
+            cfg
+        )  # Detect level based on this buffer
 
-        if new_load_level != load_level:
+        # If the detected load level is different from our stored one,
+        # or if the buffer size that determined the load level has changed.
+        if new_load_level != load_level or current_buffer_size != buffer_size:
             logger.info(
-                f"Load level changed: {load_level} -> {new_load_level} (buffer: {buffer_size})"
+                f"Load level or buffer changed. Old level: {load_level}, New level: {new_load_level}. "
+                f"Old buffer: {buffer_size}, New buffer: {current_buffer_size}"
             )
             load_level = new_load_level
+            buffer_size = current_buffer_size  # Update module global buffer_size
+
+            # cfg already contains the correctly adjusted request_delays because
+            # config.load_config() calls config.adjust_delays_for_load_level() internally.
+            # We save this version of cfg back to config.json so that other modules
+            # (like utils.py) will pick up these specific delay values when they next load the config.
+            config.save_config(cfg)
+            logger.info(
+                f"Config saved with updated request delays for load level {load_level} (buffer: {buffer_size})."
+            )
+        # else:
+        # logger.debug(f"Load level ({new_load_level}) and buffer ({current_buffer_size}) unchanged.")
+
     except Exception as e:
-        logger.error(f"Error updating load level: {e}")
+        logger.error(f"Error updating load level or saving config: {e}", exc_info=True)
 
 
 async def record_api_call(component: str, timestamp: Optional[float] = None):

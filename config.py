@@ -100,41 +100,42 @@ LOAD_LEVEL_HIGH = 4
 LOAD_LEVEL_MAXIMUM = 5
 
 # Default delay values by load level (in seconds)
+# INCREASED DELAYS: Min delays +0.5s, Max delays +1.0s
 DELAY_BY_LOAD_LEVEL = {
     LOAD_LEVEL_MINIMAL: {
-        "ai1": {"min": 1.0, "max": 2.0},
-        "ai2_executor": {"min": 2.0, "max": 4.0},
-        "ai2_tester": {"min": 2.0, "max": 4.0},
-        "ai2_documenter": {"min": 2.0, "max": 4.0},
-        "ai3": {"min": 2.0, "max": 4.0},
+        "ai1": {"min": 1.5, "max": 3.0},  # Was 1.0, 2.0
+        "ai2_executor": {"min": 2.5, "max": 5.0},  # Was 2.0, 4.0
+        "ai2_tester": {"min": 2.5, "max": 5.0},  # Was 2.0, 4.0
+        "ai2_documenter": {"min": 2.5, "max": 5.0},  # Was 2.0, 4.0
+        "ai3": {"min": 2.5, "max": 5.0},  # Was 2.0, 4.0
     },
     LOAD_LEVEL_LOW: {
-        "ai1": {"min": 0.5, "max": 1.0},
-        "ai2_executor": {"min": 1.0, "max": 2.0},
-        "ai2_tester": {"min": 1.0, "max": 2.0},
-        "ai2_documenter": {"min": 1.0, "max": 2.0},
-        "ai3": {"min": 1.0, "max": 2.0},
+        "ai1": {"min": 1.0, "max": 2.0},  # Was 0.5, 1.0
+        "ai2_executor": {"min": 1.5, "max": 3.0},  # Was 1.0, 2.0
+        "ai2_tester": {"min": 1.5, "max": 3.0},  # Was 1.0, 2.0
+        "ai2_documenter": {"min": 1.5, "max": 3.0},  # Was 1.0, 2.0
+        "ai3": {"min": 1.5, "max": 3.0},  # Was 1.0, 2.0
     },
     LOAD_LEVEL_MEDIUM: {
-        "ai1": {"min": 0.3, "max": 0.7},
-        "ai2_executor": {"min": 0.7, "max": 1.5},
-        "ai2_tester": {"min": 0.7, "max": 1.5},
-        "ai2_documenter": {"min": 0.7, "max": 1.5},
-        "ai3": {"min": 0.7, "max": 1.5},
+        "ai1": {"min": 0.8, "max": 1.7},  # Was 0.3, 0.7
+        "ai2_executor": {"min": 1.2, "max": 2.5},  # Was 0.7, 1.5
+        "ai2_tester": {"min": 1.2, "max": 2.5},  # Was 0.7, 1.5
+        "ai2_documenter": {"min": 1.2, "max": 2.5},  # Was 0.7, 1.5
+        "ai3": {"min": 1.2, "max": 2.5},  # Was 0.7, 1.5
     },
     LOAD_LEVEL_HIGH: {
-        "ai1": {"min": 0.2, "max": 0.5},
-        "ai2_executor": {"min": 0.5, "max": 1.0},
-        "ai2_tester": {"min": 0.5, "max": 1.0},
-        "ai2_documenter": {"min": 0.5, "max": 1.0},
-        "ai3": {"min": 0.5, "max": 1.0},
+        "ai1": {"min": 0.7, "max": 1.5},  # Was 0.2, 0.5
+        "ai2_executor": {"min": 1.0, "max": 2.0},  # Was 0.5, 1.0
+        "ai2_tester": {"min": 1.0, "max": 2.0},  # Was 0.5, 1.0
+        "ai2_documenter": {"min": 1.0, "max": 2.0},  # Was 0.5, 1.0
+        "ai3": {"min": 1.0, "max": 2.0},  # Was 0.5, 1.0
     },
     LOAD_LEVEL_MAXIMUM: {
-        "ai1": {"min": 0.1, "max": 0.3},
-        "ai2_executor": {"min": 0.3, "max": 0.7},
-        "ai2_tester": {"min": 0.3, "max": 0.7},
-        "ai2_documenter": {"min": 0.3, "max": 0.7},
-        "ai3": {"min": 0.3, "max": 0.7},
+        "ai1": {"min": 0.6, "max": 1.3},  # Was 0.1, 0.3
+        "ai2_executor": {"min": 0.8, "max": 1.7},  # Was 0.3, 0.7
+        "ai2_tester": {"min": 0.8, "max": 1.7},  # Was 0.3, 0.7
+        "ai2_documenter": {"min": 0.8, "max": 1.7},  # Was 0.3, 0.7
+        "ai3": {"min": 0.8, "max": 1.7},  # Was 0.3, 0.7
     },
 }
 

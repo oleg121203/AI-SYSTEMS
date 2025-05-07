@@ -337,110 +337,113 @@ def format_code_blocks(text: str) -> str:
 from providers import BaseProvider  # Ensure these are imported
 from providers import ProviderFactory
 
-# ... existing code ...
+# Global dictionary to track the last API request time for each component.
+# This is used for monitoring or potential future rate limiting logic,
+# but not for calculating the delay in the revised apply_request_delay.
+last_api_request = {}
+
+# The global `delay_settings` is no longer the primary source for `apply_request_delay`.
+# It might be used by other functions or can be removed if not.
+# For now, we'll leave its definition if it exists, but `apply_request_delay` will fetch its own.
+delay_settings = {}
 
 
-# --- CHANGE: Modify apply_request_delay signature and logic ---
+# --- CHANGE: Modify apply_request_delay to fetch fresh config and use random.uniform ---
 async def apply_request_delay(identifier: str):
-    """Applies a random delay based on configuration before making an API request.
-    Identifier format: 'ai1', 'ai3', 'ai2_executor', 'ai2_tester', 'ai2_documenter'.
+    """Applies a random delay based on dynamically loaded configuration before making an API request.
+    Identifier format: 'ai1', 'ai3', 'ai2_executor', 'ai2_tester', 'ai2_documenter', or more specific like 'ai2_executor_task123'.
+    The function normalizes 'ai2_subrole_...' to 'ai2_subrole' for fetching settings.
     """
-    global last_api_request, delay_settings
+    global last_api_request  # Used to record the time of the request after delay.
 
-    # Reload delay settings from config if needed
-    if not delay_settings:
-        try:
-            from config import load_config
+    effective_delay_settings = (
+        {}
+    )  # Local dictionary for delay settings for this specific call.
 
-            config = load_config()
-            delay_config = config.get("request_delays", {})
+    try:
+        # Import config here to ensure it's always accessible and uses the latest version.
+        from config import load_config
 
-            # Process settings for direct components (ai1, ai3)
-            for component in ["ai1", "ai3"]:
-                if component in delay_config:
-                    comp_config = delay_config[component]
-                    if isinstance(comp_config, dict) and "min" in comp_config:
-                        delay_settings[component] = {
-                            "min_delay": comp_config["min"],
-                            "max_delay": comp_config.get("max", comp_config["min"] * 2),
+        # load_config() is efficient due to its internal mtime-based cache.
+        # It returns a config dict where 'request_delays' has already been adjusted
+        # by adjust_delays_for_load_level() based on 'ai1_desired_active_buffer'.
+        config_data = load_config()
+        loaded_request_delays = config_data.get("request_delays", {})
+
+        # Populate local effective_delay_settings from the loaded config.
+        for component_name_loop in ["ai1", "ai3"]:
+            if component_name_loop in loaded_request_delays:
+                comp_config = loaded_request_delays[component_name_loop]
+                if isinstance(comp_config, dict) and "min" in comp_config:
+                    effective_delay_settings[component_name_loop] = {
+                        "min_delay": float(comp_config["min"]),
+                        "max_delay": float(
+                            comp_config.get("max", comp_config.get("min", 0.1) * 2)
+                        ),  # Default max if missing
+                    }
+
+        if "ai2" in loaded_request_delays and isinstance(
+            loaded_request_delays["ai2"], dict
+        ):
+            ai2_delays_config = loaded_request_delays["ai2"]
+            for role in ["executor", "tester", "documenter"]:
+                if role in ai2_delays_config:
+                    role_config = ai2_delays_config[role]
+                    if isinstance(role_config, dict) and "min" in role_config:
+                        effective_delay_settings[f"ai2_{role}"] = {
+                            "min_delay": float(role_config["min"]),
+                            "max_delay": float(
+                                role_config.get("max", role_config.get("min", 0.1) * 2)
+                            ),  # Default max if missing
                         }
-
-            # Process settings for ai2 subcomponents
-            if "ai2" in delay_config and isinstance(delay_config["ai2"], dict):
-                for role in ["executor", "tester", "documenter"]:
-                    if role in delay_config["ai2"]:
-                        role_config = delay_config["ai2"][role]
-                        if isinstance(role_config, dict) and "min" in role_config:
-                            delay_settings[f"ai2_{role}"] = {
-                                "min_delay": role_config["min"],
-                                "max_delay": role_config.get(
-                                    "max", role_config["min"] * 2
-                                ),
-                            }
-        except Exception as e:
-            logger.error(f"Error loading delay settings: {e}")
-            # Fallback to minimum safe values
-            default_min_delay = 0.5
-            delay_settings = {
-                "ai1": {
-                    "min_delay": default_min_delay,
-                    "max_delay": default_min_delay * 2,
-                },
-                "ai2_executor": {
-                    "min_delay": default_min_delay,
-                    "max_delay": default_min_delay * 2,
-                },
-                "ai2_tester": {
-                    "min_delay": default_min_delay,
-                    "max_delay": default_min_delay * 2,
-                },
-                "ai2_documenter": {
-                    "min_delay": default_min_delay,
-                    "max_delay": default_min_delay * 2,
-                },
-                "ai3": {
-                    "min_delay": default_min_delay,
-                    "max_delay": default_min_delay * 2,
-                },
+    except Exception as e:
+        logger.error(
+            f"Error loading dynamic delay settings for {identifier}: {e}. Using minimal fallback delays.",
+            exc_info=True,
+        )
+        # Emergency fallback if config loading fails.
+        min_fb, max_fb = 0.05, 0.1
+        # Ensure all expected component_id keys have a fallback
+        for comp_key in ["ai1", "ai3", "ai2_executor", "ai2_tester", "ai2_documenter"]:
+            effective_delay_settings[comp_key] = {
+                "min_delay": min_fb,
+                "max_delay": max_fb,
             }
 
-    # Extract AI2 role if applicable
-    component_id = identifier
+    # Normalize the identifier to a component_id key used in settings.
+    # E.g., "ai2_executor_task1" becomes "ai2_executor".
+    component_id_for_settings = identifier
     if identifier.startswith("ai2_"):
-        parts = identifier.split("_", 1)
-        if len(parts) == 2:
-            component_id = f"ai2_{parts[1]}"  # Normalize to ai2_executor, ai2_tester, ai2_documenter
+        parts = identifier.split("_", 2)
+        if len(parts) >= 2:
+            component_id_for_settings = f"ai2_{parts[1]}"
 
-    # Default settings if component not found
-    settings = delay_settings.get(component_id, {"min_delay": 0.5, "max_delay": 1.0})
-    min_delay = settings["min_delay"]
-    max_delay = settings["max_delay"]
+    # Get specific settings for this component_id, with a final fallback.
+    default_min_max = {"min_delay": 0.05, "max_delay": 0.1}
+    settings_for_component = effective_delay_settings.get(
+        component_id_for_settings, default_min_max
+    )
 
-    # Check when the last request was made by this component
-    last_time = last_api_request.get(component_id, 0)
-    current_time = time.time()
-    elapsed = current_time - last_time
+    min_d = settings_for_component.get("min_delay", default_min_max["min_delay"])
+    max_d = settings_for_component.get("max_delay", default_min_max["max_delay"])
 
-    # If not enough time has elapsed, wait
-    if elapsed < min_delay:
-        # Add jitter to prevent thundering herd problem
-        jitter = (
-            random.uniform(0, (max_delay - min_delay) * 0.2)
-            if max_delay > min_delay
-            else 0
+    # Validate delay values.
+    min_d = max(0.0, min_d)  # Ensure min_delay is not negative.
+    max_d = max(min_d, max_d)  # Ensure max_delay is not less than min_delay.
+
+    actual_delay_to_apply = 0.0
+    if max_d > 0:  # Only sleep if max_d is positive.
+        actual_delay_to_apply = random.uniform(min_d, max_d)
+
+    if actual_delay_to_apply > 0:
+        logger.debug(
+            f"[{identifier} -> {component_id_for_settings}] Applying API request delay: {actual_delay_to_apply:.3f}s (range: {min_d:.3f}-{max_d:.3f})"
         )
-        delay_needed = min_delay - elapsed + jitter
+        await asyncio.sleep(actual_delay_to_apply)
 
-        # If delay is significant, log it
-        if delay_needed > 0.1:
-            logger.debug(
-                f"[{component_id}] Applying API request delay: {delay_needed:.2f}s"
-            )
-
-        await asyncio.sleep(delay_needed)
-
-    # Update the last request time
-    last_api_request[component_id] = time.time()
+    # Record the time of this request for the normalized component_id.
+    current_time = time.time()
+    last_api_request[component_id_for_settings] = current_time
 
 
 # --- END CHANGE ---
