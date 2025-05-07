@@ -2533,7 +2533,7 @@ function initializeTimelineChart() {
     data: {
       datasets: [
         {
-          label: "Tasks in Queues", // CHANGED from "Created Files"
+          label: "Created Files", // REVERTED from "Tasks in Queues"
           data: [],
           borderColor: "rgb(59, 130, 246)", // Blue
           backgroundColor: "rgba(59, 130, 246, 0.2)",
@@ -2566,7 +2566,7 @@ function initializeTimelineChart() {
         ...baseOptions.plugins,
         title: {
           ...baseOptions.plugins.title,
-          text: "Task Activity Timeline", // UPDATED Title
+          text: "Task Activity Timeline",
         },
       },
       scales: {
@@ -2588,7 +2588,6 @@ function initializeTimelineChart() {
           },
         },
         y: {
-          // ADDED/MODIFIED Y-axis specific title
           ...baseOptions.scales.y,
           title: {
             display: true,
@@ -2600,8 +2599,8 @@ function initializeTimelineChart() {
     },
   });
   console.log(
-    "[Timeline] New timeline chart initialized successfully with 'Tasks in Queues' and 'Tasks Completed'."
-  );
+    "[Timeline] New timeline chart initialized successfully with 'Created Files' and 'Tasks Completed'."
+  ); // UPDATED log message
 }
 
 function updateTimelineChart(data) {
@@ -2618,27 +2617,16 @@ function updateTimelineChart(data) {
   const MAX_POINTS = 60; // Show up to 60 data points
   let pointPushedOrDataReplaced = false;
 
-  // Determine the timestamp for new data points
   const currentTimestamp =
     data.progress_data?.timestamp || new Date().toISOString();
   const pointDate = new Date(currentTimestamp);
 
-  // Handle explicit timeline data if provided by backend (overwrites entire datasets)
   if (data.timeline_data) {
-    const labels = data.timeline_data.labels || []; // Assumed to be timestamps
+    const labels = data.timeline_data.labels || [];
 
-    // Dataset 0: Tasks in Queues
-    if (data.timeline_data.tasks_in_queues) {
-      timelineChart.data.datasets[0].data = labels.map((label, index) => ({
-        x: new Date(label),
-        y: data.timeline_data.tasks_in_queues[index],
-      }));
-      pointPushedOrDataReplaced = true;
-    } else if (
-      data.timeline_data.files_created &&
-      timelineChart.data.datasets[0].label === "Created Files"
-    ) {
-      // Backward compatibility if label wasn't updated yet and old data format is received
+    // Dataset 0: Created Files
+    if (data.timeline_data.files_created) {
+      // CHANGED: Use files_created
       timelineChart.data.datasets[0].data = labels.map((label, index) => ({
         x: new Date(label),
         y: data.timeline_data.files_created[index],
@@ -2660,23 +2648,24 @@ function updateTimelineChart(data) {
     }
   } else {
     // Synthesize and append new data points if no explicit timeline_data
-    let tasksInQueuesCount = 0;
-    if (data.queues) {
-      tasksInQueuesCount =
-        (data.queues.executor || []).length +
-        (data.queues.tester || []).length +
-        (data.queues.documenter || []).length;
+    // Dataset 0: Created Files
+    let filesCreatedCount = 0;
+    if (data.progress_data && data.progress_data.files_created !== undefined) {
+      filesCreatedCount = data.progress_data.files_created;
     } else if (timelineChart.data.datasets[0].data.length > 0) {
-      tasksInQueuesCount =
+      filesCreatedCount =
         timelineChart.data.datasets[0].data[
           timelineChart.data.datasets[0].data.length - 1
         ].y;
+    } else {
+      filesCreatedCount = 0; // Default if no history and no new data
     }
     timelineChart.data.datasets[0].data.push({
       x: pointDate,
-      y: tasksInQueuesCount,
+      y: filesCreatedCount,
     });
 
+    // Dataset 1: Tasks Completed
     let completedTasksCount = 0;
     if (
       data.progress_data &&
@@ -2688,6 +2677,8 @@ function updateTimelineChart(data) {
         timelineChart.data.datasets[1].data[
           timelineChart.data.datasets[1].data.length - 1
         ].y;
+    } else {
+      completedTasksCount = 0; // Default if no history and no new data
     }
     timelineChart.data.datasets[1].data.push({
       x: pointDate,
@@ -2697,23 +2688,25 @@ function updateTimelineChart(data) {
     pointPushedOrDataReplaced = true;
     console.log("[Timeline] Appended synthetic data point:", {
       time: pointDate.toLocaleTimeString(),
-      queued: tasksInQueuesCount,
+      files_created: filesCreatedCount, // CHANGED log key
       completed: completedTasksCount,
     });
   }
 
   if (pointPushedOrDataReplaced) {
     timelineChart.data.datasets.forEach((dataset) => {
-      dataset.data.sort((a, b) => a.x - b.x); // Sort by time
+      dataset.data.sort((a, b) => a.x - b.x);
       while (dataset.data.length > MAX_POINTS) {
-        dataset.data.shift(); // Remove the oldest data point
+        dataset.data.shift();
       }
     });
     updateChartTheme(timelineChart, getChartFontColor());
     timelineChart.update();
     console.log("[Timeline] Chart updated.");
   } else {
-    console.log("[Timeline] No new data to push or explicit data to replace.");
+    console.log(
+      "[Timeline] No new data to push or explicit data to replace for timeline."
+    );
   }
 }
 
