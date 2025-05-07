@@ -283,6 +283,13 @@ async def generate_structure(
             response_str = await provider_instance.generate_text(
                 prompt, max_tokens=4000, temperature=0.5  # Increased max_tokens
             )
+
+            # Ensure proper cleanup of provider resources
+            if hasattr(provider_instance, "close_session") and callable(
+                getattr(provider_instance, "close_session")
+            ):
+                await provider_instance.close_session()
+
             if response_str and response_str.strip():
                 logger.info(
                     "[AI3] Cycle 1: Successfully generated initial structure with "
@@ -302,6 +309,14 @@ async def generate_structure(
                 f"{provider_name}: {str(e)}",
                 exc_info=True,
             )
+            # Ensure cleanup even in case of exception
+            if (
+                "provider_instance" in locals()
+                and hasattr(provider_instance, "close_session")
+                and callable(getattr(provider_instance, "close_session"))
+            ):
+                await provider_instance.close_session()
+
     # ... (similar fixes for refinement cycle)
 
     if not generated_structure_str:
@@ -384,6 +399,13 @@ async def generate_structure(
                 max_tokens=4000,
                 temperature=0.3,  # Increased max_tokens
             )
+
+            # Ensure proper cleanup of provider resources
+            if hasattr(provider_instance, "close_session") and callable(
+                getattr(provider_instance, "close_session")
+            ):
+                await provider_instance.close_session()
+
             if response_str and response_str.strip():
                 logger.info(
                     "[AI3] Cycle 2: Successfully received refinement response with "
@@ -401,6 +423,13 @@ async def generate_structure(
                 f"[AI3] Cycle 2: Failed refinement with provider {provider_name}: {str(e)}",
                 exc_info=True,
             )
+            # Ensure cleanup even in case of exception
+            if (
+                "provider_instance" in locals()
+                and hasattr(provider_instance, "close_session")
+                and callable(getattr(provider_instance, "close_session"))
+            ):
+                await provider_instance.close_session()
 
     if refined_structure_json_str:
         try:
@@ -731,6 +760,12 @@ async def generate_initial_idea_md(
                 temperature=0.7,
             )
 
+            # Ensure proper cleanup of provider resources
+            if hasattr(provider, "close_session") and callable(
+                getattr(provider, "close_session")
+            ):
+                await provider.close_session()
+
             # Check if we got a valid response
             if content and content.strip():
                 logger.info(
@@ -746,6 +781,13 @@ async def generate_initial_idea_md(
                 f"[AI3] Failed to generate idea.md content with provider {provider_name}: {e}",
                 exc_info=True,
             )
+            # Ensure cleanup even in case of exception
+            if (
+                "provider" in locals()
+                and hasattr(provider, "close_session")
+                and callable(getattr(provider, "close_session"))
+            ):
+                await provider.close_session()
             # Continue to next provider on error
 
     # If all providers failed, return a simple template
