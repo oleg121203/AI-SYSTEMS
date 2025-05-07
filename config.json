@@ -97,7 +97,7 @@
         },
         "ai3": {
             "providers": [
-                "ollama",
+                "ollama1",
                 "openrouter-qwen",
                 "together"
             ],

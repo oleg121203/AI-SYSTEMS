@@ -213,7 +213,9 @@ start_ai_services() {
 
     # Запуск AI3
     echo "Starting AI3 service..."
-    python3 ai3.py >logs/ai3.log 2>&1 &
+    # Try to get TARGET from config.json first
+    TARGET=$(python3 -c "import json; print(json.load(open('config.json')).get('target', ''))" 2>/dev/null)
+    python3 ai3.py --target "$TARGET" >logs/ai3.log 2>&1 &
     AI3_PID=$!
     echo $AI3_PID >logs/ai3.pid
     echo "AI3 has been started in background with PID $AI3_PID"

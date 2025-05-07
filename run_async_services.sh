@@ -1,6 +1,14 @@
 #!/bin/bash
 set -e
 
+# Load target from config.json
+TARGET=$(python3 -c "import json; print(json.load(open('config.json')).get('target', ''))" 2>/dev/null)
+if [ -z "$TARGET" ]; then
+    echo "WARNING: No target found in config.json, using default target"
+    TARGET="Create a modern web application"
+fi
+export TARGET
+
 # Створення необхідних директорій
 mkdir -p logs
 mkdir -p repo
@@ -61,7 +69,7 @@ echo "AI2 documenter has been started in background with PID $AI2_DOC_PID"
 
 # Запуск AI3
 echo "Starting AI3 service..."
-python3 ai3.py >logs/ai3.log 2>&1 &
+python3 ai3.py --target "$TARGET" >logs/ai3.log 2>&1 &
 AI3_PID=$!
 echo $AI3_PID >logs/ai3.pid
 echo "AI3 has been started in background with PID $AI3_PID"

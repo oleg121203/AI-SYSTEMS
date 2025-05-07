@@ -3,19 +3,13 @@
   "files.autoSave": "afterDelay",
   "files.autoSaveDelay": 3000,
   "editor.formatOnSave": true,
-  "editor.codeLens": true,
-  "editor.rulers": [
-    80,
-    120
-  ],
+  "editor.codeLens": false,
+  "editor.rulers": [80, 81],
   "editorconfig.generateAuto": true,
 
   // Python Settings
   "python.formatting.provider": "black",
-  "python.formatting.blackArgs": [
-    "--line-length",
-    "79"
-  ],
+  "python.formatting.blackArgs": ["--line-length", "79"],
   "python.linting.enabled": true,
   "python.linting.flake8Enabled": true,
   "python.linting.pylintEnabled": false,
@@ -69,7 +63,8 @@
     "editor.codeActionsOnSave": {
       "source.organizeImports": "explicit"
     },
-    "editor.rulers": [ // Override global ruler for Python
+    "editor.rulers": [
+      // Override global ruler for Python
       79
     ]
   },

@@ -216,6 +216,23 @@ class BaseProvider(ABC):
         """Генерация ответа на запрос."""
         pass
 
+    async def generate_text(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        model: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
+    ) -> str:
+        """Alias for generate method to maintain compatibility with different code bases"""
+        return await self.generate(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            model=model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+
     async def get_client_session(self) -> aiohttp.ClientSession:
         """Gets or creates an aiohttp client session."""
         if self._session is None or self._session.closed:

@@ -52,7 +52,6 @@ REPO_PREFIX = "/repo/"  # Used in handle_ai2_output
 # --- END MODIFIED IMPORTS AND GLOBAL SETUP ---
 
 
-# ...existing code...
 async def _initialize_repository(repo_path: str) -> Optional[Repo]:
     # ...existing code...
     try:
@@ -744,21 +743,75 @@ class AI3:
         self.ollama_initialized = False
         self.ollama_endpoint: Optional[str] = None
         self.ollama_model: Optional[str] = None
-        self.provider_factory = ProviderFactory(self.config.get("providers", {}))
+        self.provider_factory = ProviderFactory()  # Remove arguments here
         self.current_project_structure: Optional[Dict[str, Any]] = None
-
-        # Ensure logger is set up if not done globally for the class/module
-        # self.logger = logging.getLogger(__name__) # Already global `logger`
 
         # Initialize Ollama configuration
         self._initialize_ollama_config()
 
+    # Add the missing start_monitoring and stop_monitoring methods
+    async def start_monitoring(self):
+        """Start all monitoring background tasks."""
+        logger.info("[AI3] Starting background monitoring tasks...")
+
+        self.monitoring_active = True
+
+        # Create and start background tasks
+        monitor_tasks = [
+            self.monitor_system_health(),
+            self.monitor_github_actions(),
+            self.monitor_idle_workers(),
+            # Add more monitoring tasks as needed
+        ]
+
+        for task in monitor_tasks:
+            background_task = asyncio.create_task(task)
+            self.background_tasks.append(background_task)
+
+        logger.info(
+            f"[AI3] Started {len(self.background_tasks)} background monitoring tasks"
+        )
+
+    async def stop_monitoring(self):
+        """Stop all monitoring background tasks."""
+        logger.info(
+            f"[AI3] Stopping {len(self.background_tasks)} background monitoring tasks..."
+        )
+
+        self.monitoring_active = False
+
+        # Cancel all running background tasks
+        for task in self.background_tasks:
+            if not task.done():
+                task.cancel()
+
+        # Wait for all tasks to complete their cancellation
+        if self.background_tasks:
+            await asyncio.gather(*self.background_tasks, return_exceptions=True)
+
+        self.background_tasks.clear()
+        logger.info("[AI3] All background monitoring tasks stopped")
+
     def _initialize_ollama_config(self):
-        ollama_config_key = (
+        # Check if structure_providers exists in ai3 configuration
+        structure_providers = (
             self.config.get("ai_config", {})
             .get("ai3", {})
-            .get("ollama_config_key", "ollama_default")
+            .get("structure_providers", ["ollama1"])
         )
+
+        # Get the first provider from the structure_providers list
+        ollama_config_key = None
+        for provider_name in structure_providers:
+            if provider_name.startswith("ollama"):
+                ollama_config_key = provider_name
+                break
+
+        # Default to "ollama" if no ollama provider found in structure_providers
+        if not ollama_config_key:
+            ollama_config_key = "ollama"
+
+        # Get the Ollama provider configuration
         ollama_provider_config = self.config.get("providers", {}).get(
             ollama_config_key, {}
         )
@@ -823,7 +876,7 @@ class AI3:
             logger.critical(
                 "[AI3] Repository clearing failed. Cannot proceed with structure setup."
             )
-            await self._report_status_to_mcp(
+            await _report_status_to_mcp(
                 "error_repo_clear_failed",
                 {"details": "Failed to clear repository"},
                 self.mcp_api_url,
@@ -842,11 +895,10 @@ class AI3:
             logger.info(
                 f"[AI3-Git] Successfully initialized new repository at: {self.repo_dir}"
             )
-            # Create and commit .gitignore
+
+            # Create and commit .gitignore to create an initial commit
             gitignore_path = os.path.join(self.repo_dir, ".gitignore")
-            if not os.exists(
-                gitignore_path
-            ):  # Should have been created by _initialize_repository if called
+            if not os.path.exists(gitignore_path):
                 with open(gitignore_path, "w", encoding="utf-8") as f:
                     f.write(
                         """*.pyc
@@ -866,15 +918,25 @@ coverage.xml
 .vscode/
 """
                     )
+                logger.info(f"[AI3-Git] Created .gitignore at {gitignore_path}")
+
+                # Create initial commit manually instead of using _commit_changes
                 if self.repo:
-                    _commit_changes(
-                        self.repo, [gitignore_path], "Initial commit (gitignore)"
-                    )
+                    try:
+                        self.repo.git.add(gitignore_path)
+                        self.repo.git.commit("-m", "Initial commit: .gitignore")
+                        logger.info("[AI3-Git] Successfully created initial commit")
+                    except Exception as e:
+                        logger.error(
+                            f"[AI3-Git] Error creating initial commit: {e}",
+                            exc_info=True,
+                        )
+
         except Exception as e:
             logger.critical(
                 f"[AI3-Git] Failed to initialize Git repository: {e}", exc_info=True
             )
-            await self._report_status_to_mcp(
+            await _report_status_to_mcp(
                 "error_git_init_failed",
                 {"details": str(e)},
                 self.mcp_api_url,
@@ -884,7 +946,7 @@ coverage.xml
         finally:
             os.chdir(original_cwd)  # Restore original CWD
 
-        await self._report_status_to_mcp(
+        await _report_status_to_mcp(
             "repo_cleared", None, self.mcp_api_url, self.client_session
         )
 
@@ -906,7 +968,7 @@ coverage.xml
         )
         if not structure:
             logger.critical("[AI3] Structure generation failed. Cannot proceed.")
-            await self._report_status_to_mcp(
+            await _report_status_to_mcp(
                 "error_structure_generation_failed",
                 {"details": "LLM failed to generate structure"},
                 self.mcp_api_url,
@@ -966,7 +1028,7 @@ coverage.xml
                 f"{skipped_count} skipped"
             )
 
-        await self._report_status_to_mcp(
+        await _report_status_to_mcp(
             "structure_creation_completed",
             {"created_count": created_count, "skipped_count": skipped_count},
             self.mcp_api_url,
@@ -1029,7 +1091,7 @@ coverage.xml
             structure, self.target, self.mcp_api_url, self.client_session  # type: ignore
         ):
             logger.error("[AI3] Failed to send final structure to MCP.")
-            await self._report_status_to_mcp(
+            await _report_status_to_mcp(
                 "error_mcp_send_failed",
                 {"details": "Failed to send structure to MCP"},
                 self.mcp_api_url,
@@ -1038,7 +1100,7 @@ coverage.xml
             # Decide if this is critical enough to stop
         else:
             logger.info("[AI3] Final structure successfully sent to MCP.")
-            await self._report_status_to_mcp(
+            await _report_status_to_mcp(
                 "structure_setup_completed",
                 {"final_structure_keys": list(structure.keys())},
                 self.mcp_api_url,
@@ -1835,9 +1897,30 @@ async def main(target: str, config_path: Optional[str] = None):
 
 
 if __name__ == "__main__":
-    # ... (argparse and main call)
-    # Example: python ai3.py "Create a retro NES-style flash game"
-    # sys.exit(asyncio.run(main(args.target, args.config)))
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="AI3 - Structure generator and system monitor"
+    )
+    parser.add_argument(
+        "--target", type=str, help="Target project description", default=None
+    )
+    parser.add_argument("--config", type=str, help="Path to config.json", default=None)
+    args = parser.parse_args()
+
+    # Get target from config if not specified via argument
+    if args.target is None:
+        try:
+            config = load_config(args.config)
+            args.target = config.get("target", "Create a modern web application")
+            logger.info(
+                f"[AI3] Target not specified, using from config: {args.target[:100]}..."
+            )
+        except Exception as e:
+            logger.error(f"[AI3] Error loading target from config: {e}")
+            logger.info("[AI3] Using default target")
+            args.target = "Create a modern web application"
+
     try:
         asyncio.run(main(args.target, args.config))
         sys.exit(0)

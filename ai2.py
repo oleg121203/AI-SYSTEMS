@@ -17,10 +17,8 @@ from config import load_config
 from providers import BaseProvider, ProviderFactory
 
 # Fix import by importing apply_request_delay from utils module directly
-from utils import (
-    apply_request_delay,  # Import apply_request_delay correctly
-    log_message,
-)
+from utils import apply_request_delay  # Import apply_request_delay correctly
+from utils import log_message
 
 # Configure logging
 logging.basicConfig(
