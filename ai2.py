@@ -1457,6 +1457,47 @@ class AI2:
         while True:
             task = await self.fetch_task()
             if task:
+                # Force task to have a role property matching our worker
+                if not task.get("role"):
+                    task["role"] = self.role
+                    logger.info(
+                        f"Added missing role '{self.role}' to task: {task.get('id')}"
+                    )
+
+                # Standardize file extensions for tests and documentation
+                if self.role == "documenter" or self.role == "tester":
+                    filename = task.get("filename")
+                    if filename:
+                        # Add proper extensions to test files that are missing them
+                        if filename.endswith(".test") and not any(
+                            filename.endswith(ext)
+                            for ext in [".js", ".ts", ".py", ".java"]
+                        ):
+                            # Infer extension based on content or project context
+                            if "react" in task.get("text", "").lower() or any(
+                                filename.startswith(p)
+                                for p in ["React", "component", "hook"]
+                            ):
+                                task["filename"] = filename + ".js"
+                            elif "python" in task.get("text", "").lower():
+                                task["filename"] = filename + ".py"
+                            else:
+                                task["filename"] = filename + ".js"  # Default to JS
+                            logger.info(
+                                f"Added proper extension to test file: {task['filename']}"
+                            )
+
+                        # If documenter is generating markdown, ensure it has .md extension
+                        if (
+                            self.role == "documenter"
+                            and "markdown" in task.get("text", "").lower()
+                            and not filename.endswith(".md")
+                        ):
+                            task["filename"] = filename.replace(".test", "") + ".md"
+                            logger.info(
+                                f"Converted documentation file to markdown: {task['filename']}"
+                            )
+
                 report = await self.process_task(task)
                 if report:
                     await self.send_report(report)
@@ -1684,35 +1725,35 @@ Use Vue Test Utils, Jest, and jest-dom for DOM assertions if needed.
         )
 
         if file_ext == ".js" or file_ext == ".jsx":
-            return f"""// Basic test template for {test_filename}
+            return f"""# Basic test template for {test_filename}
 import {{ render, screen }} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 describe('{component_name}', () => {{
   test('should render correctly', () => {{
-    // Add proper test implementation when component is available
+    # Add proper test implementation when component is available
     expect(true).toBe(true);
   }});
   
   test('should handle user interactions', () => {{
-    // Add interaction tests
+    # Add interaction tests
     expect(true).toBe(true);
   }});
 }});
 """
         elif file_ext == ".tsx":
-            return f"""// Basic TypeScript test template for {test_filename}
+            return f"""# Basic TypeScript test template for {test_filename}
 import {{ render, screen }} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 describe('{component_name}', () => {{
   test('should render correctly', () => {{
-    // Add proper test implementation when component is available
+    # Add proper test implementation when component is available
     expect(true).toBe(true);
   }});
   
   test('should handle user interactions', () => {{
-    // Add interaction tests
+    # Add interaction tests
     expect(true).toBe(true);
   }});
 }});
@@ -1731,10 +1772,10 @@ def test_{component_name}_functionality():
 """
         else:
             # Generic test for any other file type
-            return f"""// Basic test template for {test_filename}
+            return f"""# Basic test template for {test_filename}
 describe('Test {component_name}', () => {{
   test('basic functionality', () => {{
-    // Add implementation when the component is available
+    # Add implementation when the component is available
     expect(true).toBe(true);
   }});
 }});
