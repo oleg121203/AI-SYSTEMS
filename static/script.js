@@ -2504,10 +2504,34 @@ function countFilesInStructure(structure) {
 let timelineChart;
 
 function initializeTimelineChart() {
-  if (timelineChart) return;
+  const canvasElement = document.getElementById("timelineChart");
+  if (!canvasElement) {
+    console.error("[Timeline] Canvas element 'timelineChart' not found.");
+    return;
+  }
 
-  const ctx = document.getElementById("timelineChart")?.getContext("2d");
-  if (!ctx) return;
+  // Check if Chart.js knows about an instance on this canvas
+  // and destroy it if it exists, to prevent "Canvas is already in use" error.
+  const existingChartInstance = Chart.getChart(canvasElement);
+  if (existingChartInstance) {
+    console.log(
+      "[Timeline] Destroying existing chart instance on canvas 'timelineChart'."
+    );
+    existingChartInstance.destroy();
+  }
+
+  // Now that the canvas is guaranteed to be free (or was already free),
+  // we can create our new chart.
+  // The global `timelineChart` variable will store this new instance.
+
+  const ctx = canvasElement.getContext("2d");
+  if (!ctx) {
+    // Should not happen if canvasElement was found, but good practice
+    console.error(
+      "[Timeline] Failed to get 2D context from canvas 'timelineChart'."
+    );
+    return;
+  }
 
   const baseOptions = getBaseChartOptions();
 
@@ -2574,6 +2598,7 @@ function initializeTimelineChart() {
       },
     },
   });
+  console.log("[Timeline] New timeline chart initialized successfully.");
 }
 
 function updateTimelineChart(data) {
