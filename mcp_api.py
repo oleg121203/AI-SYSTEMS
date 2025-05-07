@@ -3255,13 +3255,13 @@ async def get_component_fallbacks(component: str = None):
         # Parse component to get AI and role
         parts = component.split("-")
         ai = parts[0]
-        
+
         # Handle AI2 with specific role
         role = parts[1] if len(parts) > 1 else None
-        
+
         # Import provider functions
         from providers import get_component_fallbacks as get_fallbacks
-        
+
         # Get fallbacks
         fallbacks = get_fallbacks(ai, role)
         return {"fallbacks": fallbacks}
@@ -3453,3 +3453,97 @@ def update_ai_provider_config(config, ai, provider_data, role=None):
         config["ai2_providers"][role] = provider_config
     elif ai == "ai3":
         config["ai3_provider"] = provider_config
+
+
+@app.post("/update_providers")
+async def update_providers(data: dict):
+    """Update provider configuration for all AI components."""
+    try:
+        if not data:
+            return {"status": "error", "message": "No data provided"}, 400
+
+        # Load current configuration
+        config_data = config  # Use the global config
+
+        # Update AI1 provider if included
+        if "ai1" in data:
+            provider_data = data["ai1"]
+            provider_type = provider_data.get("provider", "openai")
+            model = provider_data.get("model", "")
+            fallbacks = provider_data.get("fallbacks", [])
+
+            if "ai_config" not in config_data:
+                config_data["ai_config"] = {}
+            if "ai1" not in config_data["ai_config"]:
+                config_data["ai_config"]["ai1"] = {}
+
+            config_data["ai_config"]["ai1"]["provider"] = provider_type
+            config_data["ai_config"]["ai1"]["model"] = model
+
+            # Handle fallbacks if provided
+            if fallbacks:
+                config_data["ai_config"]["ai1"]["fallbacks"] = fallbacks
+
+        # Update AI2 providers if included
+        if "ai2" in data:
+            ai2_data = data["ai2"]
+            for role in ["executor", "tester", "documenter"]:
+                if role in ai2_data:
+                    provider_data = ai2_data[role]
+                    provider_type = provider_data.get("provider", "openai")
+                    model = provider_data.get("model", "")
+                    fallbacks = provider_data.get("fallbacks", [])
+
+                    if "ai_config" not in config_data:
+                        config_data["ai_config"] = {}
+                    if "ai2" not in config_data["ai_config"]:
+                        config_data["ai_config"]["ai2"] = {}
+                    if role not in config_data["ai_config"]["ai2"]:
+                        config_data["ai_config"]["ai2"][role] = {}
+
+                    config_data["ai_config"]["ai2"][role]["provider"] = provider_type
+                    config_data["ai_config"]["ai2"][role]["model"] = model
+
+                    # Handle fallbacks if provided
+                    if fallbacks:
+                        config_data["ai_config"]["ai2"][role]["fallbacks"] = fallbacks
+
+        # Update AI3 provider if included
+        if "ai3" in data:
+            provider_data = data["ai3"]
+            provider_type = provider_data.get("provider", "openai")
+            model = provider_data.get("model", "")
+            fallbacks = provider_data.get("fallbacks", [])
+
+            if "ai_config" not in config_data:
+                config_data["ai_config"] = {}
+            if "ai3" not in config_data["ai_config"]:
+                config_data["ai_config"]["ai3"] = {}
+
+            config_data["ai_config"]["ai3"]["provider"] = provider_type
+            config_data["ai_config"]["ai3"]["model"] = model
+
+            # Handle fallbacks if provided
+            if fallbacks:
+                config_data["ai_config"]["ai3"]["fallbacks"] = fallbacks
+
+        # Save the updated configuration
+        try:
+            with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+                json.dump(config_data, f, indent=4)
+            logger.info("Provider configuration updated successfully")
+        except Exception as e:
+            logger.error(f"Failed to save configuration: {e}")
+            return {
+                "status": "error",
+                "message": f"Failed to save configuration: {e}",
+            }, 500
+
+        # Return success
+        return {
+            "status": "success",
+            "message": "Provider configuration updated successfully",
+        }
+    except Exception as e:
+        logger.error(f"Error updating providers: {e}")
+        return {"status": "error", "message": f"Error updating providers: {e}"}, 500
