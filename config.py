@@ -87,32 +87,280 @@ _actual_log_level = getattr(logging, _log_level_str, logging.INFO)
 logging.basicConfig(level=_actual_log_level, format=_log_format_str)
 logger = logging.getLogger(__name__)
 
+# Global cache for config to avoid repeated disk reads
+_config_cache = None
+_config_file_path = "config.json"
+_config_last_mtime = 0
+
+# System load level constants
+LOAD_LEVEL_MINIMAL = 1
+LOAD_LEVEL_LOW = 2
+LOAD_LEVEL_MEDIUM = 3
+LOAD_LEVEL_HIGH = 4
+LOAD_LEVEL_MAXIMUM = 5
+
+# Default delay values by load level (in seconds)
+DELAY_BY_LOAD_LEVEL = {
+    LOAD_LEVEL_MINIMAL: {
+        "ai1": {"min": 1.0, "max": 2.0},
+        "ai2_executor": {"min": 2.0, "max": 4.0},
+        "ai2_tester": {"min": 2.0, "max": 4.0},
+        "ai2_documenter": {"min": 2.0, "max": 4.0},
+        "ai3": {"min": 2.0, "max": 4.0},
+    },
+    LOAD_LEVEL_LOW: {
+        "ai1": {"min": 0.5, "max": 1.0},
+        "ai2_executor": {"min": 1.0, "max": 2.0},
+        "ai2_tester": {"min": 1.0, "max": 2.0},
+        "ai2_documenter": {"min": 1.0, "max": 2.0},
+        "ai3": {"min": 1.0, "max": 2.0},
+    },
+    LOAD_LEVEL_MEDIUM: {
+        "ai1": {"min": 0.3, "max": 0.7},
+        "ai2_executor": {"min": 0.7, "max": 1.5},
+        "ai2_tester": {"min": 0.7, "max": 1.5},
+        "ai2_documenter": {"min": 0.7, "max": 1.5},
+        "ai3": {"min": 0.7, "max": 1.5},
+    },
+    LOAD_LEVEL_HIGH: {
+        "ai1": {"min": 0.2, "max": 0.5},
+        "ai2_executor": {"min": 0.5, "max": 1.0},
+        "ai2_tester": {"min": 0.5, "max": 1.0},
+        "ai2_documenter": {"min": 0.5, "max": 1.0},
+        "ai3": {"min": 0.5, "max": 1.0},
+    },
+    LOAD_LEVEL_MAXIMUM: {
+        "ai1": {"min": 0.1, "max": 0.3},
+        "ai2_executor": {"min": 0.3, "max": 0.7},
+        "ai2_tester": {"min": 0.3, "max": 0.7},
+        "ai2_documenter": {"min": 0.3, "max": 0.7},
+        "ai3": {"min": 0.3, "max": 0.7},
+    },
+}
+
+
+def detect_load_level(config: Dict[str, Any]) -> int:
+    """
+    Detects the current system load level based on buffer settings.
+
+    Args:
+        config: The loaded configuration dictionary
+
+    Returns:
+        int: Load level value (1-5)
+    """
+    buffer_size = config.get("ai1_desired_active_buffer", 10)
+
+    # Map buffer size to load level
+    if buffer_size <= 5:
+        return LOAD_LEVEL_MINIMAL
+    elif buffer_size <= 10:
+        return LOAD_LEVEL_LOW
+    elif buffer_size <= 15:
+        return LOAD_LEVEL_MEDIUM
+    elif buffer_size <= 20:
+        return LOAD_LEVEL_HIGH
+    else:
+        return LOAD_LEVEL_MAXIMUM
+
+
+def adjust_delays_for_load_level(config: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Adjusts the request delay settings based on the detected load level.
+
+    Args:
+        config: The loaded configuration dictionary
+
+    Returns:
+        Dict: Updated configuration with adjusted delay settings
+    """
+    load_level = detect_load_level(config)
+
+    # Get delay settings for detected load level
+    delay_settings = DELAY_BY_LOAD_LEVEL.get(
+        load_level, DELAY_BY_LOAD_LEVEL[LOAD_LEVEL_MEDIUM]
+    )
+
+    # If config doesn't have request_delays section, add it
+    if "request_delays" not in config:
+        config["request_delays"] = {}
+
+    # Override basic settings but preserve any custom settings
+    for component, delays in delay_settings.items():
+        if component == "ai1":
+            if "ai1" not in config["request_delays"]:
+                config["request_delays"]["ai1"] = {}
+            config["request_delays"]["ai1"]["min"] = delays["min"]
+            config["request_delays"]["ai1"]["max"] = delays["max"]
+        elif component == "ai3":
+            if "ai3" not in config["request_delays"]:
+                config["request_delays"]["ai3"] = {}
+            config["request_delays"]["ai3"]["min"] = delays["min"]
+            config["request_delays"]["ai3"]["max"] = delays["max"]
+        elif component.startswith("ai2_"):
+            role = component.split("_")[
+                1
+            ]  # Extract 'executor', 'tester', or 'documenter'
+            if "ai2" not in config["request_delays"]:
+                config["request_delays"]["ai2"] = {}
+            if role not in config["request_delays"]["ai2"]:
+                config["request_delays"]["ai2"][role] = {}
+            config["request_delays"]["ai2"][role]["min"] = delays["min"]
+            config["request_delays"]["ai2"][role]["max"] = delays["max"]
+
+    # Set the detected load level
+    config["system_load_level"] = load_level
+
+    logger.info(
+        f"System configured for load level {load_level} ({_get_load_level_name(load_level)})"
+    )
+    return config
+
+
+def _get_load_level_name(level: int) -> str:
+    """
+    Returns the name of the load level.
+
+    Args:
+        level: Load level (1-5)
+
+    Returns:
+        str: Name of the load level
+    """
+    level_names = {
+        LOAD_LEVEL_MINIMAL: "Minimal",
+        LOAD_LEVEL_LOW: "Low",
+        LOAD_LEVEL_MEDIUM: "Medium",
+        LOAD_LEVEL_HIGH: "High",
+        LOAD_LEVEL_MAXIMUM: "Maximum",
+    }
+    return level_names.get(level, "Unknown")
+
 
 def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
     """
-    Загрузка конфигурации из файла.
+    Loads the configuration from the specified path or the default path.
+    Handles environment variable substitution and caches results for performance.
 
     Args:
-        config_path: Путь к файлу конфигурации. Если None, используется путь по умолчанию.
+        config_path: Optional path to the config file
 
     Returns:
-        Dict[str, Any]: Словарь с конфигурацией
+        Dict: The loaded and processed configuration
     """
-    if not config_path:
-        config_path = DEFAULT_CONFIG_PATH
+    global _config_cache, _config_file_path, _config_last_mtime
+
+    file_path = config_path or _config_file_path
 
     try:
-        if os.path.exists(config_path):
-            with open(config_path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        else:
-            logger.warning(
-                f"Файл конфигурации {config_path} не найден. Используем конфигурацию по умолчанию."
-            )
-            return create_default_config(config_path)
+        # Check if file has been modified since last read
+        current_mtime = os.path.getmtime(file_path)
+
+        # Use cached config if the file hasn't changed
+        if _config_cache is not None and current_mtime <= _config_last_mtime:
+            return _config_cache
+
+        # Read and parse the config file
+        with open(file_path, "r", encoding="utf-8") as f:
+            config_str = f.read()
+
+        # Replace environment variables
+        for key, value in os.environ.items():
+            config_str = config_str.replace(f"${{{key}}}", value)
+
+        # Parse JSON
+        config = json.loads(config_str)
+
+        # Add load level detection and dynamic delay adjustment
+        config = adjust_delays_for_load_level(config)
+
+        # Update cache
+        _config_cache = config
+        _config_last_mtime = current_mtime
+
+        return config
     except Exception as e:
-        logger.error(f"Ошибка при загрузке конфигурации: {e}")
-        return create_default_config()
+        logger.error(f"Failed to load config from {file_path}: {e}")
+        # Return empty dict or a minimal default config
+        return {"web_port": 7860}
+
+
+def save_config(config: Dict[str, Any], config_path: Optional[str] = None) -> bool:
+    """
+    Saves the configuration to the specified path or the default path.
+
+    Args:
+        config: The configuration to save
+        config_path: Optional path to the config file
+
+    Returns:
+        bool: True if the config was saved successfully, False otherwise
+    """
+    global _config_cache, _config_file_path, _config_last_mtime
+
+    file_path = config_path or _config_file_path
+
+    try:
+        # Make a backup of the current config file
+        if os.path.exists(file_path):
+            backup_path = f"{file_path}.bak"
+            with open(file_path, "r", encoding="utf-8") as src:
+                with open(backup_path, "w", encoding="utf-8") as dst:
+                    dst.write(src.read())
+
+        # Write the updated config
+        with open(file_path, "w", encoding="utf-8") as f:
+            json.dump(config, f, indent=4, ensure_ascii=False)
+
+        # Update cache
+        _config_cache = config
+        _config_last_mtime = os.path.getmtime(file_path)
+
+        logger.info(f"Config saved to {file_path}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to save config to {file_path}: {e}")
+        return False
+
+
+def update_config_item(key: str, value: Any, config_path: Optional[str] = None) -> bool:
+    """
+    Updates a single item in the configuration and saves it.
+
+    Args:
+        key: The key to update
+        value: The new value
+        config_path: Optional path to the config file
+
+    Returns:
+        bool: True if the config was updated successfully, False otherwise
+    """
+    config = load_config(config_path)
+    config[key] = value
+
+    # If changing load-affecting settings, adjust delays
+    if key in ["ai1_desired_active_buffer", "desired_active_buffer"]:
+        config = adjust_delays_for_load_level(config)
+
+    return save_config(config, config_path)
+
+
+def get_config_item(
+    key: str, default: Any = None, config_path: Optional[str] = None
+) -> Any:
+    """
+    Gets a single item from the configuration.
+
+    Args:
+        key: The key to get
+        default: The default value to return if the key is not found
+        config_path: Optional path to the config file
+
+    Returns:
+        Any: The value of the key or the default value
+    """
+    config = load_config(config_path)
+    return config.get(key, default)
 
 
 def create_default_config(save_path: Optional[str] = None) -> Dict[str, Any]:
@@ -186,30 +434,6 @@ def create_default_config(save_path: Optional[str] = None) -> Dict[str, Any]:
             logger.error(f"Ошибка при сохранении конфигурации: {e}")
 
     return default_config
-
-
-def save_config(config: Dict[str, Any], config_path: Optional[str] = None) -> bool:
-    """
-    Сохранение конфигурации в файл.
-
-    Args:
-        config: Словарь с конфигурацией
-        config_path: Путь к файлу конфигурации. Если None, используется путь по умолчанию.
-
-    Returns:
-        bool: True если конфигурация сохранена успешно, иначе False
-    """
-    if not config_path:
-        config_path = DEFAULT_CONFIG_PATH
-
-    try:
-        with open(config_path, "w", encoding="utf-8") as f:
-            json.dump(config, f, indent=2, ensure_ascii=False)
-        logger.info(f"Конфигурация сохранена в {config_path}")
-        return True
-    except Exception as e:
-        logger.error(f"Ошибка при сохранении конфигурации: {e}")
-        return False
 
 
 def update_config(

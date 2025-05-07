@@ -41,6 +41,11 @@ if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
     exit 1
 fi
 
+# Start the system load monitor
+echo "Starting System Load Monitor..."
+./run_load_monitor.sh
+echo "System Load Monitor has been started in background"
+
 # Запуск AI1
 echo "Starting AI1 service..."
 python3 ai1.py >logs/ai1.log 2>&1 &
@@ -76,3 +81,8 @@ echo "AI3 has been started in background with PID $AI3_PID"
 
 echo "All services have been started!"
 echo "Check logs directory for detailed logs and PID files."
+
+# Print system load level info
+LOAD_LEVEL=$(python3 -c "import config; cfg = config.load_config(); print(f\"System load level: {config.detect_load_level(cfg)} ({config._get_load_level_name(config.detect_load_level(cfg))})\")")
+echo $LOAD_LEVEL
+echo "To adjust load level, change ai1_desired_active_buffer in config.json (5=Minimal, 10=Low, 15=Medium, 20=High, 25=Maximum)"
