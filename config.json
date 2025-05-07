@@ -59,7 +59,7 @@
     "ai_config": {
         "ai1": {
             "providers": [],
-            "model": "mistral",
+            "model": "qwen2.5:latest",
             "max_tokens": 2048,
             "temperature": 0.7,
             "provider": "ollama"
@@ -80,7 +80,7 @@
                 "codestral2",
                 "gemini"
             ],
-            "model": "llama3",
+            "model": "llama3.2:latest",
             "max_tokens": 2048,
             "temperature": 0.7
         }
@@ -275,26 +275,26 @@
     },
     "request_delays": {
         "ai1": {
-            "min": 1.5,
-            "max": 3.0
+            "min": 1.0,
+            "max": 2.0
         },
         "ai2": {
             "executor": {
-                "min": 2.5,
-                "max": 5.0
+                "min": 1.5,
+                "max": 3.0
             },
             "tester": {
-                "min": 2.5,
-                "max": 5.0
+                "min": 1.5,
+                "max": 3.0
             },
             "documenter": {
-                "min": 2.5,
-                "max": 5.0
+                "min": 1.5,
+                "max": 3.0
             }
         },
         "ai3": {
-            "min": 2.5,
-            "max": 5.0
+            "min": 1.5,
+            "max": 3.0
         }
     },
     "error_handling": {
@@ -309,5 +309,5 @@
     "ai1_idle_sleep_interval": 10,
     "github_repo": "oleg121203/AI-SYSTEMS-REPO",
     "github_actions_check_interval": 60,
-    "system_load_level": 1
+    "system_load_level": 2
 }

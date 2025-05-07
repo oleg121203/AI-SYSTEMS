@@ -1,9 +1,10 @@
-from abc import ABC, abstractmethod
 import asyncio
 import logging
 import os
-from typing import Any, Dict, List, Optional, Tuple, Union
-from typing import Type as TypingType # Keep for now, though seems unused
+from abc import ABC, abstractmethod
+from typing import Any, Dict, List, Optional, Tuple
+from typing import Type as TypingType  # Keep for now, though seems unused
+from typing import Union
 
 from dotenv import load_dotenv
 
@@ -53,17 +54,21 @@ except ImportError:
     ollama = None
 
 Together = None
-TogetherError = None # Custom error for Together
+TogetherError = None  # Custom error for Together
 try:
     from together import Together
 
-    class TogetherCustomError(Exception): # Renamed to avoid conflict if 'TogetherError' exists in SDK
+    class TogetherCustomError(
+        Exception
+    ):  # Renamed to avoid conflict if 'TogetherError' exists in SDK
         """Custom error class for Together AI API errors"""
+
         def __init__(self, message, status_code=None):
             self.message = message
             self.status_code = status_code
             super().__init__(self.message)
-    TogetherError = TogetherCustomError # Assign custom error
+
+    TogetherError = TogetherCustomError  # Assign custom error
 except ImportError:
     # Together SDK not found, Together remains None
     pass
@@ -71,29 +76,47 @@ except ImportError:
 # Initialize logger (MUST be done after importing logging module)
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", # Corrected typo: levellevelname -> levelname
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",  # Corrected typo: levellevelname -> levelname
 )
 logger = logging.getLogger(__name__)
 
 # Log warnings for missing optional dependencies (NOW that logger is defined)
 if aiohttp is None:
-    logger.warning("Module 'aiohttp' is not installed. Some providers might not work. Install it with: pip install aiohttp")
+    logger.warning(
+        "Module 'aiohttp' is not installed. Some providers might not work. Install it with: pip install aiohttp"
+    )
 if httpx is None:
-    logger.warning("Module 'httpx' is not installed. Some providers might not work. Install it with: pip install httpx")
+    logger.warning(
+        "Module 'httpx' is not installed. Some providers might not work. Install it with: pip install httpx"
+    )
 if openai is None:
-    logger.warning("Module 'openai' is not installed. OpenAIProvider will not work. Install it with: pip install openai")
+    logger.warning(
+        "Module 'openai' is not installed. OpenAIProvider will not work. Install it with: pip install openai"
+    )
 if anthropic is None:
-    logger.warning("Module 'anthropic' is not installed. AnthropicProvider will not work. Install it with: pip install anthropic")
+    logger.warning(
+        "Module 'anthropic' is not installed. AnthropicProvider will not work. Install it with: pip install anthropic"
+    )
 if genai is None:
-    logger.warning("Module 'google-generativeai' is not installed. GeminiProvider will not work. Install it with: pip install google-generativeai")
+    logger.warning(
+        "Module 'google-generativeai' is not installed. GeminiProvider will not work. Install it with: pip install google-generativeai"
+    )
 if cohere is None:
-    logger.warning("Module 'cohere' is not installed. CohereProvider will not work. Install it with: pip install cohere")
-if groq is None or AsyncGroq is None: # Check both groq and AsyncGroq
-    logger.warning("Module 'groq' is not installed. GroqProvider will not work. Install it with: pip install groq")
+    logger.warning(
+        "Module 'cohere' is not installed. CohereProvider will not work. Install it with: pip install cohere"
+    )
+if groq is None or AsyncGroq is None:  # Check both groq and AsyncGroq
+    logger.warning(
+        "Module 'groq' is not installed. GroqProvider will not work. Install it with: pip install groq"
+    )
 if ollama is None:
-    logger.warning("Module 'ollama' is not installed. OllamaProvider might fall back to REST or fail. Install it with: pip install ollama")
+    logger.warning(
+        "Module 'ollama' is not installed. OllamaProvider might fall back to REST or fail. Install it with: pip install ollama"
+    )
 if Together is None:
-    logger.warning("Module 'together' is not installed. TogetherProvider will not work. Install it with: pip install together")
+    logger.warning(
+        "Module 'together' is not installed. TogetherProvider will not work. Install it with: pip install together"
+    )
 
 
 load_dotenv()
@@ -102,10 +125,14 @@ load_dotenv()
 try:
     from config import load_config
 except ImportError:
-    logger.error("CRITICAL: Failed to import load_config from config.py. ProviderFactory will not work correctly.")
-    def load_config(): # Fallback stub
+    logger.error(
+        "CRITICAL: Failed to import load_config from config.py. ProviderFactory will not work correctly."
+    )
+
+    def load_config():  # Fallback stub
         logger.error("CRITICAL: load_config stub called because import failed.")
         return {}
+
 
 # Cache for storing available providers list
 _available_providers_cache = None
@@ -1228,48 +1255,51 @@ class OllamaProvider(BaseProvider):
         # Removed finally block: session closing handled by __aexit__
 
     async def get_available_models(self) -> List[str]:
-        default_models = ["llama3", "mistral"]  # Provide some defaults
+        hardcoded_models = [
+            "qwen2.5:latest",
+            "qwen2.5:1.5b",
+            "qwen3:1.7b",
+            "qwen3:latest",
+            "hhao/qwen2.5-coder-tools:14b",
+            "deepseek-coder-v2:latest",
+            "gemma3:27b",
+            "qwen2.5-coder:14b",
+            "Llama2:7b",
+            "qllama/bge-reranker-v2-m3:latest",
+            "qwen2.5-coder:1.5b",
+            "mistral:latest",
+            "llama3.2:latest",
+            "qwen2.5:14b-instruct",
+            "gemma2:latest",
+            "dolphin-mixtral:latest",
+            "Llama2:chat",
+            "qwen2.5-coder:32b",
+            "llama3.3:70b-instruct-q2_K",
+            "tulu3:latest",
+            "nomic-embed-text:latest",
+            "Llama2:13B",
+            "deepseek-r1:32b",
+            "deepseek-r1:14b",
+        ]
+
         try:
             if self.use_sdk and self._client:
-                response = await self._client.list()
-                if response and isinstance(response, dict) and "models" in response:
-                    return [
-                        model.get("name")
-                        for model in response["models"]
-                        if model.get("name")
-                    ]
-                else:
-                    logger.warning(
-                        f"Ollama SDK list response format unexpected: {response}"
-                    )
-                    return default_models
+                models = await self._client.list()
+                if models:
+                    return [model.name for model in models]
             else:
-                # REST API
-                if aiohttp is None: # Check if aiohttp was imported
-                    logger.error("aiohttp is not available for Ollama REST API call.")
-                    return default_models
-                session = await self.get_client_session()
-                api_url = f"{self.endpoint}/api/tags"
-                async with session.get(api_url) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        return [
-                            model.get("name")
-                            for model in data.get("models", [])
-                            if model.get("name")
-                        ]
-                    else:
-                        logger.error(
-                            f"Ошибка при получении списка моделей Ollama ({response.status}): {await response.text()}"
-                        )
-                        return default_models
+                # Try REST API
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(f"{self.endpoint}/api/tags") as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            models = [model["name"] for model in data["models"]]
+                            return models
         except Exception as e:
-            logger.error(
-                f"Ошибка при получении списка доступных моделей Ollama ({self.name}): {e}",
-                exc_info=True,
-            )
-            # Fallback to default model from BaseProvider if specific listing fails
-            return await super().get_available_models() # ADDED await here
+            logger.error(f"Failed to fetch Ollama models: {e}")
+
+        # Return hardcoded models if API calls fail
+        return hardcoded_models
 
 
 class OpenRouterProvider(BaseProvider):
@@ -2062,7 +2092,7 @@ class Gemini3Provider(BaseProvider):
         content = {"parts": [{"text": prompt}]}
 
         # Додаємо системний промпт, якщо він є
-        if (system_prompt):
+        if system_prompt:
             payload = {
                 "contents": [{"parts": [{"text": system_prompt}]}, content],
                 "generationConfig": {
@@ -2174,7 +2204,7 @@ class Gemini4Provider(BaseProvider):
         content = {"parts": [{"text": prompt}]}
 
         # Додаємо системний промпт, якщо він є
-        if (system_prompt):
+        if system_prompt:
             payload = {
                 "contents": [{"parts": [{"text": system_prompt}]}, content],
                 "generationConfig": {
