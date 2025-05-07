@@ -168,6 +168,7 @@ function routeMessageByType(data) {
 
       // Update charts with available data
       updateCharts(data);
+      updateProjectSummary(data); // Call to update project header
       break;
 
     default:
@@ -229,6 +230,7 @@ function handleSubtaskUpdate(subtasksData) {
   updateCharts({
     task_status_distribution: calculateStatusDistribution(subtask_status),
   });
+  updateProjectSummary({ subtasks: subtasksData }); // Call to update project header
 }
 
 function handleQueueOnlyUpdate(queuesData) {
@@ -289,6 +291,7 @@ function handleSpecificUpdate(data) {
     if (data.log_line) {
       handleLogUpdate(data.log_line);
     }
+    updateProjectSummary(data); // Call to update project header
   }
 }
 
@@ -468,7 +471,7 @@ function updateStats(current_subtask_statuses, current_queues_data) {
   );
 
   if (statElements.total) statElements.total.textContent = total; // Update total tasks display
-  if (statElements.completed) statElements.completed.textContent = completed;
+  // if (statElements.completed) statElements.completed.textContent = completed; // DO NOT UPDATE COMPLETED
   if (statElements.efficiency)
     statElements.efficiency.textContent = `${efficiency}%`;
 }
@@ -2266,23 +2269,35 @@ function updateProjectSummary(data) {
   // Update project name and description
   const projectName = document.getElementById("project-name");
   const projectDescription = document.getElementById("project-description");
-  const filesCount = document.getElementById("project-files-count");
-  const projectProgress = document.getElementById("project-progress");
-  const projectStatusLabel = document.getElementById("project-status-label");
-  const lastActivity = document.getElementById("project-last-activity");
+  // const filesCount = document.getElementById("project-files-count"); // For logging if needed, not for dynamic update
+  // const projectProgress = document.getElementById("project-progress"); // This ID is removed from HTML structure
+  // const projectStatusLabel = document.getElementById("project-status-label"); // This ID is removed from HTML structure
+  // const lastActivity = document.getElementById("project-last-activity"); // For logging if needed, not for dynamic update
+
+  // New elements for header stats
+  const projectHeaderTotalTasksEl = document.getElementById(
+    "project-header-total-tasks"
+  );
+  const projectHeaderCompletedTasksEl = document.getElementById(
+    "project-header-completed-tasks"
+  );
+  const projectHeaderStatusEfficiencyEl = document.getElementById(
+    "project-header-status-efficiency"
+  );
 
   if (
     !projectName ||
     !projectDescription ||
-    !filesCount ||
-    !projectProgress ||
-    !projectStatusLabel ||
-    !lastActivity
+    !projectHeaderTotalTasksEl || // Check new elements
+    !projectHeaderCompletedTasksEl ||
+    !projectHeaderStatusEfficiencyEl
+    // !filesCount || // Not critical if only logged
+    // !lastActivity // Not critical if only logged
   ) {
     console.error(
       "[ProjectSummary] One or more summary elements not found in DOM"
     );
-    return;
+    // return; // Allow partial update if some elements are missing but core ones are present
   }
 
   // Set default project name if we can't extract it
@@ -2321,96 +2336,142 @@ function updateProjectSummary(data) {
     }
   }
 
-  // Update DOM elements
-  projectName.textContent = name;
-  projectDescription.textContent = description;
+  // Update DOM elements for name and description
+  if (projectName) projectName.textContent = name;
+  if (projectDescription) projectDescription.textContent = description;
 
-  // Update files count
+  // --- Logic for Total, Completed, Efficiency for Header ---
+  let headerTotalTasks = actualTotalTasks; // Always use the global actualTotalTasks for total
+
+  let headerCompletedTasksValue;
+
+  if (data.type === "full_status_update") {
+    // For full update, recalculate from all subtasks
+    const relevantSubtasks = data.subtasks || subtask_status;
+    headerCompletedTasksValue = Object.values(relevantSubtasks).filter(
+      (status) =>
+        status === "accepted" ||
+        status === "completed" ||
+        status === "code_received" ||
+        status === "tested" ||
+        status === "documented" ||
+        status === "skipped"
+    ).length;
+    if (projectHeaderCompletedTasksEl)
+      projectHeaderCompletedTasksEl.textContent = headerCompletedTasksValue;
+  } else if (
+    data.type === "monitoring_update" &&
+    data.completed_tasks !== undefined
+  ) {
+    // For monitoring update, use its completed_tasks field directly for the header
+    headerCompletedTasksValue = data.completed_tasks;
+    if (projectHeaderCompletedTasksEl)
+      projectHeaderCompletedTasksEl.textContent = headerCompletedTasksValue;
+  } else {
+    // For other partial updates (e.g., specific_update, subtask_only_update from non-monitoring sources),
+    // DO NOT update the header's completed tasks count directly from subtasks.
+    // It will retain its last value set by full_status or monitoring_update.
+    // We still need a value for efficiency calculation, so read current text content.
+    if (projectHeaderCompletedTasksEl) {
+      headerCompletedTasksValue = parseInt(
+        projectHeaderCompletedTasksEl.textContent,
+        10
+      );
+      if (isNaN(headerCompletedTasksValue)) {
+        // Fallback if textContent is not a number (e.g., initial '-')
+        // For the very first load or if the value is not a number, calculate from global status as a baseline
+        const relevantGlobalSubtasks = subtask_status;
+        headerCompletedTasksValue = Object.values(
+          relevantGlobalSubtasks
+        ).filter(
+          (status) =>
+            status === "accepted" ||
+            status === "completed" ||
+            status === "code_received" ||
+            status === "tested" ||
+            status === "documented" ||
+            status === "skipped"
+        ).length;
+        // Optionally set the text content here if it was '-' to avoid NaN in subsequent reads before a proper update
+        if (projectHeaderCompletedTasksEl.textContent === "-") {
+          projectHeaderCompletedTasksEl.textContent = headerCompletedTasksValue;
+        }
+      }
+    } else {
+      // Fallback if element doesn't exist yet (should not happen after DOMContentLoaded)
+      const relevantGlobalSubtasks = subtask_status;
+      headerCompletedTasksValue = Object.values(relevantGlobalSubtasks).filter(
+        (status) =>
+          status === "accepted" ||
+          status === "completed" ||
+          status === "code_received" ||
+          status === "tested" ||
+          status === "documented" ||
+          status === "skipped"
+      ).length;
+    }
+  }
+
+  // Update Total Tasks in header (always reflects actualTotalTasks)
+  if (projectHeaderTotalTasksEl)
+    projectHeaderTotalTasksEl.textContent = headerTotalTasks;
+
+  // Calculate and Update Efficiency in header
+  let headerEfficiency = 0;
+  // Ensure headerCompletedTasksValue is a number before division
+  const numericCompletedTasks = Number(headerCompletedTasksValue);
+  if (headerTotalTasks > 0 && !isNaN(numericCompletedTasks)) {
+    headerEfficiency = (numericCompletedTasks / headerTotalTasks) * 100;
+  }
+
+  if (projectHeaderStatusEfficiencyEl) {
+    if (
+      headerEfficiency >= 100 &&
+      headerTotalTasks > 0 &&
+      numericCompletedTasks >= headerTotalTasks
+    ) {
+      // Ensure completed is also >= total for 100%
+      projectHeaderStatusEfficiencyEl.textContent = "COMPLETE";
+      projectHeaderStatusEfficiencyEl.classList.add("complete");
+    } else {
+      projectHeaderStatusEfficiencyEl.textContent = `${headerEfficiency.toFixed(
+        1
+      )}%`;
+      projectHeaderStatusEfficiencyEl.classList.remove("complete");
+    }
+  }
+
+  // Update files count (commented out as per previous request for no dynamic update)
   let fileCount = 0;
   if (data.structure) {
     fileCount = countFilesInStructure(data.structure);
-    filesCount.textContent = fileCount;
+    // filesCount.textContent = fileCount; // DO NOT UPDATE FILES COUNT
   }
 
-  // Update progress percentage
-  let progressPercent = 0;
-  if (data.task_status_distribution) {
-    const total = Object.values(data.task_status_distribution).reduce(
-      (sum, count) => sum + count,
-      0
-    );
-    const completed = data.task_status_distribution.completed || 0;
+  // Old progress percentage logic (now handled by headerEfficiency)
+  // let progressPercent = 0; ...
+  // if (projectProgress) { ... } // DO NOT UPDATE (element removed)
+  // Old status label logic (now handled by projectHeaderStatusEfficiencyEl)
+  // if (progressPercent >= 100) { ... } // DO NOT UPDATE (element removed)
 
-    if (total > 0) {
-      progressPercent = Math.round((completed / total) * 100);
-    }
-  } else if (data.actual_total_tasks && data.actual_total_tasks > 0) {
-    const completedTasks = parseInt(
-      document.getElementById("completed-tasks")?.textContent || "0"
-    );
-    progressPercent = Math.round(
-      (completedTasks / data.actual_total_tasks) * 100
-    );
-  }
-
-  // Update progress percentage in the UI
-  projectProgress.textContent = `${progressPercent}%`;
-
-  // Update the status label based on progress percentage
-  if (progressPercent >= 100) {
-    projectStatusLabel.textContent = "COMPLETE";
-    projectStatusLabel.style.color = "var(--success-color)";
-    projectStatusLabel.style.fontWeight = "bold";
-  } else if (progressPercent >= 75) {
-    projectStatusLabel.textContent = "Almost Complete";
-    projectStatusLabel.style.color = "";
-    projectStatusLabel.style.fontWeight = "";
-  } else if (progressPercent >= 50) {
-    projectStatusLabel.textContent = "Halfway";
-    projectStatusLabel.style.color = "";
-    projectStatusLabel.style.fontWeight = "";
-  } else if (progressPercent >= 25) {
-    projectStatusLabel.textContent = "In Progress";
-    projectStatusLabel.style.color = "";
-    projectStatusLabel.style.fontWeight = "";
-  } else {
-    projectStatusLabel.textContent = "Starting";
-    projectStatusLabel.style.color = "";
-    projectStatusLabel.style.fontWeight = "";
-  }
-
-  // Update last activity time
-  const now = new Date();
-  if (data.last_activity_time) {
-    try {
-      const activityTime = new Date(data.last_activity_time);
-      lastActivity.textContent = activityTime.toLocaleTimeString([], {
-        hour: "2-digit",
-        minute: "2-digit",
-      });
-    } catch (e) {
-      console.error("[ProjectSummary] Error parsing timestamp:", e);
-      lastActivity.textContent = now.toLocaleTimeString([], {
-        hour: "2-digit",
-        minute: "2-digit",
-      });
-    }
-  } else {
-    lastActivity.textContent = now.toLocaleTimeString([], {
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  }
+  // Update last activity time (commented out as per previous request for no dynamic update)
+  // if (data.last_activity_time) { ... }
 
   console.log(
     "[ProjectSummary] Updated with name:",
     name,
-    "files:",
-    fileCount,
-    "progress:",
-    progressPercent + "%",
-    "status:",
-    projectStatusLabel.textContent
+    "description:",
+    description,
+    "files (static):",
+    document.getElementById("project-files-count")?.textContent || "-",
+    "headerTotal:",
+    headerTotalTasks,
+    "headerCompleted:",
+    projectHeaderCompletedTasksEl?.textContent || headerCompletedTasksValue, // Log what's displayed or calculated
+    "headerStatus/Efficiency:",
+    projectHeaderStatusEfficiencyEl?.textContent || "-",
+    "lastActivity (static):",
+    document.getElementById("project-last-activity")?.textContent || "-"
   );
 }
 
@@ -2453,7 +2514,7 @@ function initializeTimelineChart() {
   timelineChart = new Chart(ctx, {
     type: "line",
     data: {
-      labels: [], // Time labels
+      // labels: [], // Labels array is not primarily used for x-axis in time series
       datasets: [
         {
           label: "Created Files",
@@ -2493,9 +2554,17 @@ function initializeTimelineChart() {
         },
       },
       scales: {
-        ...baseOptions.scales,
+        ...baseOptions.scales, // Inherits y-axis settings from base
         x: {
-          ...baseOptions.scales.x,
+          ...baseOptions.scales.x, // Inherits grid/tick color from base
+          type: "time",
+          time: {
+            unit: "minute",
+            displayFormats: {
+              minute: "HH:mm", // e.g., 14:30
+            },
+            tooltipFormat: "MMM d, HH:mm", // e.g., May 7, 14:30
+          },
           title: {
             display: true,
             text: "Time",
@@ -2518,114 +2587,77 @@ function updateTimelineChart(data) {
 
   console.log("[Timeline] Updating timeline chart with data:", data);
 
+  const MAX_POINTS = 60; // Show up to 60 data points (e.g., 1 hour if 1 point/min)
+
   // Create a synthetic timeline if we don't have explicit timeline data
   if (!data.timeline_data && data.progress_data) {
-    // Extract useful data points
     const timestamp = data.progress_data.timestamp || new Date().toISOString();
     const completedTasks = data.progress_data.completed_tasks || 0;
-
-    // Get file count from structure if available
     let fileCount = 0;
     if (data.structure) {
       fileCount = countFilesInStructure(data.structure);
     } else if (data.git_activity?.values?.length > 0) {
-      // Fallback to git activity for file count estimate
-      fileCount = data.git_activity.values[data.git_activity.values.length - 1];
+      fileCount = data.git_activity.values.reduce((a, b) => a + b, 0); // Example: sum of git actions as a proxy
     }
 
-    // Formatted time label
-    let timeLabel;
-    try {
-      timeLabel = new Date(timestamp).toLocaleTimeString([], {
-        hour: "2-digit",
-        minute: "2-digit",
-      });
-    } catch (e) {
-      console.error("[Timeline] Error formatting timestamp:", e);
-      timeLabel = new Date().toLocaleTimeString([], {
-        hour: "2-digit",
-        minute: "2-digit",
-      });
-    }
+    const pointDate = new Date(timestamp);
 
-    // Add data point to chart
-    if (!timelineChart.data.labels.includes(timeLabel)) {
-      // Add new time label
-      timelineChart.data.labels.push(timeLabel);
+    // Add data point to chart datasets
+    timelineChart.data.datasets[0].data.push({ x: pointDate, y: fileCount });
+    timelineChart.data.datasets[1].data.push({
+      x: pointDate,
+      y: completedTasks,
+    });
 
-      // Add file count data point
-      timelineChart.data.datasets[0].data.push(fileCount);
-
-      // Add completed tasks data point
-      timelineChart.data.datasets[1].data.push(completedTasks);
-
-      // Limit to 10 data points to avoid overcrowding
-      const MAX_POINTS = 10;
-      if (timelineChart.data.labels.length > MAX_POINTS) {
-        timelineChart.data.labels.shift();
-        timelineChart.data.datasets[0].data.shift();
-        timelineChart.data.datasets[1].data.shift();
-      }
-
-      // Apply current theme colors
-      updateChartTheme(timelineChart, getChartFontColor());
-
-      // Update the chart
-      timelineChart.update();
-      console.log("[Timeline] Added data point:", {
-        time: timeLabel,
-        files: fileCount,
-        tasks: completedTasks,
-      });
-    }
+    console.log("[Timeline] Added data point:", {
+      time: pointDate,
+      files: fileCount,
+      tasks: completedTasks,
+    });
   } else if (data.timeline_data) {
     // Use explicit timeline data if available
-    timelineChart.data.labels = data.timeline_data.labels || [];
+    const labels = data.timeline_data.labels || [];
 
     if (data.timeline_data.files_created) {
-      timelineChart.data.datasets[0].data = data.timeline_data.files_created;
+      timelineChart.data.datasets[0].data = labels.map((label, index) => ({
+        x: new Date(label), // Assuming label is a valid timestamp
+        y: data.timeline_data.files_created[index],
+      }));
+    } else {
+      timelineChart.data.datasets[0].data = []; // Clear if no data
     }
 
     if (data.timeline_data.tasks_completed) {
-      timelineChart.data.datasets[1].data = data.timeline_data.tasks_completed;
+      timelineChart.data.datasets[1].data = labels.map((label, index) => ({
+        x: new Date(label), // Assuming label is a valid timestamp
+        y: data.timeline_data.tasks_completed[index],
+      }));
+    } else {
+      timelineChart.data.datasets[1].data = []; // Clear if no data
     }
-
-    // Apply current theme colors
-    updateChartTheme(timelineChart, getChartFontColor());
-
-    // Update the chart
-    timelineChart.update();
     console.log("[Timeline] Updated from explicit timeline data");
   }
 
-  // ADDED: Force immediate update even if there's only one data point
-  if (timelineChart.data.labels.length === 1) {
-    // Add a second data point with the same values to show a line
-    const lastTime = timelineChart.data.labels[0];
-    const nextTime = new Date();
-    nextTime.setMinutes(nextTime.getMinutes() + 1);
-    const nextTimeLabel = nextTime.toLocaleTimeString([], {
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-
-    if (lastTime !== nextTimeLabel) {
-      timelineChart.data.labels.push(nextTimeLabel);
-
-      // Add the same values for the second point (or with slight increment)
-      const filesValue = timelineChart.data.datasets[0].data[0];
-      const tasksValue = timelineChart.data.datasets[1].data[0];
-
-      timelineChart.data.datasets[0].data.push(filesValue);
-      timelineChart.data.datasets[1].data.push(tasksValue);
-
-      console.log(
-        "[Timeline] Added additional point to ensure line visibility"
-      );
-      timelineChart.update();
+  // Limit data points for all datasets
+  timelineChart.data.datasets.forEach((dataset) => {
+    // Sort data by time (x-value) to ensure shift removes the oldest
+    dataset.data.sort((a, b) => a.x - b.x);
+    while (dataset.data.length > MAX_POINTS) {
+      dataset.data.shift(); // Remove the oldest data point
     }
-  }
+  });
+
+  // Apply current theme colors
+  updateChartTheme(timelineChart, getChartFontColor());
+
+  // Update the chart
+  timelineChart.update();
 }
+
+// ADDED: Force immediate update even if there's only one data point
+// This section was removed as time-axis handles single points by showing them,
+// and the primary request is for 1-minute axis ticks.
+// The "add second point" logic might conflict or be redundant.
 
 // Enhanced File Explorer Functions
 function setupEnhancedFileExplorer() {

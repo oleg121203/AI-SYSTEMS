@@ -96,8 +96,21 @@
           <span class="stat-label">Files</span>
         </div>
         <div class="stat-item">
-          <span class="stat-value" id="project-progress">0%</span>
-          <span class="stat-label" id="project-status-label">Complete</span>
+          <!-- New: Total Tasks from Monitoring -->
+          <span class="stat-value" id="project-header-total-tasks">-</span>
+          <span class="stat-label">Total Tasks</span>
+        </div>
+        <div class="stat-item">
+          <!-- New: Completed Tasks from Monitoring -->
+          <span class="stat-value" id="project-header-completed-tasks">-</span>
+          <span class="stat-label">Completed</span>
+        </div>
+        <div class="stat-item">
+          <!-- New: Status/Efficiency (replaces old progress/status) -->
+          <span class="stat-value" id="project-header-status-efficiency"
+            >-</span
+          >
+          <span class="stat-label">Status</span>
         </div>
         <div class="stat-item">
           <span class="stat-value" id="project-last-activity">-</span>

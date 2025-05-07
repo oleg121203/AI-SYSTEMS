@@ -1498,6 +1498,29 @@ body {
   letter-spacing: 0.05em;
 }
 
+/* Project status label styling */
+#project-status-label {
+  transition: color 0.3s ease, font-weight 0.3s ease;
+}
+
+/* Special styling for COMPLETE status */
+#project-status-label.complete {
+  color: var(--success-color);
+  font-weight: bold;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  animation: statusPulse 2s infinite alternate;
+}
+
+@keyframes statusPulse {
+  from {
+    text-shadow: 0 0 2px rgba(var(--success-color-rgb), 0.2);
+  }
+  to {
+    text-shadow: 0 0 10px rgba(var(--success-color-rgb), 0.6);
+  }
+}
+
 /* Task Timeline */
 .task-timeline {
   margin: 20px 0;
