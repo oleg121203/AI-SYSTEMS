@@ -11,10 +11,9 @@ import signal
 import sys
 import time
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Optional
 
 import config
-from utils import log_message
 
 # Configure logging
 logging.basicConfig(
@@ -59,7 +58,8 @@ def get_active_processes() -> Dict[str, Dict]:
                     start_time = float(start_time_str)
                 else:
                     pid = int(pid_data)
-                    start_time = time.time()  # Use current time if not available
+                    # Use current time if not available
+                    start_time = time.time()
 
                 # Check if process is still running
                 if is_process_running(pid):
@@ -89,36 +89,41 @@ def update_load_level():
     global load_level, buffer_size  # load_level and buffer_size are module globals
 
     try:
-        cfg = (
-            config.load_config()
-        )  # This cfg has request_delays adjusted by load_config()
-        current_buffer_size = cfg.get(
-            "ai1_desired_active_buffer", 5
-        )  # Get the buffer that load_config used
-        new_load_level = config.detect_load_level(
-            cfg
-        )  # Detect level based on this buffer
+        # This cfg has request_delays adjusted by load_config()
+        cfg = config.load_config()
+        # Get the buffer that load_config used
+        current_buffer_size = cfg.get("ai1_desired_active_buffer", 5)
+        # Detect level based on this buffer
+        new_load_level = config.detect_load_level(cfg)
 
         # If the detected load level is different from our stored one,
         # or if the buffer size that determined the load level has changed.
         if new_load_level != load_level or current_buffer_size != buffer_size:
             logger.info(
-                f"Load level or buffer changed. Old level: {load_level}, New level: {new_load_level}. "
-                f"Old buffer: {buffer_size}, New buffer: {current_buffer_size}"
+                f"Load level or buffer changed. Old level: {load_level}, "
+                f"New level: {new_load_level}. Old buffer: {buffer_size}, "
+                f"New buffer: {current_buffer_size}"
             )
             load_level = new_load_level
-            buffer_size = current_buffer_size  # Update module global buffer_size
+            # Update module global buffer_size
+            buffer_size = current_buffer_size
 
             # cfg already contains the correctly adjusted request_delays because
-            # config.load_config() calls config.adjust_delays_for_load_level() internally.
-            # We save this version of cfg back to config.json so that other modules
-            # (like utils.py) will pick up these specific delay values when they next load the config.
+            # config.load_config() calls config.adjust_delays_for_load_level()
+            # internally. We save this version of cfg back to config.json so that
+            # other modules (like utils.py) will pick up these specific delay
+            # values when they next load the config.
             config.save_config(cfg)
             logger.info(
-                f"Config saved with updated request delays for load level {load_level} (buffer: {buffer_size})."
+                f"Config saved with updated request delays for load level "
+                f"{load_level} (buffer: {buffer_size})."
             )
+        # Uncomment for debug logging if needed
         # else:
-        # logger.debug(f"Load level ({new_load_level}) and buffer ({current_buffer_size}) unchanged.")
+        #     logger.debug(
+        #         f"Load level ({new_load_level}) and buffer "
+        #         f"({current_buffer_size}) unchanged."
+        #     )
 
     except Exception as e:
         logger.error(f"Error updating load level or saving config: {e}", exc_info=True)
@@ -234,8 +239,12 @@ async def get_cpu_usage() -> float:
     try:
         if sys.platform == "linux":
             # Use ps command to get CPU usage for our processes
+            command = (
+                "ps -p $(pgrep -f 'python.*ai[123].py') -o %cpu "
+                "--no-headers | awk '{s+=$1} END {print s}'"
+            )
             process = await asyncio.create_subprocess_shell(
-                "ps -p $(pgrep -f 'python.*ai[123].py') -o %cpu --no-headers | awk '{s+=$1} END {print s}'",
+                command,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -258,8 +267,12 @@ async def get_memory_usage() -> float:
     try:
         if sys.platform == "linux":
             # Use ps command to get memory usage for our processes
+            command = (
+                "ps -p $(pgrep -f 'python.*ai[123].py') -o %mem "
+                "--no-headers | awk '{s+=$1} END {print s}'"
+            )
             process = await asyncio.create_subprocess_shell(
-                "ps -p $(pgrep -f 'python.*ai[123].py') -o %mem --no-headers | awk '{s+=$1} END {print s}'",
+                command,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -375,15 +388,15 @@ async def report_status():
 
     # Build status message
     status = [
-        f"=== System Load Monitor Report ===",
+        "=== System Load Monitor Report ===",
         f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
         f"Load Level: {load_level} ({config._get_load_level_name(load_level)})",
         f"Buffer Size: {buffer_size}",
         f"CPU Usage: {resources['cpu']:.1f}%",
         f"Memory Usage: {resources['memory']:.1f}%",
         f"Active Processes: {len(processes)}",
-        f"",
-        f"API Call Rates (calls/min):",
+        "",
+        "API Call Rates (calls/min):",
     ]
 
     # Add call rate information

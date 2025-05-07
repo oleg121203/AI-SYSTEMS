@@ -350,102 +350,74 @@ delay_settings = {}
 
 # --- CHANGE: Modify apply_request_delay to fetch fresh config and use random.uniform ---
 async def apply_request_delay(identifier: str):
-    """Applies a random delay based on dynamically loaded configuration before making an API request.
-    Identifier format: 'ai1', 'ai3', 'ai2_executor', 'ai2_tester', 'ai2_documenter', or more specific like 'ai2_executor_task123'.
-    The function normalizes 'ai2_subrole_...' to 'ai2_subrole' for fetching settings.
     """
-    global last_api_request  # Used to record the time of the request after delay.
-
-    effective_delay_settings = (
-        {}
-    )  # Local dictionary for delay settings for this specific call.
+    Apply a random delay based on dynamically loaded configuration before 
+    making an API request.
+    
+    Identifier format examples: 'ai1', 'ai3', 'ai2_executor'
+    The function normalizes identifiers like 'ai2_executor_task123' to 
+    'ai2_executor' for settings lookup.
+    
+    Args:
+        identifier (str): Component identifier making the request
+    """
+    global last_api_request
 
     try:
-        # Import config here to ensure it's always accessible and uses the latest version.
+        # Import config here to ensure latest version is used
         from config import load_config
-
-        # load_config() is efficient due to its internal mtime-based cache.
-        # It returns a config dict where 'request_delays' has already been adjusted
-        # by adjust_delays_for_load_level() based on 'ai1_desired_active_buffer'.
+        
+        # Load the latest config - load_config has its own mtime-based cache
         config_data = load_config()
         loaded_request_delays = config_data.get("request_delays", {})
 
-        # Populate local effective_delay_settings from the loaded config.
-        for component_name_loop in ["ai1", "ai3"]:
-            if component_name_loop in loaded_request_delays:
-                comp_config = loaded_request_delays[component_name_loop]
-                if isinstance(comp_config, dict) and "min" in comp_config:
-                    effective_delay_settings[component_name_loop] = {
-                        "min_delay": float(comp_config["min"]),
-                        "max_delay": float(
-                            comp_config.get("max", comp_config.get("min", 0.1) * 2)
-                        ),  # Default max if missing
-                    }
+        # Normalize identifier to component_id used in settings
+        # e.g., "ai2_executor_task1" becomes "ai2_executor"
+        component_id_for_settings = identifier
+        if identifier.startswith("ai2_"):
+            parts = identifier.split("_", 2)
+            if len(parts) >= 2:
+                component_id_for_settings = f"ai2_{parts[1]}"
 
-        if "ai2" in loaded_request_delays and isinstance(
-            loaded_request_delays["ai2"], dict
-        ):
-            ai2_delays_config = loaded_request_delays["ai2"]
-            for role in ["executor", "tester", "documenter"]:
-                if role in ai2_delays_config:
-                    role_config = ai2_delays_config[role]
-                    if isinstance(role_config, dict) and "min" in role_config:
-                        effective_delay_settings[f"ai2_{role}"] = {
-                            "min_delay": float(role_config["min"]),
-                            "max_delay": float(
-                                role_config.get("max", role_config.get("min", 0.1) * 2)
-                            ),  # Default max if missing
-                        }
+        # Initialize with default minimal delays
+        min_delay = 0.05
+        max_delay = 0.1
+
+        # Get settings for this component with a fallback
+        default_min_max = {"min_delay": 0.05, "max_delay": 0.1}
+        settings = loaded_request_delays.get(
+            component_id_for_settings, default_min_max
+        )
+
+        min_d = settings.get("min_delay", default_min_max["min_delay"])
+        max_d = settings.get("max_delay", default_min_max["max_delay"])
+
+        # Validate delay values
+        min_d = max(0.0, min_d)  # Ensure min_delay is not negative
+        max_d = max(min_d, max_d)  # Ensure max_delay is not less than min_delay
+
+        actual_delay_to_apply = 0.0
+        if max_d > 0:  # Only sleep if max_d is positive
+            actual_delay_to_apply = random.uniform(min_d, max_d)
+        
+        if actual_delay_to_apply > 0:
+            logger.debug(
+                f"[{identifier} -> {component_id_for_settings}] Applying API "
+                f"request delay: {actual_delay_to_apply:.3f}s "
+                f"(range: {min_d:.3f}-{max_d:.3f})"
+            )
+            await asyncio.sleep(actual_delay_to_apply)
+
+        # Record request time for the normalized component_id
+        last_api_request[component_id_for_settings] = time.time()
+    
     except Exception as e:
         logger.error(
-            f"Error loading dynamic delay settings for {identifier}: {e}. Using minimal fallback delays.",
-            exc_info=True,
+            f"Error applying request delay for {identifier}: {e}", 
+            exc_info=True
         )
-        # Emergency fallback if config loading fails.
-        min_fb, max_fb = 0.05, 0.1
-        # Ensure all expected component_id keys have a fallback
-        for comp_key in ["ai1", "ai3", "ai2_executor", "ai2_tester", "ai2_documenter"]:
-            effective_delay_settings[comp_key] = {
-                "min_delay": min_fb,
-                "max_delay": max_fb,
-            }
-
-    # Normalize the identifier to a component_id key used in settings.
-    # E.g., "ai2_executor_task1" becomes "ai2_executor".
-    component_id_for_settings = identifier
-    if identifier.startswith("ai2_"):
-        parts = identifier.split("_", 2)
-        if len(parts) >= 2:
-            component_id_for_settings = f"ai2_{parts[1]}"
-
-    # Get specific settings for this component_id, with a final fallback.
-    default_min_max = {"min_delay": 0.05, "max_delay": 0.1}
-    settings_for_component = effective_delay_settings.get(
-        component_id_for_settings, default_min_max
-    )
-
-    min_d = settings_for_component.get("min_delay", default_min_max["min_delay"])
-    max_d = settings_for_component.get("max_delay", default_min_max["max_delay"])
-
-    # Validate delay values.
-    min_d = max(0.0, min_d)  # Ensure min_delay is not negative.
-    max_d = max(min_d, max_d)  # Ensure max_delay is not less than min_delay.
-
-    actual_delay_to_apply = 0.0
-    if max_d > 0:  # Only sleep if max_d is positive.
-        actual_delay_to_apply = random.uniform(min_d, max_d)
-
-    if actual_delay_to_apply > 0:
-        logger.debug(
-            f"[{identifier} -> {component_id_for_settings}] Applying API request delay: {actual_delay_to_apply:.3f}s (range: {min_d:.3f}-{max_d:.3f})"
-        )
-        await asyncio.sleep(actual_delay_to_apply)
-
-    # Record the time of this request for the normalized component_id.
-    current_time = time.time()
-    last_api_request[component_id_for_settings] = current_time
-
-
+        # Apply minimal delay (50-100ms) in case of error
+        await asyncio.sleep(random.uniform(0.05, 0.1))
 # --- END CHANGE ---
 
 
@@ -615,7 +587,6 @@ def extract_files_from_structure(structure: Dict[str, Any]) -> Dict[str, Any]:
                     # Avoid recursing on simple metadata if structure is mixed
                     if isinstance(value, (dict, list)):
                         # Decide if 'key' should be part of the path - depends on structure definition
-                        # Assuming keys are not part of path unless node['name'] is used
                         extract_from_node(value, current_path)  # Recurse on value
 
         elif isinstance(node, list):
@@ -2084,7 +2055,7 @@ from typing import Any, Dict, List, Optional, Union
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    format="%(asctime)s - %(name)s - %(levellevel)s - %(message)s",
     handlers=[
         logging.StreamHandler(),
         logging.FileHandler("mcp.log"),

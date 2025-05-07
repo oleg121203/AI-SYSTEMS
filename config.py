@@ -8,10 +8,13 @@ from dotenv import load_dotenv
 # Load environment variables from .env file
 load_dotenv()
 
-# Moved DEFAULT_CONFIG_PATH definition up and placed logging configuration below it
+# Default config file path
 DEFAULT_CONFIG_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "config.json"
 )
+
+# Default log format used in multiple places
+DEFAULT_LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 
 
 # Function to get initial logging configuration
@@ -19,13 +22,13 @@ def _get_initial_logging_config(config_file_path: str) -> dict:
     """
     Safely loads logging configuration (level and format) from the specified
     config file. Uses defaults if the file is missing, malformed, or if
-    specific logging settings are not found.
+    specific settings are not found.
     This function does not use the module's logger to avoid issues during
     initial setup.
     """
     default_settings = {
         "level": "INFO",
-        "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        "format": DEFAULT_LOG_FORMAT,
     }
     # Start with a copy of default settings
     log_config = default_settings.copy()
@@ -39,7 +42,7 @@ def _get_initial_logging_config(config_file_path: str) -> dict:
             if "logging" in loaded_json and isinstance(loaded_json["logging"], dict):
                 logging_section = loaded_json["logging"]
 
-                # Get level, ensure it's a string, convert to upper, fallback to default
+                # Get level, ensure it's a string, convert to upper
                 level_val = logging_section.get("level", default_settings["level"])
                 log_config["level"] = (
                     str(level_val).upper()
@@ -54,16 +57,16 @@ def _get_initial_logging_config(config_file_path: str) -> dict:
                     if isinstance(format_val, str)
                     else default_settings["format"]
                 )
-            # If "logging" key is missing or not a dict, log_config remains as default_settings
+            # If "logging" section missing, use defaults
 
         except json.JSONDecodeError:
             # Malformed JSON in config file; use defaults.
-            # Consider printing to stderr if this case needs visibility during startup:
+            # For more visibility during startup:
             # import sys
-            # print(f"Warning: Error decoding JSON from {config_file_path}. Using default logging settings.", file=sys.stderr)
+            # print(f"Warning: Error decoding JSON. Using defaults.", file=sys.stderr)
             pass  # Silently use defaults
         except Exception:
-            # Other errors (e.g., permission issues) reading file; use defaults.
+            # Other errors reading file; use defaults.
             pass  # Silently use defaults
 
     return log_config
@@ -74,11 +77,7 @@ _initial_log_params = _get_initial_logging_config(DEFAULT_CONFIG_PATH)
 
 # Ensure level is a string and uppercase before passing to getattr
 _log_level_str = str(_initial_log_params.get("level", "INFO")).upper()
-_log_format_str = str(
-    _initial_log_params.get(
-        "format", "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    )
-)
+_log_format_str = str(_initial_log_params.get("format", DEFAULT_LOG_FORMAT))
 
 # Get the actual logging level integer value from the logging module
 _actual_log_level = getattr(logging, _log_level_str, logging.INFO)
@@ -165,6 +164,37 @@ def detect_load_level(config: Dict[str, Any]) -> int:
         return LOAD_LEVEL_MAXIMUM
 
 
+def _update_component_delays(
+    config: Dict[str, Any], component: str, delays: Dict[str, float]
+) -> None:
+    """Helper to update delays for a specific component in config.
+
+    Args:
+        config: Config dictionary being modified
+        component: Component ID (ai1, ai3, or ai2_TYPE)
+        delays: Delay values to set
+    """
+    if component == "ai1":
+        if "ai1" not in config["request_delays"]:
+            config["request_delays"]["ai1"] = {}
+        config["request_delays"]["ai1"]["min"] = delays["min"]
+        config["request_delays"]["ai1"]["max"] = delays["max"]
+    elif component == "ai3":
+        if "ai3" not in config["request_delays"]:
+            config["request_delays"]["ai3"] = {}
+        config["request_delays"]["ai3"]["min"] = delays["min"]
+        config["request_delays"]["ai3"]["max"] = delays["max"]
+    elif component.startswith("ai2_"):
+        # Extract 'executor', 'tester', or 'documenter'
+        role = component.split("_")[1]
+        if "ai2" not in config["request_delays"]:
+            config["request_delays"]["ai2"] = {}
+        if role not in config["request_delays"]["ai2"]:
+            config["request_delays"]["ai2"][role] = {}
+        config["request_delays"]["ai2"][role]["min"] = delays["min"]
+        config["request_delays"]["ai2"][role]["max"] = delays["max"]
+
+
 def adjust_delays_for_load_level(config: Dict[str, Any]) -> Dict[str, Any]:
     """
     Adjusts the request delay settings based on the detected load level.
@@ -188,33 +218,13 @@ def adjust_delays_for_load_level(config: Dict[str, Any]) -> Dict[str, Any]:
 
     # Override basic settings but preserve any custom settings
     for component, delays in delay_settings.items():
-        if component == "ai1":
-            if "ai1" not in config["request_delays"]:
-                config["request_delays"]["ai1"] = {}
-            config["request_delays"]["ai1"]["min"] = delays["min"]
-            config["request_delays"]["ai1"]["max"] = delays["max"]
-        elif component == "ai3":
-            if "ai3" not in config["request_delays"]:
-                config["request_delays"]["ai3"] = {}
-            config["request_delays"]["ai3"]["min"] = delays["min"]
-            config["request_delays"]["ai3"]["max"] = delays["max"]
-        elif component.startswith("ai2_"):
-            role = component.split("_")[
-                1
-            ]  # Extract 'executor', 'tester', or 'documenter'
-            if "ai2" not in config["request_delays"]:
-                config["request_delays"]["ai2"] = {}
-            if role not in config["request_delays"]["ai2"]:
-                config["request_delays"]["ai2"][role] = {}
-            config["request_delays"]["ai2"][role]["min"] = delays["min"]
-            config["request_delays"]["ai2"][role]["max"] = delays["max"]
+        _update_component_delays(config, component, delays)
 
     # Set the detected load level
     config["system_load_level"] = load_level
 
-    logger.info(
-        f"System configured for load level {load_level} ({_get_load_level_name(load_level)})"
-    )
+    level_name = _get_load_level_name(load_level)
+    logger.info(f"System configured for load level {load_level} ({level_name})")
     return config
 
 
@@ -241,7 +251,8 @@ def _get_load_level_name(level: int) -> str:
 def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
     """
     Loads the configuration from the specified path or the default path.
-    Handles environment variable substitution and caches results for performance.
+    Handles environment variable substitution and caches results for
+    performance.
 
     Args:
         config_path: Optional path to the config file
@@ -334,7 +345,7 @@ def update_config_item(key: str, value: Any, config_path: Optional[str] = None) 
         config_path: Optional path to the config file
 
     Returns:
-        bool: True if the config was updated successfully, False otherwise
+        bool: True if config was updated successfully, False otherwise
     """
     config = load_config(config_path)
     config[key] = value
@@ -366,19 +377,19 @@ def get_config_item(
 
 def create_default_config(save_path: Optional[str] = None) -> Dict[str, Any]:
     """
-    Создание конфигурации по умолчанию.
+    Creates default configuration.
 
     Args:
-        save_path: Путь для сохранения конфигурации. Если None, конфигурация не сохраняется.
+        save_path: Path to save the config. If None, config isn't saved.
 
     Returns:
-        Dict[str, Any]: Словарь с конфигурацией по умолчанию
+        Dict[str, Any]: Dictionary with default configuration
     """
     default_config = {
         "version": "1.0.0",
         "logging": {
             "level": "INFO",
-            "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+            "format": DEFAULT_LOG_FORMAT,
         },
         "ai_config": {
             "ai1": {
@@ -405,8 +416,10 @@ def create_default_config(save_path: Optional[str] = None) -> Dict[str, Any]:
             },
         },
         "ai1_prompts": [
-            "Вы опытный программист, специализирующийся на {language}. Разбейте задачу на подзадачи и создайте план реализации.",
-            "Вы инженер по требованиям. Опишите требования к системе на основе следующего задания.",
+            "Вы опытный программист, специализирующийся на {language}. "
+            "Разбейте задачу на подзадачи и создайте план реализации.",
+            "Вы инженер по требованиям. Опишите требования к системе "
+            "на основе следующего задания.",
         ],
         "ai2_prompts": [
             "Вы опытный программист. Создайте файл {filename} согласно заданию.",
@@ -430,9 +443,9 @@ def create_default_config(save_path: Optional[str] = None) -> Dict[str, Any]:
         try:
             with open(save_path, "w", encoding="utf-8") as f:
                 json.dump(default_config, f, indent=2, ensure_ascii=False)
-            logger.info(f"Конфигурация по умолчанию сохранена в {save_path}")
+            logger.info(f"Default configuration saved to {save_path}")
         except Exception as e:
-            logger.error(f"Ошибка при сохранении конфигурации: {e}")
+            logger.error(f"Error saving configuration: {e}")
 
     return default_config
 
@@ -441,14 +454,14 @@ def update_config(
     updates: Dict[str, Any], config_path: Optional[str] = None
 ) -> Dict[str, Any]:
     """
-    Обновление конфигурации.
+    Update configuration.
 
     Args:
-        updates: Словарь с обновлениями для конфигурации
-        config_path: Путь к файлу конфигурации. Если None, используется путь по умолчанию.
+        updates: Dictionary with updates for configuration
+        config_path: Path to config file. If None, default path is used.
 
     Returns:
-        Dict[str, Any]: Обновленный словарь с конфигурацией
+        Dict[str, Any]: Updated configuration dictionary
     """
     config = load_config(config_path)
 
@@ -469,7 +482,7 @@ def update_config(
     return config
 
 
-# Для тестирования
+# For testing
 if __name__ == "__main__":
     config = load_config()
     print(json.dumps(config, indent=2, ensure_ascii=False))
