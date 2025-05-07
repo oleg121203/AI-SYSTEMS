@@ -3355,6 +3355,18 @@ document.addEventListener("DOMContentLoaded", function () {
 // Provider Management Logic
 let providerModels = {}; // Object to store available models for each provider
 
+// ADDED: Initialize availableProviders and currentConfig globally with defaults
+let availableProviders = [];
+let currentConfig = {
+  ai1: { provider: "openai", model: "gpt-3.5-turbo", fallbacks: [] },
+  ai2: {
+    executor: { provider: "openai", model: "gpt-3.5-turbo", fallbacks: [] },
+    tester: { provider: "openai", model: "gpt-3.5-turbo", fallbacks: [] },
+    documenter: { provider: "openai", model: "gpt-3.5-turbo", fallbacks: [] },
+  },
+  ai3: { provider: "openai", model: "gpt-3.5-turbo", fallbacks: [] },
+};
+
 // Fetch available models for a provider
 async function fetchProviderModels(providerName) {
   try {
@@ -3841,38 +3853,104 @@ function showNotification(message, type = "info") {
 }
 
 // Provider Configuration Functions
-let availableProviders = [];
-let currentConfig = {
-  ai1: { provider: "", model: "", fallbacks: [] },
-  ai2: {
-    executor: { provider: "", model: "", fallbacks: [] },
-    tester: { provider: "", model: "", fallbacks: [] },
-    documenter: { provider: "", model: "", fallbacks: [] },
-  },
-  ai3: { provider: "", model: "", fallbacks: [] },
-};
+// let availableProviders = []; // MOVED TO GLOBAL SCOPE
+// let currentConfig = { // MOVED TO GLOBAL SCOPE
+//   ai1: { provider: "", model: "", fallbacks: [] },
+//   ai2: {
+//     executor: { provider: "", model: "", fallbacks: [] },
+//     tester: { provider: "", model: "", fallbacks: [] },
+//     documenter: { provider: "", model: "", fallbacks: [] },
+//   },
+//   ai3: { provider: "", model: "", fallbacks: [] },
+// };
 
 // Initialize provider configuration on page load
 async function initProviderConfig() {
+  let fetchedConfig;
   try {
     const response = await fetch("/providers");
-    const data = await response.json();
+    if (!response.ok) {
+      console.warn(
+        `Failed to fetch providers: ${response.status}. Using defaults.`
+      );
+      // currentConfig already has defaults from global scope
+    } else {
+      const data = await response.json();
+      availableProviders = data.available_providers || []; // Use global availableProviders
+      fetchedConfig = data.current_config;
 
-    availableProviders = data.available_providers || [];
-    currentConfig = data.current_config || {
-      ai1: { provider: "openai", model: "", fallbacks: [] },
-      ai2: {
-        executor: { provider: "openai", model: "", fallbacks: [] },
-        tester: { provider: "openai", model: "", fallbacks: [] },
-        documenter: { provider: "openai", model: "", fallbacks: [] },
-      },
-      ai3: { provider: "openai", model: "", fallbacks: [] },
-    };
+      // Merge fetchedConfig with the default currentConfig
+      if (fetchedConfig) {
+        // Deep merge might be better, but for now, simple spread ensuring structure
+        currentConfig.ai1 = {
+          ...(currentConfig.ai1 || {}),
+          ...(fetchedConfig.ai1 || {}),
+        };
+        currentConfig.ai2 = currentConfig.ai2 || {};
+        fetchedConfig.ai2 = fetchedConfig.ai2 || {};
+        currentConfig.ai2.executor = {
+          ...(currentConfig.ai2.executor || {}),
+          ...(fetchedConfig.ai2.executor || {}),
+        };
+        currentConfig.ai2.tester = {
+          ...(currentConfig.ai2.tester || {}),
+          ...(fetchedConfig.ai2.tester || {}),
+        };
+        currentConfig.ai2.documenter = {
+          ...(currentConfig.ai2.documenter || {}),
+          ...(fetchedConfig.ai2.documenter || {}),
+        };
+        currentConfig.ai3 = {
+          ...(currentConfig.ai3 || {}),
+          ...(fetchedConfig.ai3 || {}),
+        };
+      }
+    }
+  } catch (error) {
+    console.error(
+      "Error initializing provider configuration from fetch:",
+      error
+    );
+    showNotification(
+      "Error loading provider configuration, using defaults.",
+      "error"
+    );
+    // currentConfig retains its global default values
+  }
 
-    // Populate provider dropdowns
-    populateProviderDropdowns();
+  // Ensure the basic structure of currentConfig and its nested properties
+  currentConfig.ai1 = currentConfig.ai1 || {
+    provider: "openai",
+    model: "gpt-3.5-turbo",
+    fallbacks: [],
+  };
+  currentConfig.ai2 = currentConfig.ai2 || {};
+  currentConfig.ai2.executor = currentConfig.ai2.executor || {
+    provider: "openai",
+    model: "gpt-3.5-turbo",
+    fallbacks: [],
+  };
+  currentConfig.ai2.tester = currentConfig.ai2.tester || {
+    provider: "openai",
+    model: "gpt-3.5-turbo",
+    fallbacks: [],
+  };
+  currentConfig.ai2.documenter = currentConfig.ai2.documenter || {
+    provider: "openai",
+    model: "gpt-3.5-turbo",
+    fallbacks: [],
+  };
+  currentConfig.ai3 = currentConfig.ai3 || {
+    provider: "openai",
+    model: "gpt-3.5-turbo",
+    fallbacks: [],
+  };
 
-    // Initialize model dropdowns for each provider
+  // Populate provider dropdowns
+  populateProviderDropdowns();
+
+  // Initialize model dropdowns for each provider
+  try {
     await Promise.all([
       updateModelOptions("ai1"),
       updateModelOptions("ai2-executor"),
@@ -3880,13 +3958,16 @@ async function initProviderConfig() {
       updateModelOptions("ai2-documenter"),
       updateModelOptions("ai3"),
     ]);
-
-    // Set fallbacks for each component
-    updateFallbackLists();
-  } catch (error) {
-    console.error("Error initializing provider configuration:", error);
-    showNotification("Error loading provider configuration", "error");
+  } catch (promiseError) {
+    console.error(
+      "Error during Promise.all in initProviderConfig for model options:",
+      promiseError
+    );
+    showNotification("Error updating some model options.", "warning");
   }
+
+  // Set fallbacks for each component
+  updateFallbackLists();
 }
 
 // Populate all provider dropdown selects
@@ -3938,55 +4019,87 @@ function populateProviderDropdowns() {
 }
 
 // Update model options when provider changes
-async function updateModelOptions(componentId) {
-  const providerSelect = document.querySelector(`#${componentId}-provider`);
-  const modelSelect = document.querySelector(`#${componentId}-model`);
+async function updateModelOptions(aiComponent) {
+  // Renamed from componentId for clarity if this was the original name
+  const providerSelect = document.getElementById(`${aiComponent}-provider`); // Assuming original used getElementById
+  const modelSelect = document.getElementById(`${aiComponent}-model`); // Assuming original used getElementById
 
   if (!providerSelect || !modelSelect) {
-    console.error(`Could not find selects for component ${componentId}`);
+    console.error(`Could not find provider or model select for ${aiComponent}`);
     return;
   }
 
   const provider = providerSelect.value;
+  if (!provider) {
+    modelSelect.innerHTML = '<option value="">Select a provider first</option>';
+    return;
+  }
+  modelSelect.innerHTML = '<option value="">Loading models...</option>';
+
   let models = [];
 
-  // Check if we've already loaded models for this provider
   if (providerModels[provider]) {
     models = providerModels[provider];
   } else {
     try {
-      const response = await fetch(`/provider_models?provider=${provider}`);
+      const response = await fetch(
+        `/provider_models?provider=${encodeURIComponent(provider)}`
+      );
+      if (!response.ok)
+        throw new Error(`HTTP error! status: ${response.status}`);
       const data = await response.json();
       models = data.models || [];
-      providerModels[provider] = models; // Cache the models
+      providerModels[provider] = models;
     } catch (error) {
       console.error(`Error fetching models for provider ${provider}:`, error);
       models = [];
+      modelSelect.innerHTML = '<option value="">Error loading models</option>';
+      return;
     }
   }
 
-  // Clear existing options
-  modelSelect.innerHTML = "";
+  modelSelect.innerHTML = ""; // Clear previous options
 
-  // Add models
-  models.forEach((model) => {
+  if (models.length === 0) {
     const option = document.createElement("option");
-    option.value = model;
-    option.textContent = model;
+    option.value = "";
+    option.textContent = "No models available";
     modelSelect.appendChild(option);
-  });
+  } else {
+    models.forEach((model) => {
+      const option = document.createElement("option");
+      option.value = model;
+      option.textContent = model;
+      modelSelect.appendChild(option);
+    });
+  }
 
-  // Set current selection
   let currentModel = "";
-  if (componentId === "ai1") {
+  // Safely access currentConfig properties
+  if (aiComponent === "ai1" && currentConfig && currentConfig.ai1) {
     currentModel = currentConfig.ai1.model;
-  } else if (componentId === "ai2-executor") {
+  } else if (
+    aiComponent === "ai2-executor" &&
+    currentConfig &&
+    currentConfig.ai2 &&
+    currentConfig.ai2.executor
+  ) {
     currentModel = currentConfig.ai2.executor.model;
-  } else if (componentId === "ai2-tester") {
+  } else if (
+    aiComponent === "ai2-tester" &&
+    currentConfig &&
+    currentConfig.ai2 &&
+    currentConfig.ai2.tester
+  ) {
     currentModel = currentConfig.ai2.tester.model;
-  } else if (componentId === "ai2-documenter") {
+  } else if (
+    aiComponent === "ai2-documenter" &&
+    currentConfig &&
+    currentConfig.ai2 &&
+    currentConfig.ai2.documenter
+  ) {
     currentModel = currentConfig.ai2.documenter.model;
-  } else if (componentId === "ai3") {
+  } else if (aiComponent === "ai3" && currentConfig && currentConfig.ai3) {
     currentModel = currentConfig.ai3.model;
   }
 
@@ -3995,6 +4108,22 @@ async function updateModelOptions(componentId) {
     modelSelect.querySelector(`option[value="${currentModel}"]`)
   ) {
     modelSelect.value = currentModel;
+  } else if (models.length > 0) {
+    // If currentModel is not set or not in the list, and it's the ai1 component, select the first model.
+    if (aiComponent === "ai1") {
+      modelSelect.value = models[0];
+    } else {
+      // For other components, you might want a "Select a model" or leave it blank
+      // For now, let's add a placeholder if no value is set.
+      if (!modelSelect.value) {
+        const placeholderOption = document.createElement("option");
+        placeholderOption.value = "";
+        placeholderOption.textContent = "Select a model";
+        placeholderOption.disabled = true;
+        placeholderOption.selected = true;
+        // modelSelect.insertBefore(placeholderOption, modelSelect.firstChild); // Option to prepend
+      }
+    }
   }
 }
 
