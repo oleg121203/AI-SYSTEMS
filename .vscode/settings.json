@@ -3,7 +3,7 @@
   "files.autoSave": "afterDelay",
   "files.autoSaveDelay": 3000,
   "editor.formatOnSave": true,
-  "editor.codeLens": false,
+  "editor.codeLens": true,
   "editor.rulers": [80, 81],
   "editorconfig.generateAuto": true,
 

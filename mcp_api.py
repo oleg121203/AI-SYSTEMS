@@ -422,6 +422,8 @@ async def broadcast_monitoring_stats():
                     "tester": [t for t in tester_queue._queue],
                     "documenter": [t for t in documenter_queue._queue],
                 },
+                # Add efficiency as a percentage for direct use in the UI
+                "efficiency": f"{(completed_tasks / max(1, actual_total_tasks) * 100):.1f}%",
             }
             await broadcast_specific_update(update_data)
             logger.debug(

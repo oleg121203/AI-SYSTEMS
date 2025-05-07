@@ -120,15 +120,55 @@ function routeMessageByType(data) {
     case "monitoring_update":
       // Handle updates specifically for monitoring charts/data
       console.log("Processing monitoring_update:", data);
-      // This usually contains chart-related data like progress, git, status distribution
-      updateCharts(data);
-      // It might also contain subtask status updates needed for stats
+
+      // Update actual total tasks count if provided
+      if (data.total_tasks !== undefined) {
+        actualTotalTasks = data.total_tasks;
+        console.log(
+          `[Monitoring] Updated actual total tasks to: ${actualTotalTasks}`
+        );
+      }
+
+      // Update completed tasks if provided
+      if (data.completed_tasks !== undefined && statElements.completed) {
+        statElements.completed.textContent = data.completed_tasks;
+        console.log(
+          `[Monitoring] Updated completed tasks to: ${data.completed_tasks}`
+        );
+      }
+
+      // Update efficiency if we have both total and completed
+      if (data.total_tasks && data.completed_tasks && statElements.efficiency) {
+        const efficiency =
+          data.total_tasks > 0
+            ? ((data.completed_tasks / data.total_tasks) * 100).toFixed(1)
+            : "0.0";
+        statElements.efficiency.textContent = `${efficiency}%`;
+        console.log(`[Monitoring] Updated efficiency to: ${efficiency}%`);
+      }
+
+      // Update total tasks display
+      if (data.total_tasks !== undefined && statElements.total) {
+        statElements.total.textContent = data.total_tasks;
+        console.log(
+          `[Monitoring] Updated total tasks display to: ${data.total_tasks}`
+        );
+      }
+
+      // Update queue data if present
+      if (data.queues) {
+        updateQueues(data.queues);
+      }
+
+      // Update subtask statuses if provided
       if (data.subtasks) {
         Object.assign(subtask_status, data.subtasks);
-        updateQueueItemStatuses(data.subtasks); // Update queue item visuals
-        updateStats(subtask_status, null); // Update stats display (pass null for queues if not present)
+        updateQueueItemStatuses(data.subtasks);
       }
-      break; // Added break statement
+
+      // Update charts with available data
+      updateCharts(data);
+      break;
 
     default:
       console.warn("Received unhandled message type:", data.type, data);
@@ -392,7 +432,10 @@ function updateStats(current_subtask_statuses, current_queues_data) {
     (status) =>
       status === "accepted" ||
       status === "completed" ||
-      status === "code_received" // Consider 'code_received' as completed for this count
+      status === "code_received" ||
+      status === "tested" ||
+      status === "documented" ||
+      status === "skipped"
   ).length;
 
   // Calculate tasks currently in queues
@@ -2225,6 +2268,7 @@ function updateProjectSummary(data) {
   const projectDescription = document.getElementById("project-description");
   const filesCount = document.getElementById("project-files-count");
   const projectProgress = document.getElementById("project-progress");
+  const projectStatusLabel = document.getElementById("project-status-label");
   const lastActivity = document.getElementById("project-last-activity");
 
   if (
@@ -2232,6 +2276,7 @@ function updateProjectSummary(data) {
     !projectDescription ||
     !filesCount ||
     !projectProgress ||
+    !projectStatusLabel ||
     !lastActivity
   ) {
     console.error(
@@ -2307,7 +2352,32 @@ function updateProjectSummary(data) {
       (completedTasks / data.actual_total_tasks) * 100
     );
   }
+
+  // Update progress percentage in the UI
   projectProgress.textContent = `${progressPercent}%`;
+
+  // Update the status label based on progress percentage
+  if (progressPercent >= 100) {
+    projectStatusLabel.textContent = "COMPLETE";
+    projectStatusLabel.style.color = "var(--success-color)";
+    projectStatusLabel.style.fontWeight = "bold";
+  } else if (progressPercent >= 75) {
+    projectStatusLabel.textContent = "Almost Complete";
+    projectStatusLabel.style.color = "";
+    projectStatusLabel.style.fontWeight = "";
+  } else if (progressPercent >= 50) {
+    projectStatusLabel.textContent = "Halfway";
+    projectStatusLabel.style.color = "";
+    projectStatusLabel.style.fontWeight = "";
+  } else if (progressPercent >= 25) {
+    projectStatusLabel.textContent = "In Progress";
+    projectStatusLabel.style.color = "";
+    projectStatusLabel.style.fontWeight = "";
+  } else {
+    projectStatusLabel.textContent = "Starting";
+    projectStatusLabel.style.color = "";
+    projectStatusLabel.style.fontWeight = "";
+  }
 
   // Update last activity time
   const now = new Date();
@@ -2338,7 +2408,9 @@ function updateProjectSummary(data) {
     "files:",
     fileCount,
     "progress:",
-    progressPercent + "%"
+    progressPercent + "%",
+    "status:",
+    projectStatusLabel.textContent
   );
 }
 
