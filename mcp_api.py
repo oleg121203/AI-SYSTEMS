@@ -13,26 +13,16 @@ from typing import Any, Dict, List, Optional, Set, Union  # Add Any here
 from uuid import uuid4
 
 import aiofiles
-
 # --- CHANGE: Import Repo and GitCommandError ---
 import git
 import requests  # Додано для repository_dispatch
-
 # --- END CHANGE ---
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import (
-    BackgroundTasks,
-    FastAPI,
-    HTTPException,
-    Request,
-    WebSocket,
-    WebSocketDisconnect,
-)
-
+from fastapi import (BackgroundTasks, FastAPI, HTTPException, Request,
+                     WebSocket, WebSocketDisconnect)
 # --- CHANGE: Define constants ---
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
-
 # --- END CHANGE ---
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -482,9 +472,17 @@ async def _write_file_content(
         if adjusted_rel_path and adjusted_rel_path != ".":
             full_path.parent.mkdir(parents=True, exist_ok=True)
 
+        # Check if path is a directory before attempting to write
         if full_path.is_dir():
             logger.warning(
                 f"[API-Write] Adjusted path '{adjusted_rel_path}' points to a directory. Cannot write file content."
+            )
+            return False
+
+        # Check if path ends with / which suggests it's intended as a directory
+        if adjusted_rel_path.endswith("/"):
+            logger.warning(
+                f"[API-Write] Path '{adjusted_rel_path}' ends with '/' suggesting it's a directory. Cannot write file content."
             )
             return False
 
@@ -693,7 +691,6 @@ async def create_follow_up_tasks(filename: str, original_executor_subtask_id: st
     documenter_subtask = {
         "id": documenter_subtask_id,
         "text": documenter_prompt,
-        "role": "documenter",
         # --- CHANGE: Add file content ---
         "code": file_content,  # Add the read content
         # --- END CHANGE ---

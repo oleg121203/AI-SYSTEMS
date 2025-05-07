@@ -20,6 +20,7 @@ cohere
 openai
 groq
 ollama
+anthropic
 
 # Git & Repo
 GitPython==3.1.28
