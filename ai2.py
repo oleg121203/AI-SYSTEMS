@@ -1464,10 +1464,25 @@ class AI2:
                         f"Added missing role '{self.role}' to task: {task.get('id')}"
                     )
 
-                # Standardize file extensions for tests and documentation
-                if self.role == "documenter" or self.role == "tester":
+                # Standardize file extensions and fix file formats
+                if self.role in ["documenter", "tester", "executor"]:
                     filename = task.get("filename")
                     if filename:
+                        # Fix duplicate test extensions (.test.test.js, etc.)
+                        if filename.count(".test") > 1:
+                            # Replace multiple .test occurrences with just one
+                            base_name = filename.split(".test")[0]
+                            remaining = filename.split(".test")[-1]
+                            if remaining and remaining.startswith("."):
+                                task["filename"] = f"{base_name}.test{remaining}"
+                            else:
+                                task["filename"] = (
+                                    f"{base_name}.test.js"  # Default to JS if no extension
+                                )
+                            logger.info(
+                                f"Fixed duplicate test extensions: {task['filename']}"
+                            )
+
                         # Add proper extensions to test files that are missing them
                         if filename.endswith(".test") and not any(
                             filename.endswith(ext)
@@ -1476,7 +1491,7 @@ class AI2:
                             # Infer extension based on content or project context
                             if "react" in task.get("text", "").lower() or any(
                                 filename.startswith(p)
-                                for p in ["React", "component", "hook"]
+                                for p in ["React", "component", "hook", "use"]
                             ):
                                 task["filename"] = filename + ".js"
                             elif "python" in task.get("text", "").lower():
@@ -1487,16 +1502,51 @@ class AI2:
                                 f"Added proper extension to test file: {task['filename']}"
                             )
 
-                        # If documenter is generating markdown, ensure it has .md extension
+                        # Add proper extensions to config files
+                        if any(
+                            filename.endswith(cfg) for cfg in ["config", ".config"]
+                        ) and not any(
+                            filename.endswith(ext) for ext in [".js", ".json", ".py"]
+                        ):
+                            if (
+                                filename.startswith("webpack")
+                                or filename.startswith("babel")
+                                or filename.startswith("jest")
+                                or filename.startswith("tailwind")
+                            ):
+                                task["filename"] = filename + ".js"
+                                logger.info(
+                                    f"Added JS extension to config file: {task['filename']}"
+                                )
+
+                        # Ensure Dockerfile has proper name without extension
                         if (
-                            self.role == "documenter"
-                            and "markdown" in task.get("text", "").lower()
+                            "dockerfile" in filename.lower()
+                            and "." in filename
                             and not filename.endswith(".md")
                         ):
-                            task["filename"] = filename.replace(".test", "") + ".md"
-                            logger.info(
-                                f"Converted documentation file to markdown: {task['filename']}"
-                            )
+                            task["filename"] = "Dockerfile"
+                            logger.info(f"Fixed Dockerfile name: {task['filename']}")
+
+                # Special handling for the documenter role
+                if self.role == "documenter":
+                    # If documenter is generating markdown, ensure it has .md extension
+                    if "markdown" in task.get("text", "").lower() and not task.get(
+                        "filename", ""
+                    ).endswith(".md"):
+                        task["filename"] = task["filename"].replace(".test", "") + ".md"
+                        logger.info(
+                            f"Converted documentation file to markdown: {task['filename']}"
+                        )
+
+                    # If documenting a non-markdown file, make sure the system knows we're generating inline documentation
+                    # not a markdown version of the file
+                    if not task.get("filename", "").endswith(".md"):
+                        # Add metadata to indicate this is for inline documentation
+                        task["documentation_type"] = "inline"
+                        logger.info(
+                            f"Marked task for inline documentation: {task.get('filename')}"
+                        )
 
                 report = await self.process_task(task)
                 if report:
