@@ -3194,151 +3194,259 @@ async def receive_structure_setup_report():
     return {"status": "received"}
 
 
-@app.route("/providers", methods=["GET"])
-async def get_providers():
-    """Get available providers and current configuration."""
+# Helper functions for provider configuration (These seem to be duplicated or misplaced, ensure they are defined once correctly if needed)
+# The following @app.route for /providers and /provider_models, /component_fallbacks might conflict
+# with earlier @app.get definitions if 'app' is a FastAPI instance and 'route' is an alias.
+# It's better to use @app.get, @app.post consistently for FastAPI.
+
+# Removed conflicting/Flask-style /update_providers endpoint previously here (around lines 3301-3326)
+
+# ...existing code...
+# @app.route("/providers", methods=["GET"]) # This might be a problematic duplicate or old code
+# async def get_providers_alt_version(): # Renamed to avoid direct conflict for now, but should be reviewed
+#     """Get available providers and current configuration."""
+#     try:
+#         # Get all available providers from ProviderFactory
+#         available_providers = list(get_available_provider_types())
+#
+#         # Get current AI configuration
+#         config_data = await load_config()
+#
+#         # Return data as JSON
+#         return jsonify(
+#             {
+#                 "available_providers": available_providers,
+#                 "current_config": {
+#                     "ai1": get_ai_provider_config(config_data, "ai1"),
+#                     "ai2": {
+#                         "executor": get_ai_provider_config(
+#                             config_data, "ai2", "executor"
+#                         ),
+#                         "tester": get_ai_provider_config(config_data, "ai2", "tester"),
+#                         "documenter": get_ai_provider_config(
+#                             config_data, "ai2", "documenter"
+#                         ),
+#                     },
+#                     "ai3": get_ai_provider_config(config_data, "ai3"),
+#                 },
+#             }
+#         )
+#     except Exception as e:
+#         logger.error(f"Error getting providers: {e}")
+#         return jsonify({"error": str(e)}), 500
+
+
+# @app.route("/provider_models", methods=["GET"])
+# async def get_provider_models(provider: str = None):
+#     """Get available models for a specific provider."""
+#     if not provider:
+#         return JSONResponse(
+#             content={"error": "Provider name is required"}, status_code=400
+#         )
+#
+#     try:
+#         # Import the provider functions
+#         from providers import get_provider_models as get_models
+#
+#         # Get available models
+#         models = get_models(provider)
+#         return JSONResponse(content={"models": models})
+#     except Exception as e:
+#         logger.error(f"Error getting models for provider {provider}: {e}")
+#         return JSONResponse(content={"error": str(e)}, status_code=500)
+
+
+# @app.get("/component_fallbacks") # This uses jsonify, prefer the other FastAPI version
+# async def get_component_fallbacks_old(component: str = None): # Renamed to avoid conflict
+#     """Get fallback providers for a specific AI component."""
+#     if not component:
+#         return {"error": "Component parameter is required"}, 400
+#
+#     try:
+#         # Parse component to get AI and role
+#         parts = component.split("-")
+#         ai = parts[0]
+#
+#         # Handle AI2 with specific role
+#         role = parts[1] if len(parts) > 1 else None
+#
+#         # Import provider functions
+#         from providers import get_component_fallbacks as get_fallbacks
+#
+#         # Get fallbacks
+#         fallbacks = get_fallbacks(ai, role)
+#         return {"fallbacks": fallbacks} # This implicitly becomes JSONResponse in FastAPI
+#     except Exception as e:
+#         logger.error(f"Error getting fallbacks for component {component}: {e}")
+#         return {"error": str(e)}, 500 # This implicitly becomes JSONResponse
+
+
+# @app.route("/component_fallbacks", methods=["GET"])
+# async def get_component_fallbacks():
+#     """Get fallback providers for a specific AI component."""
+#     try:
+#         component = request.args.get("component")
+#         if not component:
+#             return jsonify({"error": "Component name is required"}), 400
+#
+#         # Load configuration
+#         config_data = await load_config()
+#
+#         # Parse component to get AI and role
+#         ai, role = parse_component_name(component)
+#
+#         # Get fallbacks
+#         fallbacks = get_component_fallbacks_config(config_data, ai, role)
+#
+#         return jsonify({"fallbacks": fallbacks})
+#     except Exception as e:
+#         logger.error(f"Error getting fallbacks for component {component}: {e}")
+#         return jsonify({"error": str(e)}), 500
+
+
+# @app.route("/update_providers", methods=["POST"])
+# async def update_providers_old_flask_style(): # Renamed to avoid conflict
+#     """Update provider configuration for all AI components."""
+#     try:
+#         # Get request data
+#         data = request.json # Problematic: uses Flask's request
+#         if not data:
+#             return jsonify({"error": "No data provided"}), 400 # Problematic: uses Flask's jsonify
+#
+#         # Load current configuration
+#         config_data = await load_config() # Problematic: load_config not defined here
+#
+#         # Update AI1 provider
+#         if "ai1" in data:
+#             update_ai_provider_config(config_data, "ai1", data["ai1"]) # update_ai_provider_config might be an issue
+#
+#         # Update AI2 providers
+#         if "ai2" in data:
+#             if "executor" in data["ai2"]:
+#                 update_ai_provider_config(
+#                     config_data, "ai2", data["ai2"]["executor"], "executor"
+#                 )
+#             if "tester" in data["ai2"]:
+#                 update_ai_provider_config(
+#                     config_data, "ai2", data["ai2"]["tester"], "tester"
+#                 )
+#             if "documenter" in data["ai2"]:
+#                 update_ai_provider_config(
+#                     config_data, "ai2", data["ai2"]["documenter"], "documenter"
+#                 )
+#
+#         # Update AI3 provider
+#         if "ai3" in data:
+#             update_ai_provider_config(config_data, "ai3", data["ai3"])
+#
+#         # Save configuration
+#         await save_config(config_data) # Problematic: save_config not defined here
+#
+#         # Return success
+#         return jsonify({"status": "success"}) # Problematic: uses Flask's jsonify
+#     except Exception as e:
+#         logger.error(f"Error updating providers: {e}")
+#         return jsonify({"status": "error", "message": str(e)}), 500 # Problematic: uses Flask's jsonify
+
+
+# ...existing code...
+@app.post("/update_providers")
+async def update_providers(data: dict):
+    """Update provider configuration for all AI components."""
     try:
-        # Get all available providers from ProviderFactory
-        available_providers = list(get_available_provider_types())
+        if not data:
+            return JSONResponse(
+                status_code=400,
+                content={"status": "error", "message": "No data provided"},
+            )
 
-        # Get current AI configuration
-        config_data = await load_config()
+        # Use the global config
+        config_data = config
 
-        # Return data as JSON
-        return jsonify(
-            {
-                "available_providers": available_providers,
-                "current_config": {
-                    "ai1": get_ai_provider_config(config_data, "ai1"),
-                    "ai2": {
-                        "executor": get_ai_provider_config(
-                            config_data, "ai2", "executor"
-                        ),
-                        "tester": get_ai_provider_config(config_data, "ai2", "tester"),
-                        "documenter": get_ai_provider_config(
-                            config_data, "ai2", "documenter"
-                        ),
-                    },
-                    "ai3": get_ai_provider_config(config_data, "ai3"),
+        # Update AI1 provider if included
+        if "ai1" in data:
+            provider_data = data["ai1"]
+            # Ensure 'ai_config' and 'ai1' keys exist
+            config_data.setdefault("ai_config", {}).setdefault("ai1", {})
+            config_data["ai_config"]["ai1"]["provider"] = provider_data.get(
+                "provider"
+            )  # Keep it simple, frontend sends full new provider list
+            config_data["ai_config"]["ai1"]["model"] = provider_data.get("model")
+            config_data["ai_config"]["ai1"]["providers"] = provider_data.get(
+                "providers", []
+            )
+
+        # Update AI2 providers if included
+        if "ai2" in data:
+            ai2_data = data["ai2"]
+            config_data.setdefault("ai_config", {}).setdefault(
+                "ai2", {}
+            )  # Ensures config_data["ai_config"]["ai2"] exists
+
+            # Corrected logic for AI2:
+            # Get the ai2_config dict from the global config
+            ai2_actual_config = config_data["ai_config"]["ai2"]
+            # Ensure the "providers" key (which holds the dictionary of roles to provider lists) exists
+            ai2_actual_config.setdefault("providers", {})
+
+            for role in ["executor", "tester", "documenter"]:
+                if role in ai2_data:  # ai2_data is data["ai2"] from the request
+                    role_specific_data_from_request = ai2_data[
+                        role
+                    ]  # This is data for a specific role, e.g., data.ai2.executor
+
+                    # Ensure the role key exists under "ai_config.ai2.providers" and is a list
+                    ai2_actual_config["providers"].setdefault(role, [])
+                    # Update the list of providers for that role
+                    ai2_actual_config["providers"][role] = (
+                        role_specific_data_from_request.get("providers", [])
+                    )
+
+        # Update AI3 provider if included
+        if "ai3" in data:
+            provider_data = data["ai3"]
+            config_data.setdefault("ai_config", {}).setdefault("ai3", {})
+            config_data["ai_config"]["ai3"]["providers"] = provider_data.get(
+                "providers", []
+            )
+            config_data["ai_config"]["ai3"]["model"] = provider_data.get("model")
+            # structure_providers for AI3 is separate
+            if "structure_providers" in provider_data:
+                config_data["ai_config"]["ai3"]["structure_providers"] = (
+                    provider_data.get("structure_providers", [])
+                )
+
+        # Save the updated configuration asynchronously
+        try:
+            async with aiofiles.open(CONFIG_FILE, "w", encoding="utf-8") as f:
+                await f.write(json.dumps(config_data, indent=4, ensure_ascii=False))
+            logger.info("Provider configuration updated successfully")
+        except Exception as e:
+            logger.error(f"Failed to save configuration: {e}", exc_info=True)
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "status": "error",
+                    "message": f"Failed to save configuration: {e}",
                 },
+            )
+
+        # Return success
+        return JSONResponse(
+            content={
+                "status": "success",
+                "message": "Provider configuration updated successfully",
             }
         )
     except Exception as e:
-        logger.error(f"Error getting providers: {e}")
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/provider_models", methods=["GET"])
-async def get_provider_models(provider: str = None):
-    """Get available models for a specific provider."""
-    if not provider:
+        logger.error(f"Error updating providers: {e}", exc_info=True)
         return JSONResponse(
-            content={"error": "Provider name is required"}, status_code=400
+            status_code=500,
+            content={"status": "error", "message": f"Error updating providers: {e}"},
         )
 
-    try:
-        # Import the provider functions
-        from providers import get_provider_models as get_models
 
-        # Get available models
-        models = get_models(provider)
-        return JSONResponse(content={"models": models})
-    except Exception as e:
-        logger.error(f"Error getting models for provider {provider}: {e}")
-        return JSONResponse(content={"error": str(e)}, status_code=500)
-
-
-@app.get("/component_fallbacks")
-async def get_component_fallbacks(component: str = None):
-    """Get fallback providers for a specific AI component."""
-    if not component:
-        return {"error": "Component parameter is required"}, 400
-
-    try:
-        # Parse component to get AI and role
-        parts = component.split("-")
-        ai = parts[0]
-
-        # Handle AI2 with specific role
-        role = parts[1] if len(parts) > 1 else None
-
-        # Import provider functions
-        from providers import get_component_fallbacks as get_fallbacks
-
-        # Get fallbacks
-        fallbacks = get_fallbacks(ai, role)
-        return {"fallbacks": fallbacks}
-    except Exception as e:
-        logger.error(f"Error getting fallbacks for component {component}: {e}")
-        return {"error": str(e)}, 500
-
-
-@app.route("/component_fallbacks", methods=["GET"])
-async def get_component_fallbacks():
-    """Get fallback providers for a specific AI component."""
-    try:
-        component = request.args.get("component")
-        if not component:
-            return jsonify({"error": "Component name is required"}), 400
-
-        # Load configuration
-        config_data = await load_config()
-
-        # Parse component to get AI and role
-        ai, role = parse_component_name(component)
-
-        # Get fallbacks
-        fallbacks = get_component_fallbacks_config(config_data, ai, role)
-
-        return jsonify({"fallbacks": fallbacks})
-    except Exception as e:
-        logger.error(f"Error getting fallbacks for component {component}: {e}")
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/update_providers", methods=["POST"])
-async def update_providers():
-    """Update provider configuration for all AI components."""
-    try:
-        # Get request data
-        data = request.json
-        if not data:
-            return jsonify({"error": "No data provided"}), 400
-
-        # Load current configuration
-        config_data = await load_config()
-
-        # Update AI1 provider
-        if "ai1" in data:
-            update_ai_provider_config(config_data, "ai1", data["ai1"])
-
-        # Update AI2 providers
-        if "ai2" in data:
-            if "executor" in data["ai2"]:
-                update_ai_provider_config(
-                    config_data, "ai2", data["ai2"]["executor"], "executor"
-                )
-            if "tester" in data["ai2"]:
-                update_ai_provider_config(
-                    config_data, "ai2", data["ai2"]["tester"], "tester"
-                )
-            if "documenter" in data["ai2"]:
-                update_ai_provider_config(
-                    config_data, "ai2", data["ai2"]["documenter"], "documenter"
-                )
-
-        # Update AI3 provider
-        if "ai3" in data:
-            update_ai_provider_config(config_data, "ai3", data["ai3"])
-
-        # Save configuration
-        await save_config(config_data)
-
-        # Return success
-        return jsonify({"status": "success"})
-    except Exception as e:
-        logger.error(f"Error updating providers: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 500
+# ...existing code...
 
 
 # Helper functions for provider configuration
@@ -3533,7 +3641,9 @@ async def update_providers(data: dict):
         # Save the updated configuration
         try:
             with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-                json.dump(config_data, f, indent=4)
+                json.dump(
+                    config_data, f, indent=4, ensure_ascii=False
+                )  # Added ensure_ascii=False
             logger.info("Provider configuration updated successfully")
         except Exception as e:
             logger.error(f"Failed to save configuration: {e}")
@@ -3562,21 +3672,42 @@ async def get_provider_models_endpoint(
     Ensures that the provider name is correctly passed as a string.
     """
     try:
-        models = providers.get_provider_models(provider)
-        return JSONResponse(content=models)
-    except ValueError as ve:  # Catch specific errors like unsupported provider
-        logger.warning(f"Error getting models for provider '{provider}': {ve}")
-        raise HTTPException(status_code=400, detail=str(ve))
+        from providers import (
+            get_provider_models as get_models,
+        )  # Assuming this function exists in providers.py
+
+        # Assuming get_models is an async function or a synchronous one that is safe to await indirectly
+        # If get_models is purely synchronous and potentially blocking,
+        # it should be run in a thread pool:
+        # models = await asyncio.get_event_loop().run_in_executor(None, get_models, provider)
+        models = await get_models(provider)  # If get_models is async
+
+        return JSONResponse(content={"models": models})
+    except ImportError:
+        logger.error(
+            "Failed to import 'get_provider_models' from providers.py for /provider_models endpoint"
+        )
+        return JSONResponse(
+            content={
+                "status": "error",
+                "message": "Model fetching mechanism not found on server.",
+            },
+            status_code=500,
+        )
     except Exception as e:
         logger.error(
-            f"API Error getting models for provider '{provider}': {e}", exc_info=True
+            f"Error getting models for provider '{provider}': {e}", exc_info=True
         )
-        raise HTTPException(
+        return JSONResponse(
+            content={
+                "status": "error",
+                "message": f"Error getting models for provider {provider}: {str(e)}",
+            },
             status_code=500,
-            detail=f"Internal server error while getting models for provider '{provider}'.",
         )
 
 
+# ...existing code...
 @app.get("/component_fallbacks")
 async def get_component_fallbacks(component: str = None):
     """Get fallback providers for a specific AI component."""
@@ -3604,184 +3735,54 @@ async def get_component_fallbacks(component: str = None):
 
 @app.route("/component_fallbacks", methods=["GET"])
 async def get_component_fallbacks():
-    """Get fallback providers for a specific AI component."""
+    """Returns fallback providers for a specific component."""
+    component = request.args.get("component")
+    if not component:
+        return jsonify({"error": "Component name is required"}), 400
+
     try:
-        component = request.args.get("component")
-        if not component:
-            return jsonify({"error": "Component name is required"}), 400
-
-        # Load configuration
-        config_data = await load_config()
-
-        # Parse component to get AI and role
+        config_data = await load_config()  # Ensure load_config is available and async
         ai, role = parse_component_name(component)
-
-        # Get fallbacks
         fallbacks = get_component_fallbacks_config(config_data, ai, role)
-
         return jsonify({"fallbacks": fallbacks})
     except Exception as e:
-        logger.error(f"Error getting fallbacks for component {component}: {e}")
+        logger.error(f"Error getting component fallbacks for {component}: {e}")
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/update_providers", methods=["POST"])
-async def update_providers():
-    """Update provider configuration for all AI components."""
-    try:
-        # Get request data
-        data = request.json
-        if not data:
-            return jsonify({"error": "No data provided"}), 400
-
-        # Load current configuration
-        config_data = await load_config()
-
-        # Update AI1 provider
-        if "ai1" in data:
-            update_ai_provider_config(config_data, "ai1", data["ai1"])
-
-        # Update AI2 providers
-        if "ai2" in data:
-            if "executor" in data["ai2"]:
-                update_ai_provider_config(
-                    config_data, "ai2", data["ai2"]["executor"], "executor"
-                )
-            if "tester" in data["ai2"]:
-                update_ai_provider_config(
-                    config_data, "ai2", data["ai2"]["tester"], "tester"
-                )
-            if "documenter" in data["ai2"]:
-                update_ai_provider_config(
-                    config_data, "ai2", data["ai2"]["documenter"], "documenter"
-                )
-
-        # Update AI3 provider
-        if "ai3" in data:
-            update_ai_provider_config(config_data, "ai3", data["ai3"])
-
-        # Save configuration
-        await save_config(config_data)
-
-        # Return success
-        return jsonify({"status": "success"})
-    except Exception as e:
-        logger.error(f"Error updating providers: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 500
+# Removed conflicting/Flask-style /update_providers endpoint previously here (around lines 3630-3655)
+# @app.route("/update_providers", methods=["POST"])
+# async def update_providers():
+#     """Updates provider configuration (OpenAI, Anthropic, etc.)."""
+#     try:
+#         data = request.json
+#         if not data:
+#             return jsonify({"error": "No data provided"}), 400
+#
+#         # Load current config
+#         config_data = await load_config() # Ensure load_config is async or handle appropriately
+#
+#         # Update AI1
+#         if "ai1" in data:
+#             update_ai_provider_config(config_data, "ai1", data["ai1"])
+#
+#         # Update AI2 (executor, tester, documenter)
+#         if "ai2" in data:
+#             for role in ["executor", "tester", "documenter"]:
+#                 if role in data["ai2"]:
+#                     update_ai_provider_config(config_data, "ai2", data["ai2"][role], role)
+#
+#         # Update AI3
+#         if "ai3" in data:
+#             update_ai_provider_config(config_data, "ai3", data["ai3"])
+#
+#         # Save updated config
+#         await save_config(config_data) # Ensure save_config is async or handle appropriately
+#
+#         return jsonify({"status": "success"})
+#     except Exception as e:
+#         logger.error(f"Error updating providers: {e}")
+#         return jsonify({"status": "error", "message": str(e)}), 500
 
 
 # Helper functions for provider configuration
-
-
-def get_available_provider_types():
-    """Get all available provider types."""
-    # List of all provider types supported by our system
-    return [
-        "openai",
-        "anthropic",
-        "groq",
-        "local",
-        "ollama",
-        "openrouter",
-        "cohere",
-        "gemini",
-        "together",
-        "codestral",
-        "gemini3",
-        "gemini4",
-        "tugezer",
-        "fallback",
-    ]
-
-
-def parse_component_name(component):
-    """Parse component name into AI and role."""
-    if component == "ai1":
-        return "ai1", None
-    elif component == "ai3":
-        return "ai3", None
-    elif component.startswith("ai2-"):
-        role = component.split("-")[1]
-        return "ai2", role
-    else:
-        raise ValueError(f"Invalid component name: {component}")
-
-
-def get_ai_provider_config(config, ai, role=None):
-    """Get provider configuration for an AI component."""
-    if ai == "ai1":
-        provider_config = config.get("ai1_provider", {})
-    elif ai == "ai2" and role:
-        providers = config.get("ai2_providers", {})
-        provider_config = providers.get(role, {})
-    elif ai == "ai3":
-        provider_config = config.get("ai3_provider", {})
-    else:
-        provider_config = {}
-
-    return {
-        "provider": provider_config.get("type", "openai"),
-        "model": provider_config.get("model", ""),
-        "fallbacks": get_component_fallbacks_config(config, ai, role),
-    }
-
-
-def get_component_fallbacks_config(config, ai, role=None):
-    """Get fallback providers for an AI component."""
-    if ai == "ai1":
-        provider_config = config.get("ai1_provider", {})
-    elif ai == "ai2" and role:
-        providers = config.get("ai2_providers", {})
-        provider_config = providers.get(role, {})
-    elif ai == "ai3":
-        provider_config = config.get("ai3_provider", {})
-    else:
-        provider_config = {}
-
-    fallbacks = []
-    if provider_config.get("type") == "fallback":
-        fallback_providers = provider_config.get("providers", [])
-        for p in fallback_providers:
-            fallbacks.append(
-                {"provider": p.get("type", ""), "model": p.get("model", "")}
-            )
-
-    return fallbacks
-
-
-def update_ai_provider_config(config, ai, provider_data, role=None):
-    """Update provider configuration for an AI component."""
-    provider_type = provider_data.get("provider", "openai")
-    model = provider_data.get("model", "")
-    fallbacks = provider_data.get("fallbacks", [])
-
-    # Create provider config
-    if fallbacks and len(fallbacks) > 0:
-        # Use fallback provider with the specified providers
-        provider_config = {"type": "fallback", "providers": []}
-
-        # Add first provider
-        provider_config["providers"].append({"type": provider_type, "model": model})
-
-        # Add fallback providers
-        for fallback in fallbacks:
-            fallback_type = fallback.get("provider")
-            fallback_model = fallback.get("model", "")
-
-            if fallback_type:
-                provider_config["providers"].append(
-                    {"type": fallback_type, "model": fallback_model}
-                )
-    else:
-        # Use a single provider
-        provider_config = {"type": provider_type, "model": model}
-
-    # Update config
-    if ai == "ai1":
-        config["ai1_provider"] = provider_config
-    elif ai == "ai2" and role:
-        if "ai2_providers" not in config:
-            config["ai2_providers"] = {}
-        config["ai2_providers"][role] = provider_config
-    elif ai == "ai3":
-        config["ai3_provider"] = provider_config

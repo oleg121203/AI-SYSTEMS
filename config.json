@@ -58,48 +58,29 @@
     ],
     "ai_config": {
         "ai1": {
-            "providers": [
-                "ai1_fallback",
-                "ollama",
-                "gemini3"
-            ],
-            "model": "qwen3:latest",
+            "providers": [],
+            "model": "",
             "max_tokens": 2048,
-            "temperature": 0.7
+            "temperature": 0.7,
+            "provider": "ollama"
         },
         "ai2": {
             "providers": {
-                "executor": [
-                    "executor_fallback",
-                    "codestral",
-                    "groq"
-                ],
-                "tester": [
-                    "tester_fallback",
-                    "codestral",
-                    "groq"
-                ],
-                "documenter": [
-                    "documenter_fallback",
-                    "codestral2",
-                    "gemini4"
-                ]
+                "executor": [],
+                "tester": [],
+                "documenter": []
             },
             "max_tokens": 2048,
             "temperature": 0.4
         },
         "ai3": {
-            "providers": [
-                "ai3_fallback",
-                "ollama1",
-                "together"
-            ],
+            "providers": [],
             "structure_providers": [
                 "structure_fallback",
                 "codestral2",
                 "gemini"
             ],
-            "model": "codestral-latest",
+            "model": "",
             "max_tokens": 2048,
             "temperature": 0.7
         }
@@ -108,7 +89,7 @@
         "ollama": {
             "type": "ollama",
             "endpoint": "http://host.docker.internal:11434",
-            "model": "qwen3:latest"
+            "model": "qwen2.5:1.5b"
         },
         "ollama1": {
             "type": "ollama",
@@ -322,7 +303,7 @@
         "fallback_enabled": true
     },
     "desired_active_buffer": 20,
-    "ai1_desired_active_buffer": 5,
+    "ai1_desired_active_buffer": 10,
     "ai1_active_sleep_interval": 3,
     "ai1_pending_sleep_interval": 5,
     "ai1_idle_sleep_interval": 10,

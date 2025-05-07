@@ -11,9 +11,17 @@
     "coverage": 0.3
   },
   "metrics_by_role": {
-    "executor": ["syntax_score", "readability"],
-    "tester": ["tests_passed", "coverage"],
-    "documenter": ["readability"]
+    "executor": [
+      "syntax_score",
+      "readability"
+    ],
+    "tester": [
+      "tests_passed",
+      "coverage"
+    ],
+    "documenter": [
+      "readability"
+    ]
   },
   "ai1_prompt": "Your goal is {target}. You are the main curator (AI1), the only one who makes all key decisions to create a working product. The development process is divided into three stages and must run in a continuous loop until completed. NEVER STOP AFTER RECEIVING THE STRUCTURE. ALWAYS CONTINUE TO THE NEXT STEP.\\n\\n**Stage 1**: First, you must align the project structure with AI3 through debates and discussions to determine the best file structure. Once the structure is agreed upon, it is put into action, and only then are the files created once. Changes to the structure are possible only in critical moments at your discretion.\\n\\n**Stage 2**: After the files are created, you MUST IMMEDIATELY create subtasks for EACH FILE in the structure and distribute these subtasks to AI2 to generate code, tests, or documentation. First, create executor subtasks for all files. After receiving implementation for a file, create tester and documenter subtasks for the same file.\\n\\n**Stage 3**: Analyze reports from AI2 and ensure AI3 updates the files with the latest content. Assign testing subtasks to AI2, analyze test results (including recommendations from AI3), and make adjustments until the product is complete. **You will also receive monitoring reports (about errors, worker status, queue load) and detailed test analysis from AI3 via collaboration; use this information proactively to prioritize tasks, request fixes, and manage the development flow.** The final decision is always yours.\\n\\nWhen generating subtasks, specify the role as one of: executor, tester, or documenter. For example:\\nSubtask text: Implement the main logic\\nRole: executor\\nFile: main.py\\nOnly these roles are allowed.\\n\\nCONTINUOUSLY MONITOR status and create new subtasks until ALL FILES are implemented, tested and documented.",
   "ai2_prompts": [
@@ -50,23 +58,47 @@
   ],
   "ai_config": {
     "ai1": {
-      "providers": ["ai1_fallback", "ollama", "gemini3"],
-      "model": "qwen3:latest",
+      "providers": [
+        "ai1_fallback",
+        "ollama",
+        "gemini3"
+      ],
+      "model": "qwen2.5:1.5b",
       "max_tokens": 2048,
       "temperature": 0.7
     },
     "ai2": {
       "providers": {
-        "executor": ["executor_fallback", "codestral", "groq"],
-        "tester": ["tester_fallback", "codestral", "groq"],
-        "documenter": ["documenter_fallback", "codestral2", "gemini4"]
+        "executor": [
+          "executor_fallback",
+          "codestral",
+          "groq"
+        ],
+        "tester": [
+          "tester_fallback",
+          "codestral",
+          "groq"
+        ],
+        "documenter": [
+          "documenter_fallback",
+          "codestral2",
+          "gemini4"
+        ]
       },
       "max_tokens": 2048,
       "temperature": 0.4
     },
     "ai3": {
-      "providers": ["ai3_fallback", "ollama1", "together"],
-      "structure_providers": ["structure_fallback", "codestral2", "gemini"],
+      "providers": [
+        "ai3_fallback",
+        "ollama1",
+        "together"
+      ],
+      "structure_providers": [
+        "structure_fallback",
+        "codestral2",
+        "gemini"
+      ],
       "model": "codestral-latest",
       "max_tokens": 2048,
       "temperature": 0.7
@@ -76,7 +108,7 @@
     "ollama": {
       "type": "ollama",
       "endpoint": "http://host.docker.internal:11434",
-      "model": "qwen3:latest"
+      "model": "qwen2.5:1.5b"
     },
     "ollama1": {
       "type": "ollama",
@@ -153,85 +185,135 @@
       "model": "google/gemini-pro-1.5",
       "max_tokens": 1024
     },
-
     "executor_fallback": {
       "type": "fallback",
       "providers": [
-        { "type": "codestral", "model": "codestral-latest" },
-        { "type": "groq", "model": "llama3-70b-8192" },
-        { "type": "gemini3", "model": "gemini-2.0-flash" },
-        { "type": "ollama", "model": "qwen3:latest" }
+        {
+          "type": "codestral",
+          "model": "codestral-latest"
+        },
+        {
+          "type": "groq",
+          "model": "llama3-70b-8192"
+        },
+        {
+          "type": "gemini3",
+          "model": "gemini-2.0-flash"
+        },
+        {
+          "type": "ollama",
+          "model": "qwen3:latest"
+        }
       ]
     },
     "tester_fallback": {
       "type": "fallback",
       "providers": [
-        { "type": "codestral", "model": "codestral-latest" },
-        { "type": "groq", "model": "llama3-70b-8192" },
-        { "type": "gemini", "model": "gemini-1.5-flash" }
+        {
+          "type": "codestral",
+          "model": "codestral-latest"
+        },
+        {
+          "type": "groq",
+          "model": "llama3-70b-8192"
+        },
+        {
+          "type": "gemini",
+          "model": "gemini-1.5-flash"
+        }
       ]
     },
     "documenter_fallback": {
       "type": "fallback",
       "providers": [
-        { "type": "codestral2", "model": "codestral-latest" },
-        { "type": "gemini4", "model": "gemini-2.0-pro" },
-        { "type": "cohere", "model": "command-r" }
+        {
+          "type": "codestral2",
+          "model": "codestral-latest"
+        },
+        {
+          "type": "gemini4",
+          "model": "gemini-2.0-pro"
+        },
+        {
+          "type": "cohere",
+          "model": "command-r"
+        }
       ]
     },
     "ai1_fallback": {
       "type": "fallback",
       "providers": [
-        { "type": "ollama", "model": "qwen3:latest" },
+        {
+          "type": "ollama",
+          "model": "qwen3:latest"
+        },
         {
           "type": "openrouter-qwen",
           "model": "qwen/qwen-2.5-coder-32b-instruct"
         },
-        { "type": "gemini3", "model": "gemini-2.0-flash" }
+        {
+          "type": "gemini3",
+          "model": "gemini-2.0-flash"
+        }
       ]
     },
     "ai3_fallback": {
       "type": "fallback",
       "providers": [
-        { "type": "ollama1", "model": "llama3.2:latest" },
+        {
+          "type": "ollama1",
+          "model": "llama3.2:latest"
+        },
         {
           "type": "openrouter-qwen",
           "model": "qwen/qwen-2.5-coder-32b-instruct"
         },
-        { "type": "together", "model": "mistralai/Mixtral-8x7B-Instruct-v0.1" }
+        {
+          "type": "together",
+          "model": "mistralai/Mixtral-8x7B-Instruct-v0.1"
+        }
       ]
     },
     "structure_fallback": {
       "type": "fallback",
       "providers": [
-        { "type": "codestral2", "model": "codestral-latest" },
-        { "type": "gemini", "model": "gemini-1.5-flash" },
-        { "type": "ollama1", "model": "llama3.2:latest" }
+        {
+          "type": "codestral2",
+          "model": "codestral-latest"
+        },
+        {
+          "type": "gemini",
+          "model": "gemini-1.5-flash"
+        },
+        {
+          "type": "ollama1",
+          "model": "llama3.2:latest"
+        }
       ]
     }
   },
   "request_delays": {
     "ai1": {
-      "min": 0.1,
-      "max": 0.5
+      "min": 1.5,
+      "max": 3.0
     },
     "ai2": {
       "executor": {
-        "min": 0.5,
+        "min": 2.5,
         "max": 5.0
       },
       "tester": {
-        "min": 0.5,
+        "min": 2.5,
         "max": 5.0
       },
       "documenter": {
-        "min": 0.5,
-        "max": 8.5
+        "min": 2.5,
+        "max": 5.0
       }
     },
     "ai3": {
-      "min": 0.5,
-      "max": 8.5
+      "min": 2.5,
+      "max": 5.0
     }
   },
   "error_handling": {
@@ -240,10 +322,11 @@
     "fallback_enabled": true
   },
   "desired_active_buffer": 20,
-  "ai1_desired_active_buffer": 5,
+  "ai1_desired_active_buffer": 10,
   "ai1_active_sleep_interval": 3,
   "ai1_pending_sleep_interval": 5,
   "ai1_idle_sleep_interval": 10,
   "github_repo": "oleg121203/AI-SYSTEMS-REPO",
-  "github_actions_check_interval": 60
+  "github_actions_check_interval": 60,
+  "system_load_level": 1
 }
