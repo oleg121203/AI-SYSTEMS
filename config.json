@@ -75,7 +75,7 @@
                     "codestral2"
                 ],
                 "documenter": [
-                    "ollama"
+                    "ollama1"
                 ]
             },
             "max_tokens": 2048,
@@ -89,7 +89,7 @@
                 "model": "codestral-latest"
             },
             "documenter": {
-                "provider": "ollama",
+                "provider": "ollama1",
                 "model": "qwen2.5:1.5b"
             }
         },
@@ -102,10 +102,10 @@
                 "structure_fallback",
                 "gemini"
             ],
-            "model": "codestral-latest",
+            "model": "gemini-2.5-pro-preview-03-25",
             "max_tokens": 2048,
             "temperature": 0.7,
-            "provider": "codestral2",
+            "provider": "gemini-pro2.5",
             "structure_provider": "codestral2",
             "structure_model": "codestral-latest"
         }
@@ -300,26 +300,26 @@
     },
     "request_delays": {
         "ai1": {
-            "min": 1.0,
-            "max": 2.0
+            "min": 4.0,
+            "max": 7.0
         },
         "ai2": {
             "executor": {
-                "min": 1.5,
-                "max": 3.0
+                "min": 6.0,
+                "max": 10.0
             },
             "tester": {
-                "min": 1.5,
-                "max": 3.0
+                "min": 5.0,
+                "max": 9.0
             },
             "documenter": {
-                "min": 1.5,
-                "max": 3.0
+                "min": 5.0,
+                "max": 8.0
             }
         },
         "ai3": {
-            "min": 1.5,
-            "max": 3.0
+            "min": 7.0,
+            "max": 9.0
         }
     },
     "error_handling": {
@@ -328,11 +328,11 @@
         "fallback_enabled": true
     },
     "desired_active_buffer": 20,
-    "ai1_desired_active_buffer": 10,
+    "ai1_desired_active_buffer": 5,
     "ai1_active_sleep_interval": 3,
     "ai1_pending_sleep_interval": 5,
     "ai1_idle_sleep_interval": 10,
     "github_repo": "oleg121203/AI-SYSTEMS-REPO",
     "github_actions_check_interval": 60,
-    "system_load_level": 2
+    "system_load_level": 1
 }

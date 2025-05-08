@@ -502,16 +502,32 @@ function createTaskListItem(task) {
   const statusIcon = document.createElement("span");
   statusIcon.className = "status-icon";
   try {
-    statusIcon.innerHTML = getStatusIcon(status);
+    statusIcon.innerHTML = getStatusIcon(status); // Ensure getStatusIcon returns HTML string
   } catch (e) {
-    console.error(`Error getting status icon for status '${status}':`, e);
-    statusIcon.innerHTML = '<i class="fas fa-question-circle"></i>';
+    console.error("Error setting status icon:", e);
+    statusIcon.innerHTML = getStatusIcon("unknown"); // Fallback icon
   }
 
   // Create filename display
   const taskFilename = document.createElement("span");
   taskFilename.className = "task-filename";
   taskFilename.textContent = task.filename || `Task ${task.id.substring(0, 8)}`;
+
+  // NEW: Create action and short summary display
+  const taskActionSummary = document.createElement("span");
+  taskActionSummary.className = "task-action-summary";
+  let actionSummaryText = "";
+  if (task.action) {
+    actionSummaryText += `[${task.action}] `;
+  }
+  if (task.short_summary) {
+    actionSummaryText += task.short_summary;
+  }
+  // Only add the hyphen if there's actual text to display
+  if (actionSummaryText.trim()) {
+    taskActionSummary.textContent = ` - ${actionSummaryText.trim()}`;
+  }
+  // END NEW
 
   // Create task ID display (shortened)
   const taskIdSpan = document.createElement("span");
@@ -521,12 +537,18 @@ function createTaskListItem(task) {
   // Assemble the summary section
   summaryDiv.appendChild(statusIcon);
   summaryDiv.appendChild(taskFilename);
+  // NEW: Only append if there's content
+  if (taskActionSummary.textContent) {
+    summaryDiv.appendChild(taskActionSummary);
+  }
+  // END NEW
   summaryDiv.appendChild(taskIdSpan);
   li.appendChild(summaryDiv);
 
   // Create details section (initially hidden)
   const detailsDiv = document.createElement("div");
   detailsDiv.className = "task-details";
+  // Ensure task.text (full details from AI1) is still shown here
   detailsDiv.textContent = task.text || "No details available";
   li.appendChild(detailsDiv);
 
@@ -707,15 +729,36 @@ function updateCharts(data) {
 
   // Initialize charts if they don't exist
   if (!taskChart || !progressChart || !gitChart || !statusPieChart) {
-    initializeCharts();
+    console.log("One or more charts not initialized. Initializing...");
+    initializeCharts(); // Ensure all charts are created
+    // Check again after initialization
+    if (!taskChart || !progressChart || !gitChart || !statusPieChart) {
+      console.error("Failed to initialize charts. Aborting updateCharts.");
+      return;
+    }
   }
 
   let chartsUpdated = false;
 
-  if (updateTaskChartData(data.queues)) chartsUpdated = true;
+  if (data.queues && updateTaskChartData(data.queues)) chartsUpdated = true;
+
   // --- REORDERED: Update Status Pie Chart second ---
-  if (updateStatusPieChartData(data.task_status_distribution))
-    chartsUpdated = true;
+  if (data.task_status_distribution) {
+    if (updateStatusPieChartData(data.task_status_distribution))
+      chartsUpdated = true;
+
+    // NEW: Update text stats for Processing and Failed tasks
+    if (statElements.processing) {
+      statElements.processing.textContent =
+        data.task_status_distribution.processing || 0;
+    }
+    if (statElements.failed) {
+      statElements.failed.textContent =
+        data.task_status_distribution.failed || 0;
+    }
+    // END NEW
+  }
+
   // --- REORDERED: Update Progress Chart third ---
   if (updateProgressChartData(data.progress_data, data.git_activity))
     chartsUpdated = true;
@@ -1903,6 +1946,10 @@ document.addEventListener("DOMContentLoaded", () => {
   statElements = {
     total: document.getElementById("total-tasks"),
     completed: document.getElementById("completed-tasks"),
+    // NEW
+    processing: document.getElementById("processing-tasks"),
+    failed: document.getElementById("failed-tasks"),
+    // END NEW
     efficiency: document.getElementById("efficiency"),
   };
 

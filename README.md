@@ -106,8 +106,9 @@ The AI3 system uses a two-stage approach to project structure generation:
 
 2.  **Planning and Coordination (AI1):**
     - AI1 receives the project structure and idea.md content from the MCP API.
-    - Uses idea.md as context for all tasks.
+    - Uses idea.md as the primary context for understanding the project's objectives and scope.
     - Analyzes file dependencies and the overall project graph to create an optimized task execution plan.
+    - Decomposes the overall project goal (derived from the `target` configuration and `idea.md`) into specific, actionable tasks for AI2. Each task for AI2 will be focused on a particular file or component and will include the necessary context from `idea.md` and details about its dependencies.
     - Prioritizes tasks to ensure that foundational files are processed before dependent files, minimizing rework and obsolete tasks.
     - Dynamically adjusts the plan based on the results of completed tasks and test feedback.
     - Determines priorities of different task types using LLM.
