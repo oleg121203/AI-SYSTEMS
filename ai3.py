@@ -53,6 +53,103 @@ REPO_PREFIX = "/repo/"  # Used in handle_ai2_output
 # --- END MODIFIED IMPORTS AND GLOBAL SETUP ---
 
 
+def update_structure_provider_in_config(
+    config_data: Dict[str, Any], provider_name: str
+) -> None:
+    """
+    Updates the config.json file to save the successful structure provider.
+
+    Args:
+        config_data: The current configuration data
+        provider_name: The name of the successful provider to save
+    """
+    try:
+        # Make a copy of the config to avoid modifying the original during runtime
+        updated_config = copy.deepcopy(config_data)
+
+        # Ensure ai_config and ai3 sections exist
+        if "ai_config" not in updated_config:
+            updated_config["ai_config"] = {}
+        if "ai3" not in updated_config["ai_config"]:
+            updated_config["ai_config"]["ai3"] = {}
+
+        # Update structure_provider to the successful provider
+        updated_config["ai_config"]["ai3"]["structure_provider"] = provider_name
+
+        # Select the appropriate model for this provider
+        model = None
+        if provider_name == "structure_fallback":
+            # For fallback provider, don't set a global model as each sub-provider has its own
+            pass
+        elif provider_name == "codestral2":
+            # Use codestral-latest for codestral2 provider
+            model = "codestral-latest"
+        elif provider_name == "gemini":
+            # Use gemini-1.5-flash for gemini provider
+            model = "gemini-1.5-flash"
+        elif provider_name == "ollama1":
+            # Use llama3.2:latest for ollama1 provider
+            model = "llama3.2:latest"
+        elif (
+            "providers" in updated_config
+            and provider_name in updated_config["providers"]
+        ):
+            # For other providers, use their configured model
+            model = updated_config["providers"][provider_name].get("model")
+
+        # Update the model in config if we found one
+        if model:
+            updated_config["ai_config"]["ai3"]["model"] = model
+
+        # If structure_providers list exists, ensure this provider is first in the list
+        if "structure_providers" in updated_config["ai_config"]["ai3"]:
+            providers_list = updated_config["ai_config"]["ai3"]["structure_providers"]
+            # Remove provider if it's already in the list
+            if provider_name in providers_list:
+                providers_list.remove(provider_name)
+            # Add provider at the beginning
+            providers_list.insert(0, provider_name)
+        else:
+            # Create structure_providers list if it doesn't exist
+            updated_config["ai_config"]["ai3"]["structure_providers"] = [
+                provider_name,
+                "codestral",
+                "gemini",
+            ]
+
+        # Write the updated config back to file
+        with open("config.json", "w") as f:
+            json.dump(updated_config, f, indent=4)
+
+        logger.info(
+            f"[AI3] Successfully updated config.json with structure provider: {provider_name}"
+        )
+
+        # Also update the config_data in memory to reflect the change
+        if "ai_config" in config_data and "ai3" in config_data["ai_config"]:
+            config_data["ai_config"]["ai3"]["structure_provider"] = provider_name
+            # Update model in memory too if we found one
+            if model:
+                config_data["ai_config"]["ai3"]["model"] = model
+
+            if "structure_providers" in config_data["ai_config"]["ai3"]:
+                if (
+                    provider_name
+                    in config_data["ai_config"]["ai3"]["structure_providers"]
+                ):
+                    config_data["ai_config"]["ai3"]["structure_providers"].remove(
+                        provider_name
+                    )
+                config_data["ai_config"]["ai3"]["structure_providers"].insert(
+                    0, provider_name
+                )
+
+    except Exception as e:
+        logger.error(
+            f"[AI3] Error updating structure provider in config: {e}", exc_info=True
+        )
+
+
 async def _initialize_repository(repo_path: str) -> Optional[Repo]:
     # ...existing code...
     try:
@@ -277,6 +374,14 @@ async def generate_structure(
     )
     ai3_config = config_data.get("ai_config", {}).get("ai3", {})
 
+    # Get UI-selected structure provider and model from config
+    # These are saved by the frontend via saveProviderConfig
+    ui_selected_structure_provider = ai3_config.get("structure_provider")
+    ui_selected_structure_model = ai3_config.get("structure_model")
+    logger.info(
+        f"[AI3] UI configured structure_provider: {ui_selected_structure_provider}, structure_model: {ui_selected_structure_model}"
+    )
+
     # Determine providers for Cycle 1 (Initial Generation)
     providers_to_try_cycle1: List[str] = []
     specific_structure_provider = ai3_config.get("structure_provider")
@@ -365,24 +470,58 @@ async def generate_structure(
             )
             continue
 
-        provider_model = merged_config_for_provider.get("model")
+        provider_model = merged_config_for_provider.get(
+            "model"
+        )  # This is the default model for the provider from its own config block
 
-        # Handle specific models for each provider
-        if provider_name == "structure_fallback":
-            # For fallback provider, don't specify a model so each sub-provider uses its own
-            model_to_use = None
-        elif provider_name == "codestral2":
-            # Explicitly use codestral-latest for codestral provider
-            model_to_use = "codestral-latest"
-        elif provider_name == "gemini":
-            # Explicitly use gemini-1.5-flash for gemini provider
-            model_to_use = "gemini-1.5-flash"
-        elif provider_name == "ollama1":
-            # Use the configured llama model for ollama provider
-            model_to_use = "llama3.2:latest"
+        model_to_use = provider_model  # Initialize with provider's default model
+
+        # Priority 1: If a specific provider/model is passed for testing (selected_provider_name)
+        # This 'selected_provider_name' is an argument to generate_structure, not from config.json for UI selection.
+        # The UI selection is handled by ui_selected_structure_provider and ui_selected_structure_model.
+
+        # Priority 2: Use UI selected structure_provider and structure_model if current provider_name matches
+        if (
+            provider_name == ui_selected_structure_provider
+            and ui_selected_structure_model
+        ):
+            model_to_use = ui_selected_structure_model
+            logger.info(
+                f"[AI3] Using UI selected structure_model for {provider_name}: {model_to_use}"
+            )
         else:
-            # For other providers, use their configured model from the provider config
-            model_to_use = provider_model
+            # Priority 3: Fallback to existing hardcoded logic or provider's default model
+            # This block is now an 'else' to the UI selection override.
+            if provider_name == "structure_fallback":
+                # For fallback provider, don't specify a model so each sub-provider uses its own
+                model_to_use = None
+                logger.info(
+                    f"[AI3] Provider {provider_name} is a fallback type, model_to_use set to None."
+                )
+            elif provider_name == "codestral2":
+                # Explicitly use codestral-latest for codestral provider
+                model_to_use = "codestral-latest"
+                logger.info(
+                    f"[AI3] Using hardcoded model for {provider_name}: {model_to_use}"
+                )
+            elif provider_name == "gemini":
+                # Explicitly use gemini-1.5-flash for gemini provider
+                model_to_use = "gemini-1.5-flash"
+                logger.info(
+                    f"[AI3] Using hardcoded model for {provider_name}: {model_to_use}"
+                )
+            elif provider_name == "ollama1":
+                # Use the configured llama model for ollama provider
+                model_to_use = "llama3.2:latest"  # Example, could also be from merged_config_for_provider.get("model") if that's more dynamic
+                logger.info(
+                    f"[AI3] Using hardcoded model for {provider_name}: {model_to_use}"
+                )
+            # else: model_to_use remains provider_model (provider's default), which is correct.
+            # No specific log needed here as it's the default path.
+
+        logger.info(
+            f"[AI3] Final model_to_use for provider {provider_name}: {model_to_use}"
+        )
 
         try:
             initial_structure_str = await provider_instance.generate(
@@ -2414,71 +2553,3 @@ if __name__ == "__main__":
     except Exception:  # Catch all exceptions from main to ensure sys.exit(1)
         # Logging of this exception should happen inside main() or AI3 methods
         sys.exit(1)
-
-
-def update_structure_provider_in_config(
-    config_data: Dict[str, Any], provider_name: str
-) -> None:
-    """
-    Updates the config.json file to save the successful structure provider.
-
-    Args:
-        config_data: The current configuration data
-        provider_name: The name of the successful provider to save
-    """
-    try:
-        # Make a copy of the config to avoid modifying the original during runtime
-        updated_config = copy.deepcopy(config_data)
-
-        # Ensure ai_config and ai3 sections exist
-        if "ai_config" not in updated_config:
-            updated_config["ai_config"] = {}
-        if "ai3" not in updated_config["ai_config"]:
-            updated_config["ai_config"]["ai3"] = {}
-
-        # Update structure_provider to the successful provider
-        updated_config["ai_config"]["ai3"]["structure_provider"] = provider_name
-
-        # If structure_providers list exists, ensure this provider is first in the list
-        if "structure_providers" in updated_config["ai_config"]["ai3"]:
-            providers_list = updated_config["ai_config"]["ai3"]["structure_providers"]
-            # Remove provider if it's already in the list
-            if provider_name in providers_list:
-                providers_list.remove(provider_name)
-            # Add provider at the beginning
-            providers_list.insert(0, provider_name)
-        else:
-            # Create structure_providers list if it doesn't exist
-            updated_config["ai_config"]["ai3"]["structure_providers"] = [
-                provider_name,
-                "codestral",
-                "gemini",
-            ]
-
-        # Write the updated config back to file
-        with open("config.json", "w") as f:
-            json.dump(updated_config, f, indent=4)
-
-        logger.info(
-            f"[AI3] Successfully updated config.json with structure provider: {provider_name}"
-        )
-
-        # Also update the config_data in memory to reflect the change
-        if "ai_config" in config_data and "ai3" in config_data["ai_config"]:
-            config_data["ai_config"]["ai3"]["structure_provider"] = provider_name
-            if "structure_providers" in config_data["ai_config"]["ai3"]:
-                if (
-                    provider_name
-                    in config_data["ai_config"]["ai3"]["structure_providers"]
-                ):
-                    config_data["ai_config"]["ai3"]["structure_providers"].remove(
-                        provider_name
-                    )
-                config_data["ai_config"]["ai3"]["structure_providers"].insert(
-                    0, provider_name
-                )
-
-    except Exception as e:
-        logger.error(
-            f"[AI3] Error updating structure provider in config: {e}", exc_info=True
-        )

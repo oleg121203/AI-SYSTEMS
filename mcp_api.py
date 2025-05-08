@@ -3379,7 +3379,6 @@ async def update_providers(data: dict):
             config_data["ai_config"]["ai1"]["providers"] = [
                 provider_data.get("provider")
             ]
-
             # Add fallbacks if provided
             if "fallbacks" in provider_data and provider_data["fallbacks"]:
                 config_data["ai_config"]["ai1"]["fallbacks"] = provider_data[
@@ -3428,25 +3427,49 @@ async def update_providers(data: dict):
             provider_data = data["ai3"]
             config_data.setdefault("ai_config", {}).setdefault("ai3", {})
 
-            # First, ensure we have the provider set correctly
-            config_data["ai_config"]["ai3"]["provider"] = provider_data.get("provider")
+            # First, ensure we have the provider set correctly (general AI3 provider)
+            if provider_data.get("provider") is not None:
+                config_data["ai_config"]["ai3"]["provider"] = provider_data.get(
+                    "provider"
+                )
 
-            # Update model
-            config_data["ai_config"]["ai3"]["model"] = provider_data.get("model")
+            # Update model (general AI3 model)
+            if provider_data.get("model") is not None:
+                config_data["ai_config"]["ai3"]["model"] = provider_data.get("model")
 
-            # Update providers list (this is what displays the selected provider in the UI)
-            config_data["ai_config"]["ai3"]["providers"] = [
-                provider_data.get("provider")
-            ]
+            # Update general AI3 providers list (if used by UI for a general dropdown)
+            # config_data["ai_config"]["ai3"]["providers"] = [
+            #     provider_data.get("provider")
+            # ]
 
-            # Add fallbacks if provided
+            # Add fallbacks if provided (general AI3 fallbacks)
             if "fallbacks" in provider_data and provider_data["fallbacks"]:
                 config_data["ai_config"]["ai3"]["fallbacks"] = provider_data[
                     "fallbacks"
                 ]
 
-            # Handle structure_providers if included
-            if "structure_providers" in provider_data:
+            # Handle specific structure generation provider and model
+            ai3_structure_provider = provider_data.get("structure_provider")
+            ai3_structure_model = provider_data.get("structure_model")
+
+            if ai3_structure_provider is not None:
+                config_data["ai_config"]["ai3"][
+                    "structure_provider"
+                ] = ai3_structure_provider
+            # else:
+            # If you want to remove the key if it's not provided or explicitly set to null by frontend:
+            # config_data["ai_config"]["ai3"].pop("structure_provider", None)
+
+            if ai3_structure_model is not None:
+                config_data["ai_config"]["ai3"]["structure_model"] = ai3_structure_model
+            # else:
+            # config_data["ai_config"]["ai3"].pop("structure_model", None)
+
+            # Handle structure_providers list (list of available providers for structure generation, if managed this way)
+            # This key "structure_providers" (plural) is distinct from "structure_provider" (singular, selected)
+            if (
+                "structure_providers" in provider_data
+            ):  # This is if the frontend sends a list to update available options
                 config_data["ai_config"]["ai3"]["structure_providers"] = provider_data[
                     "structure_providers"
                 ]

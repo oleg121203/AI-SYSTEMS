@@ -3763,11 +3763,8 @@ async function saveProviderConfig() {
       structure_provider: document.getElementById("ai3-structure-provider")
         .value,
       structure_model: document.getElementById("ai3-structure-model").value,
-      structure_fallbacks: getFallbacksConfig("ai3-structure"),
     },
   };
-
-  console.log("Saving provider configuration:", config);
 
   try {
     // Send configuration to server
@@ -3967,6 +3964,7 @@ async function initProviderConfig() {
       updateModelOptions("ai2-tester"),
       updateModelOptions("ai2-documenter"),
       updateModelOptions("ai3"),
+      updateModelOptions("ai3-structure"), // ADDED
     ]);
   } catch (promiseError) {
     console.error(
@@ -3988,6 +3986,7 @@ function populateProviderDropdowns() {
     "#ai2-tester-provider",
     "#ai2-documenter-provider",
     "#ai3-provider",
+    "#ai3-structure-provider", // ADDED
   ];
 
   selectors.forEach((selector) => {
@@ -4016,6 +4015,10 @@ function populateProviderDropdowns() {
         currentValue = currentConfig.ai2.documenter.provider;
       } else if (selector === "#ai3-provider") {
         currentValue = currentConfig.ai3.provider;
+      } else if (selector === "#ai3-structure-provider") {
+        if (currentConfig.ai3 && currentConfig.ai3.structure_provider) {
+          currentValue = currentConfig.ai3.structure_provider;
+        }
       }
 
       if (
@@ -4111,6 +4114,13 @@ async function updateModelOptions(aiComponent) {
     currentModel = currentConfig.ai2.documenter.model;
   } else if (aiComponent === "ai3" && currentConfig && currentConfig.ai3) {
     currentModel = currentConfig.ai3.model;
+  } else if (
+    aiComponent === "ai3-structure" &&
+    currentConfig &&
+    currentConfig.ai3 &&
+    currentConfig.ai3.structure_model
+  ) {
+    currentModel = currentConfig.ai3.structure_model;
   }
 
   if (
