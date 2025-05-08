@@ -351,13 +351,13 @@ delay_settings = {}
 # --- CHANGE: Modify apply_request_delay to fetch fresh config and use random.uniform ---
 async def apply_request_delay(identifier: str):
     """
-    Apply a random delay based on dynamically loaded configuration before 
+    Apply a random delay based on dynamically loaded configuration before
     making an API request.
-    
+
     Identifier format examples: 'ai1', 'ai3', 'ai2_executor'
-    The function normalizes identifiers like 'ai2_executor_task123' to 
+    The function normalizes identifiers like 'ai2_executor_task123' to
     'ai2_executor' for settings lookup.
-    
+
     Args:
         identifier (str): Component identifier making the request
     """
@@ -366,7 +366,7 @@ async def apply_request_delay(identifier: str):
     try:
         # Import config here to ensure latest version is used
         from config import load_config
-        
+
         # Load the latest config - load_config has its own mtime-based cache
         config_data = load_config()
         loaded_request_delays = config_data.get("request_delays", {})
@@ -385,9 +385,7 @@ async def apply_request_delay(identifier: str):
 
         # Get settings for this component with a fallback
         default_min_max = {"min_delay": 0.05, "max_delay": 0.1}
-        settings = loaded_request_delays.get(
-            component_id_for_settings, default_min_max
-        )
+        settings = loaded_request_delays.get(component_id_for_settings, default_min_max)
 
         min_d = settings.get("min_delay", default_min_max["min_delay"])
         max_d = settings.get("max_delay", default_min_max["max_delay"])
@@ -399,7 +397,7 @@ async def apply_request_delay(identifier: str):
         actual_delay_to_apply = 0.0
         if max_d > 0:  # Only sleep if max_d is positive
             actual_delay_to_apply = random.uniform(min_d, max_d)
-        
+
         if actual_delay_to_apply > 0:
             logger.debug(
                 f"[{identifier} -> {component_id_for_settings}] Applying API "
@@ -410,14 +408,15 @@ async def apply_request_delay(identifier: str):
 
         # Record request time for the normalized component_id
         last_api_request[component_id_for_settings] = time.time()
-    
+
     except Exception as e:
         logger.error(
-            f"Error applying request delay for {identifier}: {e}", 
-            exc_info=True
+            f"Error applying request delay for {identifier}: {e}", exc_info=True
         )
         # Apply minimal delay (50-100ms) in case of error
         await asyncio.sleep(random.uniform(0.05, 0.1))
+
+
 # --- END CHANGE ---
 
 
@@ -2134,6 +2133,15 @@ class SystemMonitor:
             "check_interval", 60
         )  # seconds
         self.is_running = False
+        # Add a flag to track if notification has been sent
+        self.notification_sent = {}
+        # Add metrics tracking
+        self.metrics = {
+            "total_recoveries": 0,
+            "recovery_by_component": {},
+            "last_check_time": 0,
+            "uptime_percentage": {},
+        }
 
     def _load_config(self) -> Dict:
         """Load configuration from file"""
@@ -2152,10 +2160,51 @@ class SystemMonitor:
         try:
             # Initial process status check
             self._update_process_status()
+            self.metrics["last_check_time"] = time.time()
+
+            # Initialize uptime metrics
+            for component in self.process_info:
+                self.metrics["uptime_percentage"][component] = 100.0
+                self.notification_sent[component] = False
 
             # Main monitoring loop
             while self.is_running:
                 await self._check_health()
+                current_time = time.time()
+                # Update uptime metrics
+                time_diff = current_time - self.metrics["last_check_time"]
+                self.metrics["last_check_time"] = current_time
+
+                # Update uptime metrics for each component
+                for component, info in self.process_info.items():
+                    if component not in self.metrics["uptime_percentage"]:
+                        self.metrics["uptime_percentage"][component] = 100.0
+
+                    # Adjust uptime percentage based on current status
+                    if info["status"] == "running":
+                        # Slowly recover uptime if previously down
+                        if self.metrics["uptime_percentage"][component] < 100.0:
+                            self.metrics["uptime_percentage"][component] = min(
+                                100.0,
+                                self.metrics["uptime_percentage"][component] + 1.0,
+                            )
+                    else:
+                        # Reduce uptime percentage when down
+                        downtime_impact = (
+                            time_diff / 3600
+                        ) * 5  # 5% per hour of downtime
+                        self.metrics["uptime_percentage"][component] = max(
+                            0.0,
+                            self.metrics["uptime_percentage"][component]
+                            - downtime_impact,
+                        )
+
+                # Log current status if there are any non-running processes
+                if any(
+                    info["status"] != "running" for info in self.process_info.values()
+                ):
+                    self._log_status_report()
+
                 await asyncio.sleep(self.check_interval)
 
         except Exception as e:
@@ -2182,6 +2231,7 @@ class SystemMonitor:
                     "pid": pid_info["pid"],
                     "start_time": pid_info["start_time"],
                     "status": "running",
+                    "last_active": time.time(),
                 }
             else:
                 # Update only if PID changed
@@ -2189,15 +2239,25 @@ class SystemMonitor:
                     self.process_info[component]["pid"] = pid_info["pid"]
                     self.process_info[component]["start_time"] = pid_info["start_time"]
                     self.process_info[component]["status"] = "running"
+                    self.process_info[component]["last_active"] = time.time()
+                    # Reset notification flag when process is running again
+                    self.notification_sent[component] = False
 
         # Mark processes that are no longer running
         for component in list(self.process_info.keys()):
             if component not in processes:
                 if self.process_info[component]["status"] == "running":
                     self.process_info[component]["status"] = "stopped"
+                    current_time = time.time()
+                    self.process_info[component]["downtime_started"] = current_time
                     log_message(
                         f"[SystemMonitor] Process {component} appears to have stopped"
                     )
+
+                    # Send notification only once per downtime incident
+                    if not self.notification_sent.get(component, False):
+                        self._send_component_notification(component, "stopped")
+                        self.notification_sent[component] = True
 
     def _get_active_processes(self) -> Dict[str, Dict[str, Any]]:
         """Get all active AI-SYSTEMS processes using pid files"""
@@ -2263,8 +2323,10 @@ class SystemMonitor:
 
         # Check required components
         required_components = self.config.get("monitor", {}).get(
-            "required_components", []
+            "required_components",
+            ["ai1", "ai2_executor", "ai2_tester", "ai2_documenter", "ai3", "mcp_api"],
         )
+
         for component in required_components:
             # Skip if component is not being monitored
             if component not in self.process_info:
@@ -2277,15 +2339,27 @@ class SystemMonitor:
                 )
                 await self._recover_component(component)
 
+        # Also check log file sizes and rotate if needed
+        self._check_log_file_sizes()
+
     async def _recover_component(self, component: str):
         """Attempt to recover a stopped component"""
         # Increment recovery attempt counter
         self.recovery_attempts[component] = self.recovery_attempts.get(component, 0) + 1
 
+        # Update metrics
+        self.metrics["total_recoveries"] += 1
+        if component not in self.metrics["recovery_by_component"]:
+            self.metrics["recovery_by_component"][component] = 0
+        self.metrics["recovery_by_component"][component] += 1
+
         # Check if we've exceeded the maximum recovery attempts
         if self.recovery_attempts[component] > self.max_recovery_attempts:
             log_message(
                 f"[SystemMonitor] Maximum recovery attempts ({self.max_recovery_attempts}) reached for {component}"
+            )
+            self._send_component_notification(
+                component, "max_recovery_attempts_reached"
             )
             return
 
@@ -2297,6 +2371,10 @@ class SystemMonitor:
         restart_cmd = (
             self.config.get("monitor", {}).get("restart_commands", {}).get(component)
         )
+        if not restart_cmd:
+            # Try to build a restart command if none exists in config
+            restart_cmd = self._build_restart_command(component)
+
         if not restart_cmd:
             log_message(
                 f"[SystemMonitor] No restart command configured for {component}"
@@ -2321,19 +2399,155 @@ class SystemMonitor:
                     log_message(f"[SystemMonitor] Successfully restarted {component}")
                     # Reset recovery attempts on success
                     self.recovery_attempts[component] = 0
+                    self._send_component_notification(component, "recovered")
                 else:
                     log_message(
                         f"[SystemMonitor] Failed to restart {component}: {stderr.decode().strip()}"
+                    )
+                    self._send_component_notification(
+                        component, "recovery_failed", {"error": stderr.decode().strip()}
                     )
             except asyncio.TimeoutError:
                 log_message(
                     f"[SystemMonitor] Restart command for {component} timed out"
                 )
+                self._send_component_notification(component, "recovery_timeout")
 
         except Exception as e:
             log_message(
                 f"[SystemMonitor] Error executing restart command for {component}: {e}"
             )
+            self._send_component_notification(
+                component, "recovery_error", {"error": str(e)}
+            )
+
+    def _build_restart_command(self, component: str) -> Optional[str]:
+        """Try to build a restart command for a component if none is configured"""
+        if component == "ai1":
+            return "./run_ai1.sh"
+        elif (
+            component == "ai2_executor"
+            or component == "ai2_tester"
+            or component == "ai2_documenter"
+        ):
+            # Extract role from component name
+            role = component.split("_")[1]
+            return f"./run_ai2.sh {role}"
+        elif component == "ai3":
+            return "./run_ai3.sh"
+        elif component == "mcp_api":
+            return "./run_mcp_api.sh"
+        elif component == "load_monitor":
+            return "./run_load_monitor.sh"
+        else:
+            return None
+
+    def _send_component_notification(
+        self, component: str, status: str, details: Dict = None
+    ):
+        """Send a notification about component status changes"""
+        try:
+            # This would ideally interface with the MCP API to broadcast notifications
+            # For now, we'll just log the notification
+            notification = {
+                "component": component,
+                "status": status,
+                "timestamp": time.time(),
+                "details": details or {},
+            }
+            log_message(
+                f"[SystemMonitor] Component notification: {json.dumps(notification)}"
+            )
+
+            # TODO: Send notification to MCP API for WebSocket broadcast
+            # In a real implementation, this would make an API call
+        except Exception as e:
+            log_message(f"[SystemMonitor] Error sending notification: {e}")
+
+    def _check_log_file_sizes(self):
+        """Check log file sizes and rotate if they get too large"""
+        log_dir = "logs"
+        max_size_mb = 50  # Maximum log file size in MB
+
+        if not os.path.exists(log_dir):
+            return
+
+        for filename in os.listdir(log_dir):
+            if filename.endswith(".log"):
+                file_path = os.path.join(log_dir, filename)
+                try:
+                    # Get file size in MB
+                    size_mb = os.path.getsize(file_path) / (1024 * 1024)
+
+                    if size_mb > max_size_mb:
+                        # Rotate log file
+                        log_message(
+                            f"[SystemMonitor] Rotating log file {filename} ({size_mb:.2f} MB)"
+                        )
+                        self._rotate_log_file(file_path)
+                except Exception as e:
+                    log_message(f"[SystemMonitor] Error checking log file size: {e}")
+
+    def _rotate_log_file(self, file_path: str):
+        """Rotate a log file by renaming it with a timestamp and creating a new empty one"""
+        try:
+            # Get timestamp for rotation
+            timestamp = time.strftime("%Y%m%d-%H%M%S")
+            base_name, ext = os.path.splitext(file_path)
+            rotated_path = f"{base_name}.{timestamp}{ext}"
+
+            # Rename current log file
+            os.rename(file_path, rotated_path)
+
+            # Create new empty log file
+            with open(file_path, "w") as f:
+                f.write(f"Log rotated at {timestamp}\n")
+
+            log_message(
+                f"[SystemMonitor] Log file rotated: {file_path} -> {rotated_path}"
+            )
+        except Exception as e:
+            log_message(f"[SystemMonitor] Error rotating log file: {e}")
+
+    def _log_status_report(self):
+        """Log a status report of all monitored components"""
+        report = ["=== System Component Status Report ==="]
+        current_time = time.time()
+
+        for component, info in sorted(self.process_info.items()):
+            status = info["status"]
+            status_symbol = "✓" if status == "running" else "✗"
+
+            uptime = self.metrics["uptime_percentage"].get(component, 0)
+            uptime_color = (
+                "green" if uptime > 95 else "yellow" if uptime > 80 else "red"
+            )
+
+            if status == "running":
+                uptime_duration = (
+                    current_time - info["start_time"] if info.get("start_time") else 0
+                )
+                uptime_str = f"{uptime_duration/3600:.1f} hours"
+                report.append(
+                    f"{status_symbol} {component}: {status.upper()} for {uptime_str} (uptime: {uptime:.1f}%)"
+                )
+            else:
+                downtime_duration = (
+                    current_time - info.get("downtime_started", current_time)
+                    if info.get("downtime_started")
+                    else 0
+                )
+                downtime_str = f"{downtime_duration/60:.1f} minutes"
+                report.append(
+                    f"{status_symbol} {component}: {status.upper()} for {downtime_str} (uptime: {uptime:.1f}%)"
+                )
+
+        report.append(f"Recovery attempts: {self.metrics['total_recoveries']} total")
+        for component, count in self.metrics["recovery_by_component"].items():
+            report.append(f"  - {component}: {count} attempts")
+        report.append("=====================================")
+
+        log_message("\n".join(report))
 
 
 class TestValidator:
@@ -2626,3 +2840,160 @@ class TestValidator:
             result["duration"] = time.time() - start_time
 
         return result
+
+
+# ...existing code...
+import json
+from typing import Any, Dict, List, Optional, Union
+
+import aiohttp
+
+# ...existing code...
+
+
+async def call_ollama(
+    session: aiohttp.ClientSession,
+    prompt: str,
+    endpoint: str,
+    model: str,
+    system_prompt: Optional[str] = None,
+    temperature: float = 0.7,
+    max_tokens: Optional[int] = None,  # Corresponds to num_predict in Ollama
+    timeout: int = 120,
+) -> Optional[str]:
+    """
+    Calls the Ollama API with the given parameters.
+
+    Args:
+        session: The aiohttp client session.
+        prompt: The user prompt.
+        endpoint: The Ollama API endpoint (e.g., "http://localhost:11434").
+        model: The Ollama model to use.
+        system_prompt: An optional system prompt.
+        temperature: The temperature for generation.
+        max_tokens: The maximum number of tokens to generate (num_predict).
+        timeout: The request timeout in seconds.
+
+    Returns:
+        The Ollama API response content as a string, or None if an error occurs.
+    """
+    api_url = f"{endpoint.rstrip('/')}/api/chat"
+    messages = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": prompt})
+
+    options = {"temperature": temperature}
+    if max_tokens is not None and max_tokens > 0:
+        options["num_predict"] = max_tokens
+
+    payload = {
+        "model": model,
+        "messages": messages,
+        "options": options,
+        "stream": False,  # Assuming non-streaming for simplicity here
+    }
+
+    try:
+        async with session.post(api_url, json=payload, timeout=timeout) as response:
+            response_data = await response.json()
+            if response.status == 200:
+                if (
+                    response_data
+                    and isinstance(response_data, dict)
+                    and response_data.get("message")
+                    and isinstance(response_data["message"], dict)
+                ):
+                    return response_data["message"].get("content", "")
+                else:
+                    logger.warning(
+                        f"[OllamaCall] Unexpected response structure from {model}: {response_data}"
+                    )
+                    return None
+            else:
+                error_message = response_data.get("error", "Unknown error")
+                logger.error(
+                    f"[OllamaCall] HTTP Error from {model} ({response.status}): {error_message}"
+                )
+                return None
+    except aiohttp.ClientResponseError as e:
+        logger.error(
+            f"[OllamaCall] ClientResponseError calling {model} ({e.status}): {e.message}"
+        )
+        return None
+    except aiohttp.ClientConnectionError as e:
+        logger.error(f"[OllamaCall] Connection error to {endpoint}: {e}")
+        return None
+    except asyncio.TimeoutError:
+        logger.error(f"[OllamaCall] Timeout calling {model} at {endpoint}")
+        return None
+    except json.JSONDecodeError:
+        logger.error(f"[OllamaCall] Invalid JSON response from {model}")
+        return None
+    except Exception as e:
+        logger.error(
+            f"[OllamaCall] Unexpected error calling {model}: {e}", exc_info=True
+        )
+        return None
+
+
+import logging
+import os
+from typing import Any, Dict, Optional
+
+# ...existing code...
+import httpx
+
+logger = logging.getLogger(__name__)
+
+
+# ...existing code...
+async def call_ollama(
+    prompt: str, model: str = "llama3", base_url: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Makes a request to the Ollama API and returns the JSON response.
+
+    Args:
+        prompt: The prompt to send to the Ollama API.
+        model: The Ollama model to use (default is "llama3").
+        base_url: The base URL for the Ollama API. If None, uses OLLAMA_BASE_URL from environment or default.
+
+    Returns:
+        A dictionary containing the JSON response from the API.
+    """
+    if base_url is None:
+        base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+
+    api_url = f"{base_url}/api/generate"
+    payload = {
+        "model": model,
+        "prompt": prompt,
+        "stream": False,  # Assuming non-streaming for simplicity, adjust if needed
+    }
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                api_url, json=payload, timeout=60.0
+            )  # Added timeout
+            response.raise_for_status()  # Raise an exception for bad status codes
+            return response.json()
+    except httpx.HTTPStatusError as e:
+        logger.error(
+            f"Ollama API request failed with status {e.response.status_code}: {e.response.text}"
+        )
+        return {
+            "error": f"HTTP error: {e.response.status_code}",
+            "details": e.response.text,
+        }
+    except httpx.RequestError as e:
+        logger.error(f"Ollama API request failed: {e}")
+        return {"error": "Request error", "details": str(e)}
+    except Exception as e:
+        logger.error(f"An unexpected error occurred during Ollama API call: {e}")
+        return {"error": "Unexpected error", "details": str(e)}
+
+
+if __name__ == "__main__":
+    pass  # Placeholder for any code to run when module is executed directly

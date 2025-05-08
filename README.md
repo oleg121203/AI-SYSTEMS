@@ -142,12 +142,16 @@ The system uses a robust API-based communication protocol with these key compone
     - Status reporting: `/ai3/repo_cleared`, `/ai3/structure_creation_completed`, `/ai3/structure_setup_completed`
     - Test recommendations: `/test_recommendation`
     - System management: `/start_ai1`, `/stop_ai1`, etc.
+    - Monitoring endpoints: `/monitor/status`, `/monitor/performance`, `/monitor/resources`
 
 2.  **WebSocket Updates**:
     - Real-time status updates to connected clients
     - Task status changes
     - Structure updates
     - Chart data for visualization
+    - System performance metrics
+    - Resource utilization statistics
+    - AI agent status and activity feeds
 
 3.  **File Operation Safety**:
     - Path sanitization to prevent directory traversal
@@ -177,6 +181,147 @@ The system implements robust error handling mechanisms:
     - Proper cleanup of resources (e.g., closing aiohttp sessions)
     - Memory usage monitoring
     - Rate limiting to prevent API overload
+
+## System Monitoring
+
+AI-SYSTEMS includes a comprehensive monitoring system that tracks performance, resource usage, and system health in real-time:
+
+1. **Performance Monitoring**:
+   - Task processing times and throughput 
+   - AI model response times
+   - Queue wait times and backlogs
+   - Success/failure rates for each component
+
+2. **Resource Monitoring**:
+   - CPU and memory usage for each AI agent
+   - Network traffic and API call volume
+   - Disk space utilization
+   - Provider quota and rate limit tracking
+
+3. **Health Checks**:
+   - Automatic detection of stalled or crashed components
+   - Service availability monitoring
+   - Process restart capabilities
+   - Early warning system for potential issues
+
+Monitoring data is accessible through:
+- API endpoints at `/monitor/status`, `/monitor/performance`, `/monitor/resources`
+- Real-time WebSocket feeds for live dashboards
+- Log files in the `logs/` directory
+- Status JSON files for integration with external monitoring tools
+
+### Monitoring Configuration
+
+Monitoring behavior can be configured in `config.json`:
+
+```json
+{
+  "monitoring": {
+    "enabled": true,
+    "interval": 5,
+    "alert_thresholds": {
+      "cpu_percent": 85,
+      "memory_percent": 80,
+      "disk_space_percent": 90
+    },
+    "log_level": "info"
+  }
+}
+```
+
+## Provider Plugin System
+
+AI-SYSTEMS features a flexible provider plugin system that allows you to add custom LLM providers without modifying core code. This is particularly useful for:
+
+1. Integrating with private or internal LLM APIs
+2. Supporting new LLM providers not included in the core system
+3. Creating specialized providers for specific use cases
+
+### How to Create a Custom Provider
+
+1. **Create a new Python file** in the `plugins/providers/` directory (e.g., `my_provider.py`)
+2. **Implement a provider class** that inherits from `BaseProvider` 
+3. **Restart the API server** to automatically discover your provider
+
+### Example Provider Plugin
+
+The system includes an example provider plugin at `plugins/providers/example_provider.py` that you can use as a template. Here's a simplified version:
+
+```python
+from providers import BaseProvider
+
+class MyCustomProvider(BaseProvider):
+    # Optional: Set a custom provider type
+    provider_type = "my_custom"
+    
+    def __init__(self, config=None):
+        super().__init__(config)
+        self.name = "my_custom"
+        self.api_key = self.config.get("api_key") or os.environ.get("MY_CUSTOM_API_KEY")
+        self.setup()
+    
+    def setup(self) -> None:
+        # Initialize your provider
+        pass
+        
+    async def generate(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        model: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
+    ) -> str:
+        # Implement generation logic
+        return "Generated response"
+        
+    async def get_available_models(self) -> List[str]:
+        # Return list of available models
+        return ["my-model-1", "my-model-2"]
+```
+
+### Using Your Custom Provider
+
+Once your provider is implemented, you can use it in your AI-SYSTEMS configuration:
+
+```json
+{
+  "providers": {
+    "my_provider": {
+      "type": "my_custom",
+      "api_key": "your-api-key",
+      "model": "my-model-1"
+    }
+  },
+  "ai_config": {
+    "ai1": {
+      "provider": "my_provider"
+    }
+  }
+}
+```
+
+The provider will be automatically discovered and available for use by all AI components in the system.
+
+## Plugin System
+
+AI-SYSTEMS features a plugin architecture that allows extending the system without modifying core code:
+
+### Directory Structure
+
+```
+plugins/
+├── providers/           # LLM provider plugins
+│   ├── example_provider.py
+│   └── ...
+├── tools/               # Future: Tool plugins for AI agents
+├── actions/             # Future: Custom action plugins
+└── integrations/        # Future: Third-party service integrations
+```
+
+The plugin system currently supports:
+- **Provider Plugins**: Custom LLM providers (described in the Provider Plugin System section)
+- **Future Plugins**: The architecture is designed to support additional plugin types in future releases
 
 ## Areas for Improvement
 

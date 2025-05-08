@@ -303,54 +303,21 @@ def get_file_changes(repo_dir):
 
 async def broadcast_status():
     """Broadcasts the current AI status to all connected clients."""
-    if active_connections:
+    if ws_manager.active_connections:
         message = {"type": "status_update", "ai_status": ai_status}
-        print(f"Broadcasting status: {ai_status}")  # Added for debugging
-        disconnected_clients = set()
-        for connection in list(active_connections):
-            try:
-                await connection.send_json(message)
-            except WebSocketDisconnect:
-                print(f"Client {connection.client} disconnected during broadcast.")
-                disconnected_clients.add(connection)
-            except Exception as e:
-                print(f"Error sending status to {connection.client}: {e}")
-                disconnected_clients.add(connection)
-        for client in disconnected_clients:
-            active_connections.discard(client)
+        await ws_manager.broadcast(message)
 
 
 async def broadcast_specific_update(update_data: dict):
     """Broadcasts a specific update to all clients."""
-    if active_connections:
-        message = json.dumps(update_data)
-        # Iterate over a copy of the set to allow modification during iteration
-        disconnected_clients = set()
-        for connection in list(active_connections):
-            try:
-                await connection.send_text(message)
-            except (
-                WebSocketDisconnect,
-                RuntimeError,
-            ) as e:  # Catch specific errors related to closed connections
-                logger.warning(
-                    f"Failed to send specific update to client {connection.client}: {e}. Removing connection."
-                )
-                disconnected_clients.add(connection)
-            except Exception as e:  # Catch other potential send errors
-                logger.error(
-                    f"Unexpected error sending specific update to client {connection.client}: {e}. Removing connection."
-                )
-                disconnected_clients.add(connection)
-
-        # Remove disconnected clients from the main set
-        active_connections.difference_update(disconnected_clients)
+    if ws_manager.active_connections:
+        await ws_manager.broadcast(update_data)
 
 
 # Додаємо нову функцію для надсилання оновлень графіків
 async def broadcast_chart_updates():
     """Формує та відправляє дані для всіх графіків."""
-    if not active_connections:
+    if not ws_manager.active_connections:
         return
 
     # Отримуємо дані для графіків
@@ -396,19 +363,21 @@ async def broadcast_chart_updates():
 
     # Формуємо повне оновлення для всіх графіків
     update_data = {
+        "type": "chart_update",
         "progress_data": progress_data,
         "git_activity": git_activity_data,
         "task_status_distribution": status_counts,
+        "timestamp": datetime.now().isoformat(),
     }
 
     # Надсилаємо оновлення всім підключеним клієнтам
-    await broadcast_specific_update(update_data)
+    await ws_manager.broadcast(update_data)
 
 
 # --- ADDED: Function to broadcast monitoring stats ---
 async def broadcast_monitoring_stats():
     """Calculates and broadcasts core monitoring stats (Total, Completed)."""
-    if active_connections:
+    if ws_manager.active_connections:
         try:
             stats = get_progress_stats()  # Get stats including completed count
             actual_total_tasks = len(subtask_status)  # Total known subtasks
@@ -419,14 +388,19 @@ async def broadcast_monitoring_stats():
                 "total_tasks": actual_total_tasks,
                 "completed_tasks": completed_tasks,
                 "queues": {
+                    "executor": executor_queue.qsize(),
+                    "tester": tester_queue.qsize(),
+                    "documenter": documenter_queue.qsize(),
+                },
+                "queue_items": {
                     "executor": [t for t in executor_queue._queue],
                     "tester": [t for t in tester_queue._queue],
                     "documenter": [t for t in documenter_queue._queue],
                 },
-                # Add efficiency as a percentage for direct use in the UI
                 "efficiency": f"{(completed_tasks / max(1, actual_total_tasks) * 100):.1f}%",
+                "timestamp": datetime.now().isoformat(),
             }
-            await broadcast_specific_update(update_data)
+            await ws_manager.broadcast(update_data)
             logger.debug(
                 f"Broadcasted monitoring update: Total={actual_total_tasks}, Completed={completed_tasks}"
             )
@@ -1034,7 +1008,7 @@ def get_progress_chart_data():
 
     # Формуємо підсумкову точку даних з повною міткою часу
     return {
-        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "timestamp": datetime.now().strftime("%Y-%м-%d %H:%M:%S"),
         "completed_tasks": completed_tasks_count,
         "successful_tests": successful_tests_count,
         "git_actions": current_git_actions,
@@ -2056,7 +2030,7 @@ async def clear_repo():
 
 async def broadcast_full_status():
     """Broadcasts detailed status to all connected clients."""
-    if active_connections:
+    if ws_manager.active_connections:
         # --- Aggregation for Pie Chart ---
         status_counts = {
             "pending": 0,
@@ -2147,33 +2121,14 @@ async def broadcast_full_status():
             "subtasks": subtask_status,
             "structure": current_structure,
             "ai3_report": ai3_report,
-            # "processed_history": history_list, # Keep original if needed elsewhere, but add formatted one
-            "git_activity": git_activity_data,  # Add formatted data for the chart
-            "progress_data": progress_chart_data,  # Add progress chart data
-            "task_status_distribution": status_counts,  # Include aggregated counts
-            "actual_total_tasks": actual_total_tasks,  # Add the calculated total tasks
+            "git_activity": git_activity_data,
+            "progress_data": progress_chart_data,
+            "task_status_distribution": status_counts,
+            "actual_total_tasks": actual_total_tasks,
+            "timestamp": datetime.now().isoformat(),
         }
-        message = json.dumps(state_data)
-        disconnected_clients = set()
-        for connection in list(active_connections):
-            try:
-                await connection.send_text(message)
-            except (
-                WebSocketDisconnect,
-                RuntimeError,
-            ) as e:  # Catch specific errors related to closed connections
-                logger.warning(
-                    f"Failed to send full status to client {connection.client}: {e}. Removing connection."
-                )
-                disconnected_clients.add(connection)
-            except Exception as e:  # Catch other potential send errors
-                logger.error(
-                    f"Unexpected error sending full status to client {connection.client}: {e}. Removing connection."
-                )
-                disconnected_clients.add(connection)
 
-        # Remove disconnected clients from the main set
-        active_connections.difference_update(disconnected_clients)
+        await ws_manager.broadcast(state_data)
 
 
 # Додаємо нову функцію для відправлення повного статусу конкретному клієнту
@@ -2292,50 +2247,613 @@ async def send_full_status_update(websocket: WebSocket):
 # ... rest of the file ...
 
 
+class WebSocketManager:
+    """Manages WebSocket connections and broadcasts messages to clients"""
+
+    def __init__(self):
+        self.active_connections: Set[WebSocket] = set()
+        self.connection_info = {}  # Maps WebSocket to client info
+        self.message_history = deque(
+            maxlen=100
+        )  # Store recent messages for new connections
+        self.stats = {
+            "total_connections": 0,
+            "messages_sent": 0,
+            "connection_errors": 0,
+            "last_broadcast_time": datetime.now().isoformat(),
+        }
+        self.broadcast_lock = asyncio.Lock()  # Lock for thread-safe broadcasting
+
+    async def connect(self, websocket: WebSocket):
+        """Accept a new WebSocket connection and initialize client data"""
+        await websocket.accept()
+        self.active_connections.add(websocket)
+
+        # Store connection info
+        client_info = {
+            "ip": websocket.client.host,
+            "port": websocket.client.port,
+            "connect_time": datetime.now().isoformat(),
+            "messages_received": 0,
+            "messages_sent": 0,
+            "last_activity": datetime.now().isoformat(),
+        }
+        self.connection_info[websocket] = client_info
+        self.stats["total_connections"] += 1
+
+        logger.info(
+            f"WebSocket connection established from {websocket.client.host}:{websocket.client.port}. Active connections: {len(self.active_connections)}"
+        )
+
+        # Send initial state to the new client
+        await self.send_initial_state(websocket)
+
+    async def disconnect(self, websocket: WebSocket):
+        """Handle client disconnection"""
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
+
+            # Log disconnection with connection duration
+            client_info = self.connection_info.pop(websocket, None)
+            if client_info:
+                connect_time = datetime.fromisoformat(client_info["connect_time"])
+                duration = (datetime.now() - connect_time).total_seconds()
+                logger.info(
+                    f"WebSocket disconnected: {websocket.client.host}:{websocket.client.port} "
+                    f"(duration: {duration:.1f}s, messages: {client_info.get('messages_sent', 0)}). "
+                    f"Active connections: {len(self.active_connections)}"
+                )
+            else:
+                logger.warning(
+                    f"WebSocket disconnected without client info: {websocket.client.host}:{websocket.client.port}. "
+                    f"Active connections: {len(self.active_connections)}"
+                )
+
+    async def send_initial_state(self, websocket: WebSocket):
+        """Send initial application state to a newly connected client"""
+        try:
+            # Send welcome message
+            await websocket.send_json(
+                {
+                    "type": "system_message",
+                    "message": "Connected to AI-SYSTEMS MCP API",
+                    "timestamp": datetime.now().isoformat(),
+                }
+            )
+
+            # Send full status update
+            await send_full_status_update(websocket)
+
+            # Send recent message history (only non-log-line messages)
+            sent_count = 0
+            for message in self.message_history:
+                # Skip simple log lines
+                if (
+                    isinstance(message, dict)
+                    and "log_line" in message
+                    and len(message) == 1
+                ):
+                    continue
+
+                # Skip very large messages that might overload new clients
+                if (
+                    isinstance(message, dict)
+                    and "subtasks" in message
+                    and len(message.get("subtasks", {})) > 50
+                ):
+                    continue
+
+                try:
+                    await websocket.send_json(message)
+                    sent_count += 1
+                    # Update stats
+                    if websocket in self.connection_info:
+                        self.connection_info[websocket]["messages_sent"] += 1
+                        self.connection_info[websocket][
+                            "last_activity"
+                        ] = datetime.now().isoformat()
+                except Exception as e:
+                    logger.error(f"Error sending history message to client: {e}")
+                    break
+
+            client_info = self.connection_info.get(websocket)
+            logger.debug(
+                f"Sent initial state to client {websocket.client.host}:{websocket.client.port}"
+                f"{f' ({sent_count} history items)' if sent_count > 0 else ''}"
+            )
+        except WebSocketDisconnect:
+            logger.warning(
+                f"Client disconnected during initial state transmission: {websocket.client}"
+            )
+            await self.disconnect(websocket)
+        except Exception as e:
+            self.stats["connection_errors"] += 1
+            logger.error(f"Error sending initial state to client: {e}", exc_info=True)
+            # If we can't send initial state, disconnect the client
+            await self.disconnect(websocket)
+
+    async def broadcast(self, message: Dict[str, Any]):
+        """Broadcast a message to all connected clients with rate limiting"""
+        if not self.active_connections:
+            return
+
+        async with self.broadcast_lock:  # Ensure only one broadcast happens at a time
+            # Store message in history except for simple log lines (to reduce memory)
+            if not (
+                isinstance(message, dict)
+                and "log_line" in message
+                and len(message) == 1
+            ):
+                self.message_history.append(message)
+
+            # Update broadcast stats
+            self.stats["messages_sent"] += 1
+            self.stats["last_broadcast_time"] = datetime.now().isoformat()
+
+            # Broadcast to all clients
+            disconnected_clients = set()
+            for connection in list(self.active_connections):
+                try:
+                    await connection.send_json(message)
+
+                    # Update client stats
+                    if connection in self.connection_info:
+                        self.connection_info[connection]["messages_sent"] += 1
+                        self.connection_info[connection][
+                            "last_activity"
+                        ] = datetime.now().isoformat()
+
+                except WebSocketDisconnect:
+                    disconnected_clients.add(connection)
+                except Exception as e:
+                    logger.error(
+                        f"Error broadcasting to client {connection.client}: {e}"
+                    )
+                    disconnected_clients.add(connection)
+                    self.stats["connection_errors"] += 1
+
+            # Clean up disconnected clients
+            for client in disconnected_clients:
+                await self.disconnect(client)
+
+    async def broadcast_specific(self, message: Dict[str, Any], filter_func=None):
+        """Broadcast a message to specific clients based on a filter function"""
+        if not self.active_connections:
+            return
+
+        async with self.broadcast_lock:  # Ensure broadcasts don't conflict
+            # Store filtered messages in history only if they might be generally useful
+            is_general_message = not filter_func or not (
+                isinstance(message, dict) and "log_line" in message
+            )
+            if is_general_message:
+                self.message_history.append(message)
+
+            disconnected_clients = set()
+            for connection in list(self.active_connections):
+                if filter_func and not filter_func(
+                    self.connection_info.get(connection, {})
+                ):
+                    continue  # Skip clients that don't match the filter
+
+                try:
+                    await connection.send_json(message)
+
+                    # Update client stats
+                    if connection in self.connection_info:
+                        self.connection_info[connection]["messages_sent"] += 1
+                        self.connection_info[connection][
+                            "last_activity"
+                        ] = datetime.now().isoformat()
+
+                    # Count only filtered broadcasts
+                    if filter_func:
+                        self.stats["messages_sent"] += 1
+
+                except WebSocketDisconnect:
+                    disconnected_clients.add(connection)
+                except Exception as e:
+                    logger.error(
+                        f"Error broadcasting to specific client {connection.client}: {e}"
+                    )
+                    disconnected_clients.add(connection)
+                    self.stats["connection_errors"] += 1
+
+            # Clean up disconnected clients
+            for client in disconnected_clients:
+                await self.disconnect(client)
+
+    async def handle_client_message(
+        self, websocket: WebSocket, message: Dict[str, Any]
+    ):
+        """Process a message from a client"""
+        try:
+            message_type = message.get("type", "unknown")
+
+            # Update client activity timestamp
+            if websocket in self.connection_info:
+                self.connection_info[websocket]["messages_received"] += 1
+                self.connection_info[websocket][
+                    "last_activity"
+                ] = datetime.now().isoformat()
+
+            # Handle different message types
+            if message_type == "ping":
+                # Respond with pong
+                await websocket.send_json(
+                    {"type": "pong", "timestamp": datetime.now().isoformat()}
+                )
+
+            elif message_type == "get_full_status":
+                # Client requests a full status update
+                await send_full_status_update(websocket)
+
+            elif message_type == "get_chart_updates":
+                # Client requests chart data
+                await broadcast_chart_updates()
+
+            elif message_type == "get_file_structure":
+                # Client requests file structure
+                global current_structure
+                current_structure = build_directory_structure(repo_path)
+                await self.broadcast({"structure": current_structure})
+
+            else:
+                # Unknown message type
+                logger.warning(
+                    f"Received unknown message type from client {websocket.client}: {message_type}"
+                )
+                await websocket.send_json(
+                    {
+                        "type": "error",
+                        "message": f"Unknown message type: {message_type}",
+                        "timestamp": datetime.now().isoformat(),
+                    }
+                )
+
+        except Exception as e:
+            logger.error(f"Error handling client message: {e}", exc_info=True)
+            try:
+                await websocket.send_json(
+                    {
+                        "type": "error",
+                        "message": f"Error processing your request: {str(e)}",
+                        "timestamp": datetime.now().isoformat(),
+                    }
+                )
+            except:
+                # If sending the error fails, we'll just log it
+                pass
+
+    def get_stats(self):
+        """Get WebSocket connection statistics"""
+        return {
+            **self.stats,
+            "active_connections": len(self.active_connections),
+            "clients": [
+                {
+                    "ip": info["ip"],
+                    "port": info["port"],
+                    "connect_time": info["connect_time"],
+                    "last_activity": info.get("last_activity", info["connect_time"]),
+                    "messages_received": info["messages_received"],
+                    "messages_sent": info.get("messages_sent", 0),
+                    "duration": self._calculate_duration(info["connect_time"]),
+                }
+                for info in self.connection_info.values()
+            ],
+        }
+
+    def _calculate_duration(self, connect_time_str):
+        """Calculate connection duration in seconds"""
+        try:
+            connect_time = datetime.fromisoformat(connect_time_str)
+            return (datetime.now() - connect_time).total_seconds()
+        except:
+            return 0
+
+    async def cleanup_inactive_connections(
+        self, max_idle_time=1800
+    ):  # 30 minutes default
+        """Remove connections that have been inactive for too long"""
+        disconnected = 0
+        now = datetime.now()
+
+        for websocket, info in list(self.connection_info.items()):
+            try:
+                last_activity = datetime.fromisoformat(
+                    info.get("last_activity", info["connect_time"])
+                )
+                idle_time = (now - last_activity).total_seconds()
+
+                if idle_time > max_idle_time:
+                    logger.info(
+                        f"Disconnecting inactive client {websocket.client} (idle for {idle_time:.1f}s)"
+                    )
+                    await self.disconnect(websocket)
+                    disconnected += 1
+            except Exception as e:
+                logger.error(f"Error checking client activity: {e}")
+
+        return disconnected
+
+
+# Initialize the WebSocket manager
+ws_manager = WebSocketManager()
+
+
+# Replace the previous websocket endpoint with the improved version
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    await websocket.accept()
-    client_id = f"Address(host='{websocket.client.host}', port={websocket.client.port})"
-    active_connections.add(websocket)
-    logger.info(
-        f"WebSocket connection established from {client_id}. Total: {len(active_connections)}"
-    )
+    await ws_manager.connect(websocket)
 
     try:
         while True:
-            data = await websocket.receive_text()
-            try:
-                message = json.loads(data)
-                logger.debug(f"Received message from client {client_id}: {message}")
+            # Wait for messages from the client
+            message = await websocket.receive_text()
 
-                # Обробляємо запити від клієнта
-                if message.get("action") == "get_full_status":
-                    # Надсилаємо повний статус як відповідь на запит
-                    await send_full_status_update(websocket)
-                elif message.get("action") == "get_chart_updates":
-                    # Новий обробник для запиту оновлення графіків
-                    await broadcast_chart_updates()
-                    logger.info(f"Sent chart updates to client {client_id}")
+            try:
+                # Parse client message as JSON
+                data = json.loads(message)
+                message_type = data.get("type")
+
+                # Handle different message types
+                if message_type == "ping":
+                    # Simple ping/pong for connection health check
+                    await websocket.send_json(
+                        {"type": "pong", "timestamp": datetime.now().isoformat()}
+                    )
+
+                elif message_type == "request_update":
+                    # Client requests a specific update
+                    update_type = data.get("update_type")
+                    if update_type == "full_status":
+                        await send_full_status_update(websocket)
+                    elif update_type == "charts":
+                        await broadcast_chart_updates()
+                    elif update_type == "monitoring":
+                        await broadcast_monitoring_stats()
+                    else:
+                        await websocket.send_json(
+                            {
+                                "type": "error",
+                                "message": f"Unknown update type: {update_type}",
+                            }
+                        )
+
+                elif message_type == "subscribe":
+                    # Handle subscription to specific update channels
+                    channels = data.get("channels", [])
+                    client_info = ws_manager.connection_info.get(websocket, {})
+                    if client_info:
+                        client_info["subscribed_channels"] = channels
+                        logger.debug(f"Client subscribed to channels: {channels}")
+
+                else:
+                    logger.debug(f"Received unknown message type: {message_type}")
+                    await websocket.send_json(
+                        {
+                            "type": "error",
+                            "message": f"Unknown message type: {message_type}",
+                        }
+                    )
+
             except json.JSONDecodeError:
-                logger.error(f"Invalid JSON received from client {client_id}: {data}")
-            except Exception as e:
-                logger.error(f"Error processing client {client_id} message: {e}")
+                logger.warning(f"Received invalid JSON from client: {message[:100]}")
+                await websocket.send_json(
+                    {"type": "error", "message": "Invalid JSON format"}
+                )
 
     except WebSocketDisconnect:
-        logger.info(f"WebSocket connection closed for {client_id}")
-        active_connections.remove(websocket)
-        logger.info(
-            f"WebSocket connection removed for {client_id}. Remaining: {len(active_connections)}"
-        )
+        await ws_manager.disconnect(websocket)
     except Exception as e:
-        logger.error(
-            f"Unexpected error in websocket_endpoint for client {client_id}: {e}"
-        )
-        if websocket in active_connections:
-            active_connections.remove(websocket)
-            logger.info(
-                f"WebSocket connection removed for {client_id} after error. Remaining: {len(active_connections)}"
+        logger.error(f"WebSocket error: {e}")
+        await ws_manager.disconnect(websocket)
+
+
+# Update the broadcast functions to use the WebSocket manager
+async def broadcast_status():
+    """Broadcasts the current AI status to all connected clients."""
+    if ws_manager.active_connections:
+        message = {"type": "status_update", "ai_status": ai_status}
+        await ws_manager.broadcast(message)
+
+
+async def broadcast_specific_update(update_data: dict):
+    """Broadcasts a specific update to all clients."""
+    if ws_manager.active_connections:
+        await ws_manager.broadcast(update_data)
+
+
+async def broadcast_chart_updates():
+    """Formulates and sends data for all charts."""
+    if not ws_manager.active_connections:
+        return
+
+    # Get data for charts
+    progress_data = get_progress_chart_data()
+
+    # Refine status aggregation for Pie Chart
+    status_counts = {
+        "pending": 0,
+        "processing": 0,
+        "completed": 0,
+        "failed": 0,
+        "other": 0,
+    }
+    for status in subtask_status.values():
+        if status == "pending":
+            status_counts["pending"] += 1
+        elif status == "processing":
+            status_counts["processing"] += 1
+        # More comprehensive list of completed/successful states
+        elif status in [
+            "accepted",
+            "completed",
+            "code_received",
+            "tested",
+            "documented",
+            "skipped",
+        ]:
+            status_counts["completed"] += 1
+        # Group failure/error states
+        elif status in ["failed", "error", "needs_rework"] or (
+            isinstance(status, str) and "error" in status.lower()
+        ):
+            status_counts["failed"] += 1
+        else:
+            status_counts["other"] += 1  # Catch-all for any other statuses
+
+    # Format data for git activity chart
+    git_activity_data = {
+        "labels": [f"Commit {i+1}" for i in range(len(processed_history))],
+        "values": list(processed_history),
+    }
+
+    # Format complete update for all charts
+    update_data = {
+        "type": "chart_update",
+        "progress_data": progress_data,
+        "git_activity": git_activity_data,
+        "task_status_distribution": status_counts,
+        "timestamp": datetime.now().isoformat(),
+    }
+
+    # Send update to all connected clients
+    await ws_manager.broadcast(update_data)
+
+
+async def broadcast_monitoring_stats():
+    """Calculates and broadcasts core monitoring stats (Total, Completed)."""
+    if ws_manager.active_connections:
+        try:
+            stats = get_progress_stats()  # Get stats including completed count
+            actual_total_tasks = len(subtask_status)  # Total known subtasks
+            completed_tasks = stats.get("tasks_completed", 0)
+
+            update_data = {
+                "type": "monitoring_update",
+                "total_tasks": actual_total_tasks,
+                "completed_tasks": completed_tasks,
+                "queues": {
+                    "executor": executor_queue.qsize(),
+                    "tester": tester_queue.qsize(),
+                    "documenter": documenter_queue.qsize(),
+                },
+                "queue_items": {
+                    "executor": [t for t in executor_queue._queue],
+                    "tester": [t for t in tester_queue._queue],
+                    "documenter": [t for t in documenter_queue._queue],
+                },
+                "efficiency": f"{(completed_tasks / max(1, actual_total_tasks) * 100):.1f}%",
+                "timestamp": datetime.now().isoformat(),
+            }
+            await ws_manager.broadcast(update_data)
+            logger.debug(
+                f"Broadcasted monitoring update: Total={actual_total_tasks}, Completed={completed_tasks}"
             )
+        except Exception as e:
+            logger.error(f"Error broadcasting monitoring stats: {e}", exc_info=True)
+
+
+async def broadcast_full_status():
+    """Broadcasts detailed status to all connected clients."""
+    if ws_manager.active_connections:
+        # Aggregation for Pie Chart
+        status_counts = {
+            "pending": 0,
+            "processing": 0,
+            "completed": 0,
+            "failed": 0,
+            "other": 0,
+        }
+        for status in subtask_status.values():
+            if status == "pending":
+                status_counts["pending"] += 1
+            elif status in ["processing", "in_progress"]:
+                status_counts["processing"] += 1
+            elif status in [
+                "accepted",
+                "completed",
+                "code_received",
+                "tested",
+                "documented",
+                "skipped",
+            ]:
+                status_counts["completed"] += 1
+            elif status in ["failed", "error", "needs_rework"] or (
+                isinstance(status, str) and "error" in status.lower()
+            ):
+                status_counts["failed"] += 1
+            else:
+                status_counts["other"] += 1
+
+        # Get progress chart data
+        progress_chart_data = get_progress_chart_data()
+
+        # Prepare git activity data
+        history_list = list(processed_history)
+        git_activity_data = {
+            "labels": [f"Commit {i+1}" for i in range(len(history_list))],
+            "values": history_list,
+        }
+
+        # Calculate actual total tasks as the number of known subtasks
+        actual_total_tasks = len(subtask_status)
+        logger.debug(
+            f"[Broadcast] Calculated actual_total_tasks (known subtasks): {actual_total_tasks}"
+        )
+
+        state_data = {
+            "type": "full_status_update",
+            "ai_status": ai_status,
+            "queues": {
+                "executor": [
+                    {
+                        "id": t["id"],
+                        "filename": t.get("filename", "N/A"),
+                        "text": t["text"],
+                        "status": subtask_status.get(t["id"], "unknown"),
+                    }
+                    for t in list(executor_queue._queue)
+                ],
+                "tester": [
+                    {
+                        "id": t["id"],
+                        "filename": t.get("filename", "N/A"),
+                        "text": t["text"],
+                        "status": subtask_status.get(t["id"], "unknown"),
+                    }
+                    for t in list(tester_queue._queue)
+                ],
+                "documenter": [
+                    {
+                        "id": t["id"],
+                        "filename": t.get("filename", "N/A"),
+                        "text": t["text"],
+                        "status": subtask_status.get(t["id"], "unknown"),
+                    }
+                    for t in list(documenter_queue._queue)
+                ],
+            },
+            "subtasks": subtask_status,
+            "structure": current_structure,
+            "ai3_report": ai3_report,
+            "git_activity": git_activity_data,
+            "progress_data": progress_chart_data,
+            "task_status_distribution": status_counts,
+            "actual_total_tasks": actual_total_tasks,
+            "timestamp": datetime.now().isoformat(),
+        }
+
+        await ws_manager.broadcast(state_data)
+
+
+# Add new API endpoint to get WebSocket stats
+@app.get("/ws/stats")
+async def get_websocket_stats():
+    """Returns statistics about WebSocket connections"""
+    return ws_manager.get_stats()
 
 
 @app.get("/health")
@@ -3844,3 +4362,59 @@ async def get_component_fallbacks():
 
 
 # Helper functions for provider configuration
+@app.websocket_route("/monitor_ws")
+async def monitor_websocket(websocket: WebSocket):
+    """WebSocket endpoint for monitoring data, separate from the main websocket for clients"""
+    await websocket.accept()
+    logger.info(f"Monitoring WebSocket connection established from {websocket.client}")
+
+    try:
+        # Send initial system status
+        await websocket.send_json(
+            {
+                "type": "monitor_status",
+                "message": "Monitoring WebSocket connected",
+                "timestamp": datetime.now().isoformat(),
+            }
+        )
+
+        # Listen for monitoring updates
+        while True:
+            data = await websocket.receive_json()
+            if data.get("type") == "monitor_update":
+                # Forward to all clients connected to the main WebSocket
+                await ws_manager.broadcast(
+                    {
+                        "type": "system_metrics",
+                        "data": data.get("data", {}),
+                        "timestamp": datetime.now().isoformat(),
+                    }
+                )
+                logger.debug("Forwarded monitoring update to clients")
+    except WebSocketDisconnect:
+        logger.info(f"Monitoring WebSocket disconnected: {websocket.client}")
+    except Exception as e:
+        logger.error(f"Error in monitoring WebSocket: {e}", exc_info=True)
+
+
+# Add an HTTP endpoint to get latest monitoring data
+@app.get("/monitoring/status")
+async def get_monitoring_status():
+    """Returns the latest monitoring status data"""
+    try:
+        status_path = os.path.join("logs", "load_status.json")
+        if not os.path.exists(status_path):
+            return JSONResponse(
+                content={"error": "Monitoring data not available"}, status_code=404
+            )
+
+        with open(status_path, "r") as f:
+            status_data = json.load(f)
+
+        return status_data
+    except Exception as e:
+        logger.error(f"Error reading monitoring status: {e}")
+        return JSONResponse(
+            content={"error": f"Error reading monitoring data: {str(e)}"},
+            status_code=500,
+        )

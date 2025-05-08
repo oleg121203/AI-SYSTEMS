@@ -4,53 +4,51 @@ import json
 import logging
 import os
 import re
-import shutil  # Added shutil
-import sys  # Added sys
+import shutil
+import sys
 import time
-from datetime import datetime, timezone  # Added timezone
-from pathlib import Path  # Added Path
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 # Third-party libraries
 import aiofiles
 import aiohttp
-from git import GitCommandError  # Added missing imports
-from git import InvalidGitRepositoryError, NoSuchPathError, Repo
+import psutil  # Added psutil
+from git import GitCommandError, InvalidGitRepositoryError, NoSuchPathError, Repo
+from pydantic import BaseModel, Field  # Added BaseModel and Field from pydantic
 
 # Local application/library specific imports
 from config import load_config
 from providers import BaseProvider, ProviderFactory
+from utils import call_ollama  # Changed from relative import to absolute import
 from utils import GITKEEP_FILENAME
 from utils import LOG_DIR as LOGS_DIR
-from utils import (
-    MCP_API_URL as DEFAULT_MCP_API_URL,
-)  # LOGS_DIR, # Marked as unused; extract_json_from_response, # Marked as unused
+from utils import MCP_API_URL as DEFAULT_MCP_API_URL
 from utils import REPO_DIR
 
 # Initialize logger for this module
 logger = logging.getLogger(__name__)
 
-# Constants for duplicated literals
-HTTP_LOCALHOST_7860 = (
-    "http://localhost:7860"  # For MCP_API_URL default if not from utils
-)
+# Constants
+HTTP_LOCALHOST_7860 = "http://localhost:7860"
 DETAILED_EXCEPTION_INFO = "Detailed exception information:"
 TESTS_TEST_PREFIX = "tests/test_"
 DOT_TEST_SUFFIX = ".test"
 DOT_JAVA_SUFFIX = ".java"
-
-# Ensure these are not redefined if imported from utils
-# DEFAULT_MCP_API_URL = HTTP_LOCALHOST_7860 # Defined by import
-# GITKEEP_FILENAME = ".gitkeep" # Defined by import
-# REPO_DIR = "repo" # Defined by import, ensure utils.py has a sensible default
-
 ERROR_RETRY_DELAY = 5  # seconds
-MAX_LOG_LINE_ANALYSIS = 200  # Max log lines to analyze with LLM in one go
-MAX_CONTEXT_LINES = 5  # Max context lines for log analysis
+MAX_LOG_LINE_ANALYSIS = 200
+MAX_CONTEXT_LINES = 5
 GITHUB_API_BASE_URL = "https://api.github.com"
-REPO_PREFIX = "/repo/"  # Used in handle_ai2_output
-
-# --- END MODIFIED IMPORTS AND GLOBAL SETUP ---
+REPO_PREFIX = "/repo/"
+GITIGNORE_FILENAME = ".gitignore"
+IDEA_MD_FILENAME = "idea.md"
+NES_FLASH_GAME_DIR = "nes_flash_game/"
+RETRO_NES_FLASH_GAME_DIR = "retro_nes_flash_game/"
+DEFAULT_LOG_ANALYSIS_PROVIDER = "ollama"  # Default provider for log analysis
+DEFAULT_LOG_ANALYSIS_MODEL = "llama3"  # Default model for log analysis
+DEFAULT_CODE_FIX_PROVIDER = "codestral"  # Default provider for code fixing
+DEFAULT_CODE_FIX_MODEL = "codestral-latest"  # Default model for code fixing
 
 
 def update_structure_provider_in_config(
@@ -58,91 +56,62 @@ def update_structure_provider_in_config(
 ) -> None:
     """
     Updates the config.json file to save the successful structure provider.
-
-    Args:
-        config_data: The current configuration data
-        provider_name: The name of the successful provider to save
+    Also updates the in-memory config_data.
     """
     try:
-        # Make a copy of the config to avoid modifying the original during runtime
         updated_config = copy.deepcopy(config_data)
+        ai_config = updated_config.setdefault("ai_config", {})
+        ai3_config = ai_config.setdefault("ai3", {})
+        ai3_config["structure_provider"] = provider_name
 
-        # Ensure ai_config and ai3 sections exist
-        if "ai_config" not in updated_config:
-            updated_config["ai_config"] = {}
-        if "ai3" not in updated_config["ai_config"]:
-            updated_config["ai_config"]["ai3"] = {}
-
-        # Update structure_provider to the successful provider
-        updated_config["ai_config"]["ai3"]["structure_provider"] = provider_name
-
-        # Select the appropriate model for this provider
         model = None
-        if provider_name == "structure_fallback":
-            # For fallback provider, don't set a global model as each sub-provider has its own
-            pass
-        elif provider_name == "codestral2":
-            # Use codestral-latest for codestral2 provider
+        # Simplified model selection logic, assuming provider names map to models
+        # This should ideally be more robust or data-driven from config
+        if provider_name == "codestral":  # Example, adjust as per your provider setup
             model = "codestral-latest"
         elif provider_name == "gemini":
-            # Use gemini-1.5-flash for gemini provider
-            model = "gemini-1.5-flash"
-        elif provider_name == "ollama1":
-            # Use llama3.2:latest for ollama1 provider
-            model = "llama3.2:latest"
+            model = "gemini-1.5-flash"  # Or other appropriate model
         elif (
-            "providers" in updated_config
-            and provider_name in updated_config["providers"]
-        ):
-            # For other providers, use their configured model
-            model = updated_config["providers"][provider_name].get("model")
+            provider_name == "ollama"
+        ):  # Generic ollama, specific model might be needed
+            model = ai3_config.get("model", "llama3")  # Keep existing or default
+        # Add other provider-model mappings as needed
 
-        # Update the model in config if we found one
         if model:
-            updated_config["ai_config"]["ai3"]["model"] = model
+            ai3_config["model"] = model
 
-        # If structure_providers list exists, ensure this provider is first in the list
-        if "structure_providers" in updated_config["ai_config"]["ai3"]:
-            providers_list = updated_config["ai_config"]["ai3"]["structure_providers"]
-            # Remove provider if it's already in the list
-            if provider_name in providers_list:
-                providers_list.remove(provider_name)
-            # Add provider at the beginning
-            providers_list.insert(0, provider_name)
-        else:
-            # Create structure_providers list if it doesn't exist
-            updated_config["ai_config"]["ai3"]["structure_providers"] = [
-                provider_name,
-                "codestral",
-                "gemini",
-            ]
+        providers_list = ai3_config.setdefault(
+            "structure_providers", ["codestral", "gemini"]  # Default list
+        )
+        if not isinstance(providers_list, list):  # Ensure it's a list
+            providers_list = ["codestral", "gemini"]
+            ai3_config["structure_providers"] = providers_list
 
-        # Write the updated config back to file
-        with open("config.json", "w") as f:
+        if provider_name in providers_list:
+            providers_list.remove(provider_name)
+        providers_list.insert(0, provider_name)
+
+        with open("config.json", "w", encoding="utf-8") as f:
             json.dump(updated_config, f, indent=4)
-
         logger.info(
-            f"[AI3] Successfully updated config.json with structure provider: {provider_name}"
+            f"[AI3] Updated config.json: provider='{provider_name}', model='{model}'"
         )
 
-        # Also update the config_data in memory to reflect the change
-        if "ai_config" in config_data and "ai3" in config_data["ai_config"]:
-            config_data["ai_config"]["ai3"]["structure_provider"] = provider_name
-            # Update model in memory too if we found one
-            if model:
-                config_data["ai_config"]["ai3"]["model"] = model
-
-            if "structure_providers" in config_data["ai_config"]["ai3"]:
-                if (
-                    provider_name
-                    in config_data["ai_config"]["ai3"]["structure_providers"]
-                ):
-                    config_data["ai_config"]["ai3"]["structure_providers"].remove(
-                        provider_name
-                    )
-                config_data["ai_config"]["ai3"]["structure_providers"].insert(
-                    0, provider_name
-                )
+        # Update in-memory config_data
+        mem_ai_config = config_data.setdefault("ai_config", {})
+        mem_ai3_config = mem_ai_config.setdefault("ai3", {})
+        mem_ai3_config["structure_provider"] = provider_name
+        if model:
+            mem_ai3_config["model"] = model
+        mem_providers_list = mem_ai3_config.setdefault(
+            "structure_providers", ["codestral", "gemini"]
+        )
+        if not isinstance(mem_providers_list, list):
+            mem_providers_list = ["codestral", "gemini"]
+            mem_ai3_config["structure_providers"] = mem_providers_list
+        if provider_name in mem_providers_list:
+            mem_providers_list.remove(provider_name)
+        mem_providers_list.insert(0, provider_name)
 
     except Exception as e:
         logger.error(
@@ -150,135 +119,113 @@ def update_structure_provider_in_config(
         )
 
 
-async def _initialize_repository(repo_path: str) -> Optional[Repo]:
-    # ...existing code...
+async def _initialize_repository(repo_path_str: str) -> Optional[Repo]:
+    """Initializes or opens a Git repository at the given path."""
+    repo_path = Path(repo_path_str)
     try:
-        repo_path_obj = Path(repo_path)  # Use Path object
-        if not repo_path_obj.exists():
-            logger.info(
-                f"[AI3-Git] Repository path does not exist. Creating: {repo_path}"
-            )
-            repo_path_obj.mkdir(parents=True, exist_ok=True)
-        elif not repo_path_obj.is_dir():
-            logger.error(
-                f"[AI3-Git] Repository path exists but is not a directory: {repo_path}"
-            )
+        if not repo_path.exists():
+            repo_path.mkdir(parents=True, exist_ok=True)
+            logger.info(f"[AI3-Git] Created repository directory: {repo_path}")
+
+        if not repo_path.is_dir():
+            logger.error(f"[AI3-Git] Path exists but is not a directory: {repo_path}")
             return None
 
         try:
-            repo = Repo(repo_path)
-            logger.info(f"[AI3-Git] Opened existing repository at: {repo_path}")
-        except InvalidGitRepositoryError:  # Catch specific error
-            logger.info(
-                f"[AI3-Git] Repository not found, initializing new one at: {repo_path}"
+            repo = Repo(str(repo_path))
+            logger.info(f"[AI3-Git] Opened existing repository: {repo_path}")
+        except InvalidGitRepositoryError:
+            logger.info(f"[AI3-Git] Initializing new repository: {repo_path}")
+            repo = Repo.init(str(repo_path))
+            # Initial commit with .gitignore
+            gitignore_content = "*.pyc\\n__pycache__/\\n.DS_Store\\n.env\\nlogs/\\ntmp/\\nnode_modules/\\ndist/\\nbuild/\\n*.log\\ncoverage.xml\\n.pytest_cache/\\n.mypy_cache/\\n.idea/\\n.vscode/\\n"
+            gitignore_file = repo_path / GITIGNORE_FILENAME
+            async with aiofiles.open(gitignore_file, "w", encoding="utf-8") as gf:
+                await gf.write(gitignore_content)
+            _commit_changes(
+                repo, [str(gitignore_file)], f"Initial commit: Add {GITIGNORE_FILENAME}"
             )
-            repo = Repo.init(repo_path)
-            logger.info(f"[AI3-Git] Initialized new repository at: {repo_path}")
-
-        gitignore_path = os.path.join(repo_path, ".gitignore")
-        if not os.path.exists(gitignore_path):
-            with open(gitignore_path, "w", encoding="utf-8") as f:
-                f.write(
-                    """*.pyc
-__pycache__/
-.DS_Store
-.env
-logs/
-tmp/
-node_modules/
-dist/
-build/
-*.log
-coverage.xml
-.pytest_cache/
-.mypy_cache/
-.idea/
-.vscode/
-"""
-                )
-            logger.info(f"[AI3-Git] Created .gitignore at {gitignore_path}")
-            # Commit .gitignore
-            _commit_changes(repo, [gitignore_path], "Initial commit: .gitignore")
             logger.info(
-                "[AI3-Git] Initial commit successful: .gitignore"
-            )  # Removed f-string
+                f"[AI3-Git] Initialized new repo with {GITIGNORE_FILENAME}: {repo_path}"
+            )
         return repo
-    except GitCommandError as init_e:
+    except GitCommandError as e:
         logger.critical(
-            "[AI3-Git] CRITICAL: Git command error during repository initialization "
-            f"at {repo_path}: {init_e}"
+            f"[AI3-Git] Git command error during repo init: {e}", exc_info=True
         )
         return None
-    except Exception as e:  # General exception
+    except Exception as e:
         logger.critical(
-            f"[AI3-Git] CRITICAL: Failed to initialize or open repository "
-            f"at {repo_path}: {e}"
+            f"[AI3-Git] Failed to initialize/open repository: {e}", exc_info=True
         )
         return None
 
 
-def _commit_changes(repo: Repo, file_paths: list, message: str):
+def _commit_changes(repo: Repo, file_paths: List[str], message: str):
+    """Commits specified files to the repository."""
     if not file_paths:
-        logger.info(f"[AI3-Git] No file paths provided for commit message: {message}")
+        logger.info(f"[AI3-Git] No files provided for commit: {message}")
         return
 
-    relative_paths = [
-        os.path.relpath(p, repo.working_dir) if os.path.isabs(p) else p
-        for p in file_paths
-    ]
+    abs_file_paths = [os.path.abspath(p) for p in file_paths]
+    repo_root_abs = os.path.abspath(repo.working_dir)
 
-    # Filter out paths that are outside the repository or don't exist
-    valid_paths_to_add = []
-    for rel_path in relative_paths:
-        abs_path = os.path.join(repo.working_dir, rel_path)
-        if not os.path.exists(abs_path):
-            logger.warning(f"[AI3-Git] File not found, skipping add: {rel_path}")
+    paths_to_add = []
+    for abs_path_str in abs_file_paths:
+        abs_path = Path(abs_path_str)
+        if not abs_path.exists():
+            logger.warning(f"[AI3-Git] File not found, skipping add: {abs_path_str}")
             continue
-        # Basic check to prevent adding files outside the repo, though relpath should handle it.
-        if not abs_path.startswith(os.path.abspath(repo.working_dir)):
-            logger.warning(f"[AI3-Git] File outside repo, skipping add: {rel_path}")
+        # Ensure path is within the repository
+        if not str(abs_path).startswith(repo_root_abs):
+            logger.warning(
+                f"[AI3-Git] File {abs_path_str} is outside repository {repo_root_abs}, skipping."
+            )
             continue
-        valid_paths_to_add.append(rel_path)
+        # Convert absolute path to relative for Git
+        relative_path = str(abs_path.relative_to(repo_root_abs))
+        paths_to_add.append(relative_path)
 
-    if not valid_paths_to_add:
-        logger.info(f"[AI3-Git] No valid files found to commit for message: {message}")
+    if not paths_to_add:
+        logger.info(f"[AI3-Git] No valid files to commit for: {message}")
         return
 
     try:
-        repo.index.add(valid_paths_to_add)
-
+        repo.index.add(paths_to_add)
         # Check if there are staged changes
-        if not repo.index.diff("HEAD") and not repo.is_dirty(
-            untracked_files=True, working_tree=False
-        ):  # Check only staged
-            # A more robust check for staged changes
-            staged_changes = repo.index.diff("HEAD")
-            if not staged_changes and not repo.head.is_valid():  # initial commit case
-                # If it's the very first commit, diff against empty tree
-                staged_changes = repo.index.diff(None)
-
-            if not staged_changes:
-                logger.info(
-                    f"[AI3-Git] No new or modified files staged to commit for: {message}"
-                )
-                return
+        # For initial commit, diff against an empty tree
+        diff_to_head = repo.index.diff("HEAD" if repo.head.is_valid() else None)
+        if not diff_to_head:
+            logger.info(
+                f"[AI3-Git] No actual changes staged for commit: {message}. Files: {paths_to_add}"
+            )
+            # If files were added but no diff, they might be unchanged or gitignored effectively
+            # Check if files are truly gitignored
+            actually_ignored = [p for p in paths_to_add if repo.is_ignored(p)]
+            if actually_ignored:
+                logger.info(f"[AI3-Git] Files are gitignored: {actually_ignored}")
+            return
 
         repo.index.commit(message)
-        logger.info(f"[AI3-Git] Successfully committed: {message}")
+        logger.info(
+            f"[AI3-Git] Successfully committed: {message} (Files: {paths_to_add})"
+        )
     except GitCommandError as e:
-        # More specific check for "nothing to commit"
         if (
             "nothing to commit" in str(e).lower()
             or "no changes added to commit" in str(e).lower()
         ):
-            logger.info(f"[AI3-Git] Git: Nothing to commit for message: {message}")
+            logger.info(f"[AI3-Git] Git: Nothing to commit for: {message}")
         else:
             logger.error(
-                f"[AI3-Git] Error committing changes: {message}. "
-                f"Files: {valid_paths_to_add}. Error: {e}"
+                f"[AI3-Git] Error committing files {paths_to_add} for '{message}': {e}",
+                exc_info=True,
             )
     except Exception as e:
-        logger.error(f"[AI3-Git] Unexpected error during commit: {e}", exc_info=True)
+        logger.error(
+            f"[AI3-Git] Unexpected error during commit for '{message}': {e}",
+            exc_info=True,
+        )
 
 
 async def generate_structure_llm_prompt(target_project_description: str) -> str:
@@ -335,8 +282,8 @@ async def generate_structure_refinement_prompt(
     {json.dumps(current_structure, indent=2)}
     ```
 
-    Review the current project structure above. Refine it to better match the project target.
-    Consider adding missing files, removing unnecessary ones, or restructuring for clarity and best practices.
+    Review the current project structure. Refine it for the project target.
+    Consider adding/removing files, or restructuring for clarity/best practices.
     Output ONLY the refined JSON structure, enclosed in triple backticks (```json ... ```).
     """
 
@@ -346,14 +293,119 @@ async def generate_idea_md_llm_prompt(target_project_description: str) -> str:
     return f"""
     Project Target: {target_project_description}
 
-    Based on the project target, generate a comprehensive `idea.md` document.
-    This document should outline the project's vision, key features, technical stack considerations,
-    potential challenges, and a high-level roadmap or development strategy.
+    Based on the project target, generate a comprehensive `{IDEA_MD_FILENAME}` document.
+    This document should outline:
+    - Project vision
+    - Key features
+    - Technical stack considerations
+    - Potential challenges
+    - High-level roadmap or development strategy.
     The tone should be suitable for a technical lead or project manager.
     Format the output as a Markdown document.
 
-    Output ONLY the Markdown content for `idea.md`.
+    Output ONLY the Markdown content for `{IDEA_MD_FILENAME}`.
     """
+
+
+async def _get_provider_instance(
+    provider_factory: ProviderFactory,
+    provider_name: str,
+    config_data: Dict[str, Any],
+    ai3_config: Dict[str, Any],
+    client_session: aiohttp.ClientSession,
+    ui_selected_provider: Optional[str],
+    ui_selected_model: Optional[str],
+) -> Optional[BaseProvider]:
+    """Helper to create and configure a provider instance."""
+    provider_global_config = config_data.get("providers", {}).get(provider_name, {})
+    ai3_llm_params = {
+        k: v
+        for k, v in ai3_config.items()
+        if k
+        not in [
+            "structure_provider",
+            "structure_providers",
+            "idea_md_provider",
+            "idea_md_providers",
+            "refinement_providers",
+        ]
+        and not isinstance(v, (dict, list))
+    }
+    ai3_provider_specific_overrides = (
+        ai3_config.get(provider_name, {})
+        if isinstance(ai3_config.get(provider_name), dict)
+        else {}
+    )
+    merged_config = {
+        **provider_global_config,
+        **ai3_llm_params,
+        **ai3_provider_specific_overrides,
+        "name": provider_name,
+    }
+
+    model_to_use = merged_config.get("model")
+    if provider_name == ui_selected_provider and ui_selected_model:
+        model_to_use = ui_selected_model
+        logger.info(
+            f"[AI3] Using UI selected model for {provider_name}: {model_to_use}"
+        )
+    elif provider_name == "structure_fallback":
+        model_to_use = None
+    elif provider_name == "codestral2":
+        model_to_use = "codestral-latest"
+    elif provider_name == "gemini":
+        model_to_use = "gemini-1.5-flash"
+    elif provider_name == "ollama1":
+        model_to_use = "llama3.2:latest"
+
+    merged_config["model"] = model_to_use  # Update merged_config with final model
+
+    logger.info(f"[AI3] Final model for provider {provider_name}: {model_to_use}")
+    return provider_factory.create_provider(
+        provider_name, config_arg=merged_config, session=client_session
+    )
+
+
+async def _generate_with_provider_cycle(
+    prompt: str,
+    provider_instance: BaseProvider,
+    provider_name: str,
+    cycle_name: str,
+    temperature: float,
+    max_tokens: int,
+) -> Optional[Dict[str, Any]]:
+    """Helper for a single generation cycle (initial or refinement)."""
+    try:
+        generated_str = await provider_instance.generate(
+            prompt=prompt,
+            model=provider_instance.config.get(
+                "model"
+            ),  # Get model from instance config
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        await provider_instance.close_session()
+
+        if generated_str:
+            json_match = re.search(
+                r"```(?:json)?\\s*([\\s\\S]*?)\\s*```", generated_str
+            )
+            if json_match:
+                generated_str = json_match.group(1).strip()
+            try:
+                parsed_json = json.loads(generated_str)
+                logger.info(
+                    f"[AI3] {cycle_name}: Parsed structure from {provider_name}"
+                )
+                return parsed_json
+            except json.JSONDecodeError:
+                logger.warning(
+                    f"[AI3] Invalid JSON from {provider_name} in {cycle_name}. "
+                    f"Response: {generated_str[:200]}..."
+                )
+    except Exception as e:
+        logger.error(f"[AI3] Error with provider {provider_name} in {cycle_name}: {e}")
+    return None
 
 
 async def generate_structure(
@@ -361,338 +413,129 @@ async def generate_structure(
     provider_factory: ProviderFactory,
     config_data: Dict[str, Any],
     client_session: aiohttp.ClientSession,
-    selected_provider_name: Optional[str] = None,  # For testing a specific provider
+    selected_provider_name: Optional[str] = None,
 ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     """
-    Generates the project structure using a sequence of LLM calls.
-    Cycle 1: Initial generation.
-    Cycle 2: Refinement of the generated structure.
-    Prioritizes providers from ai_config.ai3.structure_provider, then ai_config.ai3.structure_providers.
+    Generates project structure via LLM (initial generation + refinement).
     """
-    logger.info(
-        f"[AI3] Starting project structure generation for: {target_desc[:100]}..."
-    )
+    logger.info(f"[AI3] Starting structure generation for: {target_desc[:100]}...")
     ai3_config = config_data.get("ai_config", {}).get("ai3", {})
+    ui_structure_provider = ai3_config.get("structure_provider")
+    ui_structure_model = ai3_config.get("structure_model")
 
-    # Get UI-selected structure provider and model from config
-    # These are saved by the frontend via saveProviderConfig
-    ui_selected_structure_provider = ai3_config.get("structure_provider")
-    ui_selected_structure_model = ai3_config.get("structure_model")
-    logger.info(
-        f"[AI3] UI configured structure_provider: {ui_selected_structure_provider}, structure_model: {ui_selected_structure_model}"
-    )
+    # Determine providers for Cycle 1
+    providers_c1 = []
+    if selected_provider_name:
+        providers_c1 = [selected_provider_name]
+    elif ui_structure_provider and isinstance(ui_structure_provider, str):
+        providers_c1.append(ui_structure_provider)
 
-    # Determine providers for Cycle 1 (Initial Generation)
-    providers_to_try_cycle1: List[str] = []
-    specific_structure_provider = ai3_config.get("structure_provider")
-
-    if selected_provider_name:  # If a provider is passed for testing
-        providers_to_try_cycle1 = [selected_provider_name]
-        logger.info(
-            f"[AI3] Using specific provider for Cycle 1 (override): {selected_provider_name}"
-        )
-    elif specific_structure_provider and isinstance(specific_structure_provider, str):
-        providers_to_try_cycle1.append(specific_structure_provider)
-        logger.info(
-            f"[AI3] Cycle 1: Prioritizing specific structure_provider: {specific_structure_provider}"
-        )
-
-    # Add providers from the list, ensuring no duplicates if specific_structure_provider was already added
-    structure_providers_list = ai3_config.get(
-        "structure_providers", ["codestral"]
-    )  # Default to codestral
-    if not isinstance(structure_providers_list, list) or not all(
-        isinstance(p, str) for p in structure_providers_list
+    default_providers = ["codestral"]
+    structure_providers_list = ai3_config.get("structure_providers", default_providers)
+    if not (
+        isinstance(structure_providers_list, list)
+        and all(isinstance(p, str) for p in structure_providers_list)
     ):
-        logger.warning(
-            f"[AI3] 'structure_providers' in ai_config.ai3 is not a list of strings. Using default: ['codestral']"
-        )
-        structure_providers_list = ["codestral"]
+        logger.warning("[AI3] 'structure_providers' invalid. Using default.")
+        structure_providers_list = default_providers
 
     for p_name in structure_providers_list:
-        if p_name not in providers_to_try_cycle1:
-            providers_to_try_cycle1.append(p_name)
+        if p_name not in providers_c1:
+            providers_c1.append(p_name)
+    if not providers_c1:
+        providers_c1 = default_providers
+        logger.error("[AI3] No providers for Cycle 1. Defaulting.")
 
-    if not providers_to_try_cycle1:  # Should not happen if default is used
-        logger.error(
-            "[AI3] CRITICAL: No providers determined for Cycle 1 structure generation. Defaulting to 'codestral'."
+    logger.info(f"[AI3] Cycle 1 Providers: {providers_c1}")
+
+    initial_structure: Optional[Dict[str, Any]] = None
+    chosen_provider_c1: Optional[str] = None
+    prompt_c1 = await generate_structure_llm_prompt(target_desc)
+
+    for provider_name in providers_c1:
+        logger.info(f"[AI3] Cycle 1: Trying provider {provider_name}")
+        instance = await _get_provider_instance(
+            provider_factory,
+            provider_name,
+            config_data,
+            ai3_config,
+            client_session,
+            ui_structure_provider,
+            ui_structure_model,
         )
-        providers_to_try_cycle1 = ["codestral"]
-
-    logger.info(
-        f"[AI3] Cycle 1: Providers to try for initial generation: {providers_to_try_cycle1}"
-    )
-
-    initial_structure_json: Optional[Dict[str, Any]] = None
-    chosen_provider_cycle1: Optional[str] = None
-    prompt = await generate_structure_llm_prompt(target_desc)
-
-    for provider_name in providers_to_try_cycle1:
-        logger.info(
-            f"[AI3] Cycle 1: Trying provider for initial generation: {provider_name}"
-        )
-        # Correctly merge configurations for the provider
-        # 1. Global provider settings (e.g. API keys from config.providers.<provider_name>)
-        provider_global_config = config_data.get("providers", {}).get(provider_name, {})
-        # 2. General LLM params from ai_config.ai3 (e.g. temperature, but not provider-specific blocks)
-        ai3_llm_params = {
-            k: v
-            for k, v in ai3_config.items()
-            if k
-            not in [
-                "structure_provider",
-                "structure_providers",
-                "idea_md_provider",
-                "idea_md_providers",
-            ]
-            and not isinstance(v, (dict, list))
-        }
-        # 3. Provider-specific settings from ai_config.ai3 (e.g. ai_config.ai3.ollama.model)
-        ai3_provider_specific_overrides = (
-            ai3_config.get(provider_name, {})
-            if isinstance(ai3_config.get(provider_name), dict)
-            else {}
-        )
-
-        merged_config_for_provider = {
-            **provider_global_config,
-            **ai3_llm_params,
-            **ai3_provider_specific_overrides,
-            "name": provider_name,  # Ensure name is set for ProviderFactory
-        }
-
-        provider_instance = provider_factory.create_provider(
-            provider_name, config_arg=merged_config_for_provider, session=client_session
-        )
-        if not provider_instance:
-            logger.error(
-                f"[AI3] Cycle 1: Failed to create provider instance for {provider_name}. Skipping."
-            )
+        if not instance:
+            logger.error(f"[AI3] Cycle 1: Failed to create {provider_name}")
             continue
 
-        provider_model = merged_config_for_provider.get(
-            "model"
-        )  # This is the default model for the provider from its own config block
-
-        model_to_use = provider_model  # Initialize with provider's default model
-
-        # Priority 1: If a specific provider/model is passed for testing (selected_provider_name)
-        # This 'selected_provider_name' is an argument to generate_structure, not from config.json for UI selection.
-        # The UI selection is handled by ui_selected_structure_provider and ui_selected_structure_model.
-
-        # Priority 2: Use UI selected structure_provider and structure_model if current provider_name matches
-        if (
-            provider_name == ui_selected_structure_provider
-            and ui_selected_structure_model
-        ):
-            model_to_use = ui_selected_structure_model
-            logger.info(
-                f"[AI3] Using UI selected structure_model for {provider_name}: {model_to_use}"
-            )
-        else:
-            # Priority 3: Fallback to existing hardcoded logic or provider's default model
-            # This block is now an 'else' to the UI selection override.
-            if provider_name == "structure_fallback":
-                # For fallback provider, don't specify a model so each sub-provider uses its own
-                model_to_use = None
-                logger.info(
-                    f"[AI3] Provider {provider_name} is a fallback type, model_to_use set to None."
-                )
-            elif provider_name == "codestral2":
-                # Explicitly use codestral-latest for codestral provider
-                model_to_use = "codestral-latest"
-                logger.info(
-                    f"[AI3] Using hardcoded model for {provider_name}: {model_to_use}"
-                )
-            elif provider_name == "gemini":
-                # Explicitly use gemini-1.5-flash for gemini provider
-                model_to_use = "gemini-1.5-flash"
-                logger.info(
-                    f"[AI3] Using hardcoded model for {provider_name}: {model_to_use}"
-                )
-            elif provider_name == "ollama1":
-                # Use the configured llama model for ollama provider
-                model_to_use = "llama3.2:latest"  # Example, could also be from merged_config_for_provider.get("model") if that's more dynamic
-                logger.info(
-                    f"[AI3] Using hardcoded model for {provider_name}: {model_to_use}"
-                )
-            # else: model_to_use remains provider_model (provider's default), which is correct.
-            # No specific log needed here as it's the default path.
-
-        logger.info(
-            f"[AI3] Final model_to_use for provider {provider_name}: {model_to_use}"
+        initial_structure = await _generate_with_provider_cycle(
+            prompt_c1,
+            instance,
+            provider_name,
+            "Cycle 1",
+            instance.config.get("temperature", 0.5),
+            instance.config.get("max_tokens", 3000),
         )
+        if initial_structure:
+            chosen_provider_c1 = provider_name
+            update_structure_provider_in_config(config_data, provider_name)
+            break
 
-        try:
-            initial_structure_str = await provider_instance.generate(
-                prompt=prompt,
-                model=model_to_use,
-                temperature=merged_config_for_provider.get("temperature", 0.5),
-                max_tokens=merged_config_for_provider.get("max_tokens", 3000),
-            )
-
-            # Ensure provider session is closed
-            await provider_instance.close_session()
-
-            if initial_structure_str:
-                try:
-                    # Try to extract JSON from the response if it's wrapped in triple backticks
-                    json_match = re.search(
-                        r"```(?:json)?\s*([\s\S]*?)\s*```", initial_structure_str
-                    )
-                    if json_match:
-                        initial_structure_str = json_match.group(1).strip()
-
-                    parsed_structure = json.loads(initial_structure_str)
-                    initial_structure_json = parsed_structure
-                    chosen_provider_cycle1 = provider_name
-                    logger.info(
-                        f"[AI3] Cycle 1: Successfully parsed structure from {provider_name}"
-                    )
-
-                    # Save the successful provider to config.json
-                    update_structure_provider_in_config(config_data, provider_name)
-
-                    break
-                except json.JSONDecodeError:
-                    logger.warning(
-                        f"[AI3] Invalid JSON response from provider {provider_name} in Cycle 1. Response: {initial_structure_str[:200]}..."
-                    )
-                    initial_structure_json = None  # Ensure it's reset
-                    chosen_provider_cycle1 = None
-                    continue
-        except Exception as e:
-            logger.error(f"[AI3] Error with provider {provider_name}: {e}")
-            continue
-
-    # Determine providers for Cycle 2 (Refinement)
-    # Option 1: Use a dedicated list for refinement if available
-    refinement_providers_list_config = ai3_config.get("refinement_providers")
-    # Option 2: Re-use providers from Cycle 1, prioritizing the one that succeeded in Cycle 1
-    # Option 3: Fallback to a default if neither is set
-
-    providers_to_try_cycle2: List[str] = []
-
-    if (
-        selected_provider_name
-    ):  # If a provider is passed for testing, use it for refinement too
-        providers_to_try_cycle2 = [selected_provider_name]
-        logger.info(
-            f"[AI3] Using specific provider for Cycle 2 (override): {selected_provider_name}"
-        )
-    elif (
-        refinement_providers_list_config
-        and isinstance(refinement_providers_list_config, list)
-        and all(isinstance(p, str) for p in refinement_providers_list_config)
+    # Determine providers for Cycle 2
+    providers_c2 = []
+    refinement_cfg = ai3_config.get("refinement_providers")
+    if selected_provider_name:
+        providers_c2 = [selected_provider_name]
+    elif isinstance(refinement_cfg, list) and all(
+        isinstance(p, str) for p in refinement_cfg
     ):
-        providers_to_try_cycle2 = refinement_providers_list_config
-        logger.info(
-            f"[AI3] Cycle 2: Using dedicated refinement_providers: {providers_to_try_cycle2}"
-        )
-    elif chosen_provider_cycle1:  # Prioritize the successful provider from Cycle 1
-        providers_to_try_cycle2.append(chosen_provider_cycle1)
-        for p_name in providers_to_try_cycle1:  # Add others from cycle 1 list
-            if p_name not in providers_to_try_cycle2:
-                providers_to_try_cycle2.append(p_name)
-        logger.info(
-            f"[AI3] Cycle 2: Re-using providers from Cycle 1, prioritizing '{chosen_provider_cycle1}': {providers_to_try_cycle2}"
-        )
-    else:  # Fallback if no specific refinement list and Cycle 1 didn't choose one (e.g., all failed or used fallback structure)
-        providers_to_try_cycle2 = (
-            providers_to_try_cycle1  # Default to trying Cycle 1's list again
-        )
-        logger.info(
-            f"[AI3] Cycle 2: Defaulting to Cycle 1 provider list for refinement: {providers_to_try_cycle2}"
-        )
+        providers_c2 = refinement_cfg
+    elif chosen_provider_c1:
+        providers_c2.append(chosen_provider_c1)
+        for p_name in providers_c1:  # Reuse Cycle 1 list
+            if p_name not in providers_c2:
+                providers_c2.append(p_name)
+    else:
+        providers_c2 = providers_c1  # Fallback
 
-    if not providers_to_try_cycle2:
-        logger.error(
-            "[AI3] CRITICAL: No providers determined for Cycle 2 structure refinement. Defaulting to 'codestral'."
+    if not providers_c2:
+        providers_c2 = default_providers
+        logger.error("[AI3] No providers for Cycle 2. Defaulting.")
+    logger.info(f"[AI3] Cycle 2 Providers: {providers_c2}")
+
+    refined_structure: Optional[Dict[str, Any]] = None
+    if initial_structure:
+        prompt_c2 = await generate_structure_refinement_prompt(
+            target_desc, initial_structure
         )
-        providers_to_try_cycle2 = ["codestral"]
-
-    logger.info(
-        f"[AI3] Cycle 2: Providers to try for refinement: {providers_to_try_cycle2}"
-    )
-
-    refined_structure_json: Optional[Dict[str, Any]] = None
-
-    if initial_structure_json:
-        refinement_prompt = await generate_structure_refinement_prompt(
-            target_desc, initial_structure_json
-        )
-        for provider_name in providers_to_try_cycle2:
-            logger.info(
-                f"[AI3] Cycle 2: Trying provider for refinement: {provider_name}"
-            )
-            # Correctly merge configurations for the provider (similar to Cycle 1)
-            provider_global_config = config_data.get("providers", {}).get(
-                provider_name, {}
-            )
-            ai3_llm_params = {
-                k: v
-                for k, v in ai3_config.items()
-                if k
-                not in [
-                    "structure_provider",
-                    "structure_providers",
-                    "idea_md_provider",
-                    "idea_md_providers",
-                    "refinement_providers",
-                ]
-                and not isinstance(v, (dict, list))
-            }
-            ai3_provider_specific_overrides = (
-                ai3_config.get(provider_name, {})
-                if isinstance(ai3_config.get(provider_name), dict)
-                else {}
-            )
-
-            merged_config_for_provider = {
-                **provider_global_config,
-                **ai3_llm_params,
-                **ai3_provider_specific_overrides,
-                "name": provider_name,
-            }
-
-            provider_instance = provider_factory.create_provider(
+        for provider_name in providers_c2:
+            logger.info(f"[AI3] Cycle 2: Trying provider {provider_name}")
+            instance = await _get_provider_instance(
+                provider_factory,
                 provider_name,
-                config_arg=merged_config_for_provider,
-                session=client_session,
+                config_data,
+                ai3_config,
+                client_session,
+                ui_structure_provider,
+                ui_structure_model,
             )
-            if not provider_instance:
-                logger.error(
-                    f"[AI3] Cycle 2: Failed to create provider instance for {provider_name}. Skipping."
-                )
+            if not instance:
+                logger.error(f"[AI3] Cycle 2: Failed to create {provider_name}")
                 continue
 
-            refined_structure_str = await provider_instance.generate(
-                prompt=refinement_prompt,
-                model=merged_config_for_provider.get("model"),
-                temperature=merged_config_for_provider.get("temperature", 0.3),
-                max_tokens=merged_config_for_provider.get("max_tokens", 4000),
+            refined_structure = await _generate_with_provider_cycle(
+                prompt_c2,
+                instance,
+                provider_name,
+                "Cycle 2",
+                instance.config.get("temperature", 0.3),
+                instance.config.get("max_tokens", 4000),
             )
-            if refined_structure_str:
-                try:
-                    parsed_refined_structure = json.loads(refined_structure_str)
-                    refined_structure_json = parsed_refined_structure
-                    logger.info(
-                        f"[AI3] Cycle 2: Successfully parsed refined structure from {provider_name}"
-                    )
-                    break
-                except json.JSONDecodeError:
-                    logger.warning(
-                        f"[AI3] Invalid JSON response from provider {provider_name} in Cycle 2. Response: {refined_structure_str[:200]}..."
-                    )
-                    refined_structure_json = None  # Ensure it's reset
-                    continue
+            if refined_structure:
+                break  # Use first successful refinement
 
-    if refined_structure_json:
-        return refined_structure_json, chosen_provider_cycle1
-    elif initial_structure_json:
-        return initial_structure_json, chosen_provider_cycle1
-
-    return None, None
+    if refined_structure:
+        return refined_structure, chosen_provider_c1
+    return initial_structure, chosen_provider_c1
 
 
 async def send_structure_to_mcp(
@@ -704,89 +547,66 @@ async def send_structure_to_mcp(
     """Sends the generated project structure to the MCP API."""
     api_url = f"{mcp_api_url}/structure"
     payload = {"structure": structure_obj, "target": target_desc}
-    logger.debug(f"[AI3 -> API] Structure payload keys: {list(structure_obj.keys())}")
+    logger.debug(f"[AI3->API] Struct keys: {list(structure_obj.keys())}")
 
-    # Ensure structure includes idea.md
-    if "idea.md" not in structure_obj:
+    if IDEA_MD_FILENAME not in structure_obj:
         logger.warning(
-            "[AI3 -> API] idea.md not found in structure. Adding default entry."
+            f"[AI3->API] {IDEA_MD_FILENAME} not in structure. Adding default."
         )
-        structure_obj["idea.md"] = (
-            "# Project Overview\n\nThis file will contain project details."
-        )
-        payload["structure"] = structure_obj
+        structure_obj[IDEA_MD_FILENAME] = "# Project Overview\\n\\nDetails here."
+        payload["structure"] = structure_obj  # Update payload
 
-    try:
-        # Retry logic for better reliability
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                async with client_session.post(
-                    api_url, json=payload, timeout=30
-                ) as resp:
-                    response_text = await resp.text()
-                    if resp.status == 200:
-                        logger.info(
-                            "[AI3 -> API] Structure successfully sent. "
-                            f"Response: {response_text}"
-                        )
-                        # After successful structure upload, trigger AI1 to start
-                        try:
-                            ai1_trigger_url = f"{mcp_api_url}/start_ai1"
-                            ai1_payload = {
-                                "reason": "Structure uploaded by AI3",
-                                "status": "ready",
-                            }
-                            async with client_session.post(
-                                ai1_trigger_url, json=ai1_payload, timeout=30
-                            ) as ai1_resp:
-                                if ai1_resp.status == 200:
-                                    logger.info(
-                                        "[AI3 -> API] Successfully triggered AI1 to start"
-                                    )
-                                else:
-                                    logger.warning(
-                                        f"[AI3 -> API] Failed to trigger AI1, status: {ai1_resp.status}"
-                                    )
-                        except Exception as ai1_e:
-                            logger.error(f"[AI3 -> API] Error triggering AI1: {ai1_e}")
-
-                        return True
-                    else:
-                        logger.error(
-                            "[AI3 -> API] Error sending structure. Status: "
-                            f"{resp.status}, Response: {response_text}"
-                        )
-                        if attempt < max_retries - 1:
-                            logger.info(
-                                f"[AI3 -> API] Retrying structure upload (attempt {attempt+2}/{max_retries})"
-                            )
-                            await asyncio.sleep(5)  # Wait before retrying
-                        else:
-                            return False
-            except asyncio.TimeoutError:
-                logger.error(
-                    f"[AI3 -> API] Timeout sending structure to {api_url} (attempt {attempt+1}/{max_retries})"
-                )
-                if attempt < max_retries - 1:
-                    await asyncio.sleep(5)
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            async with client_session.post(api_url, json=payload, timeout=30) as resp:
+                response_text = await resp.text()
+                if resp.status == 200:
+                    logger.info(f"[AI3->API] Structure sent. Resp: {response_text}")
+                    # Trigger AI1
+                    try:
+                        ai1_url = f"{mcp_api_url}/start_ai1"
+                        ai1_payload = {"reason": "Structure by AI3", "status": "ready"}
+                        async with client_session.post(
+                            ai1_url, json=ai1_payload, timeout=30
+                        ) as ai1_resp:
+                            if ai1_resp.status == 200:
+                                logger.info("[AI3->API] Triggered AI1 start")
+                            else:
+                                logger.warning(
+                                    f"[AI3->API] Failed to trigger AI1: {ai1_resp.status}"
+                                )
+                    except Exception as ai1_e:
+                        logger.error(f"[AI3->API] Error triggering AI1: {ai1_e}")
+                    return True
                 else:
-                    return False
+                    logger.error(
+                        f"[AI3->API] Error sending structure. Status: "
+                        f"{resp.status}, Response: {response_text}"
+                    )
+                    if attempt < max_retries - 1:
+                        logger.info(f"[AI3->API] Retrying upload (attempt {attempt+2})")
+                        await asyncio.sleep(ERROR_RETRY_DELAY)
+                    else:
+                        return False  # All retries failed
+        except asyncio.TimeoutError:
+            logger.error(f"[AI3->API] Timeout sending structure (attempt {attempt+1})")
+            if attempt < max_retries - 1:
+                await asyncio.sleep(ERROR_RETRY_DELAY)
+            else:
+                return False  # All retries failed
+        except aiohttp.ClientConnectionError as e:
+            logger.error(f"[AI3->API] Connection error sending structure: {e}")
+            return False  # No retry on connection error immediately
+        except Exception as e:
+            logger.error(
+                f"[AI3->API] Unexpected error sending structure: {e}",
+                exc_info=True,
+            )
+            return False  # No retry on unexpected error
+    return False
 
-    except aiohttp.ClientConnectionError as e:
-        logger.error(f"[AI3 -> API] Connection error sending structure: {str(e)}")
-        return False
-    except Exception as e:
-        logger.error(
-            f"[AI3 -> API] Unexpected error sending structure: {str(e)}",
-            exc_info=True,
-        )
-        return False
 
-    return False  # Default return if all attempts fail
-
-
-# ... (similar fixes for other functions like _report_status_to_mcp, _initiate_collaboration_via_mcp)
 async def _report_status_to_mcp(
     status: str,
     details: Optional[Dict[str, Any]],
@@ -798,24 +618,24 @@ async def _report_status_to_mcp(
     try:
         async with client_session.post(api_url, json=payload, timeout=15) as resp:
             if resp.status == 200:
-                logger.debug(f"[AI3 -> API] Report '{status}' sent successfully.")
+                logger.debug(f"[AI3->API] Report '{status}' sent.")
                 return True
             else:
                 response_text = await resp.text()
                 logger.error(
-                    f"[AI3 -> API] Failed to send report '{status}'. "
-                    f"Status: {resp.status}, Response: {response_text}"
+                    f"[AI3->API] Failed report '{status}'. "
+                    f"Status: {resp.status}, Resp: {response_text}"
                 )
                 return False
     except asyncio.TimeoutError:
-        logger.error(f"[AI3 -> API] Timeout sending report '{status}'.")
+        logger.error(f"[AI3->API] Timeout sending report '{status}'.")
         return False
     except aiohttp.ClientConnectionError as e:
-        logger.error(f"[AI3 -> API] Connection error sending report: {str(e)}")
+        logger.error(f"[AI3->API] Connection error sending report: {e}")
         return False
     except Exception as e:
         logger.error(
-            f"[AI3 -> API] Unexpected error sending report: {str(e)}",
+            f"[AI3->API] Unexpected error sending report: {e}",
             exc_info=True,
         )
         return False
@@ -834,38 +654,83 @@ async def _initiate_collaboration_via_mcp(
         "context": context or {},
     }
     logger.info(
-        "[AI3 -> API] Initiating collaboration via "
-        f"{api_url} for error: {error_description[:100]}..."
+        f"[AI3->API] Initiating collaboration via {api_url} "
+        f"for error: {error_description[:100]}..."
     )
     try:
         async with client_session.post(api_url, json=payload, timeout=30) as resp:
             response_text = await resp.text()
             if resp.status == 200:
                 logger.info(
-                    "[AI3 -> API] Collaboration request sent successfully. "
-                    f"Response: {response_text}"
+                    f"[AI3->API] Collaboration request sent. Resp: {response_text}"
                 )
                 return True
             else:
                 logger.error(
-                    "[AI3 -> API] Failed to send collaboration request. Status: "
-                    f"{resp.status}, Response: {response_text}"
+                    f"[AI3->API] Failed collaboration request. Status: "
+                    f"{resp.status}, Resp: {response_text}"
                 )
                 return False
     except asyncio.TimeoutError:
-        logger.error("[AI3 -> API] Timeout initiating collaboration.")
+        logger.error("[AI3->API] Timeout initiating collaboration.")
         return False
     except aiohttp.ClientConnectionError as e:
-        logger.error(
-            f"[AI3 -> API] Connection error initiating collaboration: {str(e)}"
-        )
+        logger.error(f"[AI3->API] Connection error initiating collaboration: {e}")
         return False
     except Exception as e:
         logger.error(
-            f"[AI3 -> API] Unexpected error initiating collaboration: {str(e)}",
+            f"[AI3->API] Unexpected error initiating collaboration: {e}",
             exc_info=True,
         )
         return False
+
+
+async def _create_single_file_or_dir(
+    full_path_on_disk: str,
+    path_in_repo_for_item: str,
+    value: Any,
+    base_path: str,
+    created_files_list: List[str],
+    skipped_files_list: List[str],
+):
+    """Helper to create a single file or directory."""
+    try:
+        if isinstance(value, dict):  # Directory
+            os.makedirs(full_path_on_disk, exist_ok=True)
+            logger.info(f"[AI3] Created dir: {path_in_repo_for_item}")
+            # Return True to indicate directory, for .gitkeep logic
+            return True
+        elif isinstance(value, str) or value is None:  # File
+            parent_dir = os.path.dirname(full_path_on_disk)
+            if not os.path.exists(parent_dir):
+                os.makedirs(parent_dir, exist_ok=True)
+                logger.info(
+                    f"[AI3] Created parent dir: "
+                    f"{os.path.relpath(parent_dir, base_path)}"
+                )
+            if not os.path.exists(full_path_on_disk):
+                async with aiofiles.open(full_path_on_disk, "w", encoding="utf-8") as f:
+                    if value is not None:
+                        await f.write(value)
+                logger.info(f"[AI3] Created file: {path_in_repo_for_item}")
+                created_files_list.append(full_path_on_disk)
+            else:
+                logger.info(f"[AI3] File exists, skipping: {path_in_repo_for_item}")
+                skipped_files_list.append(full_path_on_disk)
+        else:
+            logger.warning(
+                f"[AI3] Unknown type '{type(value)}' for '{path_in_repo_for_item}'"
+            )
+    except OSError as e:
+        logger.error(f"[AI3] OS error creating {full_path_on_disk}: {e}", exc_info=True)
+        skipped_files_list.append(full_path_on_disk)
+    except Exception as e:
+        logger.error(
+            f"[AI3] Unexpected error creating {full_path_on_disk}: {e}",
+            exc_info=True,
+        )
+        skipped_files_list.append(full_path_on_disk)
+    return False  # Not a directory or error occurred
 
 
 async def create_files_from_structure(
@@ -875,113 +740,61 @@ async def create_files_from_structure(
     initial_commit: bool = True,
     current_path_in_repo: str = "",
 ) -> Tuple[List[str], List[str]]:
-    # ... (function body with fixes)
     if not isinstance(struct, dict):
-        logger.error(
-            "[AI3] Invalid structure object provided: Expected dict, got "
-            f"{type(struct)}"
-        )
+        logger.error(f"[AI3] Invalid structure: Expected dict, got {type(struct)}")
         return [], []
 
     created_files: List[str] = []
     skipped_files: List[str] = []
-    # Ensure base_path is absolute and normalized
-    base_path = os.path.abspath(os.path.normpath(base_path))
+    abs_base_path = os.path.abspath(os.path.normpath(base_path))
 
-    # Sort items to process .gitignore first if it's at the root
-    # This is a simple sort; more complex logic might be needed for true ordering
+    # Sort to process .gitignore first if at root
     sorted_items = sorted(
-        struct.items(), key=lambda item: item[0] == ".gitignore", reverse=True
+        struct.items(), key=lambda item: item[0] == GITIGNORE_FILENAME, reverse=True
     )
 
     for key, value in sorted_items:
-        if not key:  # Skip empty keys that might come from LLM
-            logger.warning(
-                f"[AI3] Skipped creating entry for empty key from original: {key}"
-            )
+        if not key:
+            logger.warning(f"[AI3] Skipped creating entry for empty key: {key}")
             continue
 
-        # Sanitize key to prevent path traversal or invalid characters
-        # This is a basic sanitization; more robust validation might be needed
         sanitized_key = key.replace("..", "").strip()
         if not sanitized_key or sanitized_key != key:
             logger.warning(
-                f"[AI3] Original key '{key}' was sanitized to '{sanitized_key}'. "
-                "Skipping if now empty, or using sanitized."
+                f"[AI3] Key '{key}' sanitized to '{sanitized_key}'. "
+                "Skipping if empty, or using sanitized."
             )
             if not sanitized_key:
                 continue
             key = sanitized_key
 
-        # Construct full_path relative to the repo's root for logging and git
-        # current_path_in_repo is the path *within* the repo structure being built
-        path_in_repo_for_this_item = os.path.join(current_path_in_repo, key)
-        # full_path_on_disk is the absolute path on the filesystem
-        full_path_on_disk = os.path.join(base_path, path_in_repo_for_this_item)
+        path_in_repo = os.path.join(current_path_in_repo, key)
+        full_disk_path = os.path.join(abs_base_path, path_in_repo)
 
-        try:
-            if isinstance(value, dict):  # Directory
-                os.makedirs(full_path_on_disk, exist_ok=True)
-                logger.info(f"[AI3] Created directory: {path_in_repo_for_this_item}")
-                # Recursively create files in the new directory
-                # Pass the updated current_path_in_repo for the recursive call
-                sub_created, sub_skipped = await create_files_from_structure(
-                    base_path, value, repo, False, path_in_repo_for_this_item
-                )
-                created_files.extend(sub_created)
-                skipped_files.extend(sub_skipped)
+        is_dir = await _create_single_file_or_dir(
+            full_disk_path,
+            path_in_repo,
+            value,
+            abs_base_path,
+            created_files,
+            skipped_files,
+        )
 
-                # Add .gitkeep to empty directories, but not for the root call
-                if (
-                    not os.listdir(full_path_on_disk) and current_path_in_repo
-                ):  # Check if dir is empty
-                    gitkeep_path = os.path.join(full_path_on_disk, GITKEEP_FILENAME)
-                    async with aiofiles.open(gitkeep_path, "w", encoding="utf-8") as f:
-                        await f.write("")  # Empty .gitkeep
-                    logger.info(
-                        f"[AI3] Created .gitkeep in empty directory: {path_in_repo_for_this_item}"
-                    )
-                    created_files.append(gitkeep_path)
-
-            elif isinstance(value, str) or value is None:  # File
-                # Ensure parent directory exists
-                parent_dir = os.path.dirname(full_path_on_disk)
-                if not os.path.exists(parent_dir):
-                    os.makedirs(parent_dir, exist_ok=True)
-                    logger.info(
-                        "[AI3] Created parent directory: "
-                        f"{os.path.relpath(parent_dir, base_path)}"
-                    )
-
-                if not os.path.exists(full_path_on_disk):
-                    async with aiofiles.open(
-                        full_path_on_disk, "w", encoding="utf-8"
-                    ) as f:
-                        if value is not None:
-                            await f.write(value)
-                    logger.info(f"[AI3] Created file: {path_in_repo_for_this_item}")
-                    created_files.append(full_path_on_disk)
-                else:
-                    logger.info(
-                        f"[AI3] File already exists, skipping: {path_in_repo_for_this_item}"
-                    )
-                    skipped_files.append(full_path_on_disk)
-            else:
-                logger.warning(
-                    f"[AI3] Unknown data type '{type(value)}' for '{key}' in "
-                    f"'{path_in_repo_for_this_item}'"
-                )
-        except OSError as e:  # Catch OS-level errors like permission denied
-            logger.error(
-                f"[AI3] OS error creating {full_path_on_disk}: {e}", exc_info=True
+        if is_dir and isinstance(
+            value, dict
+        ):  # If it was a directory and has sub-structure
+            sub_created, sub_skipped = await create_files_from_structure(
+                abs_base_path, value, repo, False, path_in_repo  # Pass abs_base_path
             )
-            skipped_files.append(full_path_on_disk)  # Add to skipped if creation failed
-        except Exception as e:  # Catch other unexpected errors
-            logger.error(
-                f"[AI3] Unexpected error creating {full_path_on_disk}: {e}",
-                exc_info=True,
-            )
-            skipped_files.append(full_path_on_disk)
+            created_files.extend(sub_created)
+            skipped_files.extend(sub_skipped)
+            # Add .gitkeep to empty directories (after sub-structure processed)
+            if not os.listdir(full_disk_path) and current_path_in_repo:
+                gitkeep_path = os.path.join(full_disk_path, GITKEEP_FILENAME)
+                async with aiofiles.open(gitkeep_path, "w", encoding="utf-8") as f:
+                    await f.write("")
+                logger.info(f"[AI3] Created .gitkeep in empty dir: {path_in_repo}")
+                created_files.append(gitkeep_path)
 
     if initial_commit and repo and created_files:
         logger.info(f"[AI3] Committing {len(created_files)} created files...")
@@ -990,180 +803,146 @@ async def create_files_from_structure(
     return created_files, skipped_files
 
 
-# ... (similar fixes for generate_initial_idea_md)
+async def _generate_idea_md_content_with_provider(
+    provider_instance: BaseProvider, prompt: str, provider_name: str
+) -> Optional[str]:
+    """Helper to generate idea.md content with a single provider."""
+    try:
+        content_str = await provider_instance.generate(
+            prompt=prompt,
+            model=provider_instance.config.get("model"),
+            temperature=provider_instance.config.get("temperature", 0.7),
+            max_tokens=provider_instance.config.get("max_tokens", 1500),
+        )
+        if content_str:
+            logger.info(
+                f"[AI3] Generated {IDEA_MD_FILENAME} content using {provider_name}"
+            )
+            return content_str
+        else:
+            logger.warning(
+                f"[AI3] Provider {provider_name} returned empty for {IDEA_MD_FILENAME}."
+            )
+    except Exception as e:
+        logger.error(
+            f"[AI3] Error with provider {provider_name} for {IDEA_MD_FILENAME}: {e}"
+        )
+    return None
+
+
 async def generate_initial_idea_md(
     target: str,
     provider_factory: ProviderFactory,
     config_data: Dict[str, Any],
-    client_session: aiohttp.ClientSession,  # Added client_session
-    selected_provider_name: Optional[str] = None,  # For testing
+    client_session: aiohttp.ClientSession,
+    selected_provider_name: Optional[str] = None,
 ) -> str:
-    """Generates the initial idea.md content using LLM, with fallback."""
-    logger.info(f"[AI3] Generating initial idea.md content for target: {target}")
+    """Generates initial idea.md content using LLM, with fallback."""
+    logger.info(f"[AI3] Generating {IDEA_MD_FILENAME} for target: {target}")
     ai3_config = config_data.get("ai_config", {}).get("ai3", {})
 
-    # Determine providers for idea.md generation
     providers_to_try: List[str] = []
-    specific_idea_md_provider = ai3_config.get("idea_md_provider")
+    specific_provider = ai3_config.get("idea_md_provider")
 
-    if selected_provider_name:  # If a provider is passed for testing
+    if selected_provider_name:
         providers_to_try = [selected_provider_name]
-        logger.info(
-            f"[AI3] Using specific provider for idea.md (override): {selected_provider_name}"
-        )
-    elif specific_idea_md_provider and isinstance(specific_idea_md_provider, str):
-        providers_to_try.append(specific_idea_md_provider)
-        logger.info(
-            f"[AI3] Prioritizing specific idea_md_provider: {specific_idea_md_provider}"
-        )
+    elif specific_provider and isinstance(specific_provider, str):
+        providers_to_try.append(specific_provider)
 
-    idea_md_providers_list = ai3_config.get(
-        "idea_md_providers", ["codestral"]
-    )  # Default to codestral
-    if not isinstance(idea_md_providers_list, list) or not all(
-        isinstance(p, str) for p in idea_md_providers_list
+    default_idea_providers = ["codestral"]
+    idea_providers_list = ai3_config.get("idea_md_providers", default_idea_providers)
+    if not (
+        isinstance(idea_providers_list, list)
+        and all(isinstance(p, str) for p in idea_providers_list)
     ):
-        logger.warning(
-            f"[AI3] 'idea_md_providers' in ai_config.ai3 is not a list of strings. Using default: ['codestral']"
-        )
-        idea_md_providers_list = ["codestral"]
+        logger.warning("[AI3] 'idea_md_providers' invalid. Using default.")
+        idea_providers_list = default_idea_providers
 
-    for p_name in idea_md_providers_list:
+    for p_name in idea_providers_list:
         if p_name not in providers_to_try:
             providers_to_try.append(p_name)
 
     if not providers_to_try:
-        logger.error(
-            "[AI3] CRITICAL: No providers determined for idea.md generation. Defaulting to 'codestral'."
-        )
-        providers_to_try = ["codestral"]
+        providers_to_try = default_idea_providers
+        logger.error(f"[AI3] No providers for {IDEA_MD_FILENAME}. Defaulting.")
 
-    logger.info(f"[AI3] Providers to try for idea.md generation: {providers_to_try}")
+    logger.info(f"[AI3] Providers for {IDEA_MD_FILENAME}: {providers_to_try}")
 
+    prompt = await generate_idea_md_llm_prompt(target)
     idea_md_content: str = ""
-    prompt = await generate_idea_md_llm_prompt(
-        target
-    )  # Assuming this prompt generation function exists
 
     for provider_name in providers_to_try:
-        logger.info(f"[AI3] Trying provider for idea.md generation: {provider_name}")
-        provider_global_config = config_data.get("providers", {}).get(provider_name, {})
-        ai3_config = config_data.get("ai_config", {}).get("ai3", {})
-        ai3_llm_params = {
-            k: v
-            for k, v in ai3_config.items()
-            if k
-            not in [
-                "structure_provider",
-                "structure_providers",
-                "idea_md_provider",
-                "idea_md_providers",
-                "refinement_providers",
-            ]
-            and not isinstance(v, (dict, list))
-        }
-        ai3_provider_specific_overrides = (
-            ai3_config.get(provider_name, {})
-            if isinstance(ai3_config.get(provider_name), dict)
-            else {}
+        logger.info(f"[AI3] Trying provider for {IDEA_MD_FILENAME}: {provider_name}")
+        instance = await _get_provider_instance(  # Use the helper
+            provider_factory,
+            provider_name,
+            config_data,
+            ai3_config,
+            client_session,
+            ai3_config.get("idea_md_provider"),  # UI selected provider for idea.md
+            ai3_config.get("idea_md_model"),  # UI selected model for idea.md
         )
-        merged_config_for_provider = {
-            **provider_global_config,
-            **ai3_llm_params,
-            **ai3_provider_specific_overrides,
-            "name": provider_name,
-        }
-        model_to_use = merged_config_for_provider.get("model")
-        temperature = merged_config_for_provider.get("temperature", 0.7)
-        max_tokens = merged_config_for_provider.get("max_tokens", 1500)
-
-        provider_instance = provider_factory.create_provider(
-            provider_name, config_arg=merged_config_for_provider, session=client_session
-        )
-        if not provider_instance:
+        if not instance:
             logger.error(
-                f"[AI3] Failed to create provider instance for {provider_name} in idea.md generation. Skipping."
+                f"[AI3] Failed to create {provider_name} for {IDEA_MD_FILENAME}"
             )
             continue
 
-        content_str = await provider_instance.generate(
-            prompt=prompt,
-            model=model_to_use,
-            temperature=temperature,
-            max_tokens=max_tokens,
+        content = await _generate_idea_md_content_with_provider(
+            instance, prompt, provider_name
         )
-        if content_str:
-            idea_md_content = content_str
-            logger.info(
-                f"[AI3] Successfully generated idea.md content using {provider_name}"
-            )
-            break
-        else:
-            logger.warning(
-                f"[AI3] Provider {provider_name} returned empty content for idea.md."
-            )
+        if content:
+            idea_md_content = content
+            break  # Success
+
     return idea_md_content
 
 
 async def ensure_idea_md_exists(
     repo_dir: str,
     target: str,
-    provider_factory,
+    provider_factory: ProviderFactory,  # Corrected type
     config: Dict[str, Any],
     client_session: aiohttp.ClientSession,
 ) -> bool:
     """
-    Ensures that idea.md exists in the repository root, creating it if needed.
-    This function serves as a safeguard to ensure AI1 always has access to the required idea.md file.
-
-    Args:
-        repo_dir: Repository directory path
-        target: Project target description
-        provider_factory: Factory for creating LLM providers
-        config: Configuration dictionary
-        client_session: aiohttp client session for API calls
-
-    Returns:
-        bool: True if idea.md exists or was created successfully, False otherwise
+    Ensures idea.md exists, creating it if needed. Safeguard for AI1.
     """
-    idea_md_path = os.path.join(repo_dir, "idea.md")
+    idea_md_path = os.path.join(repo_dir, IDEA_MD_FILENAME)
 
-    # Check if idea.md already exists
     if os.path.exists(idea_md_path):
-        logger.info(f"[AI3] idea.md already exists at {idea_md_path}")
+        logger.info(f"[AI3] {IDEA_MD_FILENAME} already exists at {idea_md_path}")
         return True
 
-    logger.info(f"[AI3] idea.md not found at {idea_md_path}, generating it...")
-
-    # Generate content for idea.md
+    logger.info(f"[AI3] {IDEA_MD_FILENAME} not found, generating: {idea_md_path}")
     idea_md_content = await generate_initial_idea_md(
         target, provider_factory, config, client_session
     )
 
     if not idea_md_content:
-        # If LLM generation fails, create a basic idea.md with minimal content
-        idea_md_content = f"# Project: {target}\n\nThis project aims to create a {target} as specified in the configuration."
+        idea_md_content = (
+            f"# Project: {target}\\n\\nThis project aims to "
+            f"create a {target} as specified."
+        )
         logger.warning(
-            "[AI3] Failed to generate idea.md content via LLM, using basic template"
+            f"[AI3] Failed LLM gen for {IDEA_MD_FILENAME}, using basic template"
         )
 
-    # Write idea.md
     try:
         async with aiofiles.open(idea_md_path, "w", encoding="utf-8") as f:
             await f.write(idea_md_content)
-        logger.info(f"[AI3] Successfully created idea.md at {idea_md_path}")
-
-        # Commit the file if repo exists
+        logger.info(f"[AI3] Successfully created {IDEA_MD_FILENAME} at {idea_md_path}")
         try:
             repo = Repo(repo_dir)
-            _commit_changes(repo, [idea_md_path], "AI3: Create initial idea.md")
-            logger.info("[AI3] Committed idea.md to the repository")
+            _commit_changes(
+                repo, [idea_md_path], f"AI3: Create initial {IDEA_MD_FILENAME}"
+            )
+            logger.info(f"[AI3] Committed {IDEA_MD_FILENAME} to repository")
         except (InvalidGitRepositoryError, GitCommandError) as e:
-            logger.warning(f"[AI3] Could not commit idea.md: {e}")
-
+            logger.warning(f"[AI3] Could not commit {IDEA_MD_FILENAME}: {e}")
         return True
     except Exception as e:
-        logger.error(f"[AI3] Error creating idea.md: {e}", exc_info=True)
+        logger.error(f"[AI3] Error creating {IDEA_MD_FILENAME}: {e}", exc_info=True)
         return False
 
 
@@ -1174,503 +953,425 @@ class AI3:
         self,
         target: str,
         provider_factory: ProviderFactory,
-        config_data: Dict[str, Any],  # Changed from config to config_data
+        config_data: Dict[str, Any],
         client_session: aiohttp.ClientSession,
-        # loop: Optional[asyncio.AbstractEventLoop] = None, # loop is usually not passed directly
     ):
         self.target = target
-        self.config = config_data  # Store the full config
-        self.ai_config = config_data.get("ai_config", {}).get("ai3", {})
-        if not self.ai_config:
-            logger.warning(
-                "[AI3] Section 'ai_config.ai3' not found in configuration. Using default values or expecting them in provider-specific sections."
-            )
-        self.repo_dir = os.path.abspath(
-            self.config.get("output_dir", REPO_DIR)  # Use REPO_DIR from utils
-        )
+        self.provider_factory = provider_factory
+        self.config_data = config_data
+        self.client_session = client_session
+        self.repo_dir = self.config_data.get(
+            "repo_dir", REPO_DIR
+        )  # Use config or default
+        self.mcp_api_url = self.config_data.get("mcp_api_url", DEFAULT_MCP_API_URL)
+        self.ai_config = self.config_data.get("ai_config", {})
+        self.ai3_config = self.ai_config.get("ai3", {})
         self.repo: Optional[Repo] = None
-        self.client_session: Optional[aiohttp.ClientSession] = client_session
-        self.mcp_api_url = self.config.get(
-            "mcp_api_url", DEFAULT_MCP_API_URL  # Use DEFAULT_MCP_API_URL from utils
+        self.monitoring_tasks: List[asyncio.Task] = []
+        self.github_token = os.getenv("GITHUB_TOKEN")
+        self.github_repo_owner = self.ai3_config.get("github_repo_owner")
+        self.github_repo_name = self.ai3_config.get("github_repo_name")
+
+        self.current_project_structure: Optional[Dict[str, Any]] = (
+            None  # Initialize attribute
         )
-        self.monitoring_active = False
-        self.background_tasks: List[asyncio.Task] = []
-        self.processed_github_run_ids = set()  # type: ignore
-        self.ollama_initialized = False
-        self.ollama_endpoint: Optional[str] = None
-        self.ollama_model: Optional[str] = None
-        self.provider_factory = provider_factory  # Remove arguments here
-        self.current_project_structure: Optional[Dict[str, Any]] = None
 
-        # Initialize Ollama configuration
-        self._initialize_ollama_config()
+        self._initialize_ollama_config()  # For log analysis
+        self._initialize_code_fix_config()  # For code fixing
 
-    # Add the missing start_monitoring and stop_monitoring methods
+        if not self.github_token:
+            logger.warning(
+                "[AI3] GITHUB_TOKEN not set. GitHub Actions monitoring will be disabled."
+            )
+        if not (self.github_repo_owner and self.github_repo_name):
+            logger.warning(
+                "[AI3] GitHub repo owner/name not configured. "
+                "GitHub Actions monitoring will be limited."
+            )
+        self.processed_log_files: Dict[Path, int] = (
+            {}
+        )  # For tracking processed log lines
+        self.active_log_analyses: Dict[Path, asyncio.Lock] = (
+            {}
+        )  # To prevent concurrent analysis of same log
+
+    def _initialize_ollama_config(self):
+        """Initializes configuration for Ollama (or other log analysis provider)."""
+        log_analysis_defaults = {
+            "provider": DEFAULT_LOG_ANALYSIS_PROVIDER,
+            "model": DEFAULT_LOG_ANALYSIS_MODEL,
+            "endpoint": self.ai3_config.get(
+                "ollama_endpoint"
+            ),  # Legacy, prefer provider config
+            # Add other params like temperature, max_tokens if needed for log analysis
+        }
+
+        # Prefer provider-specific config within ai3_config if available
+        # e.g., ai3_config: { "log_analysis": { "provider": "ollama", "model": "phi3" } }
+        log_analysis_cfg = self.ai3_config.get("log_analysis", {})
+
+        self.log_analysis_provider_name = log_analysis_cfg.get(
+            "provider", log_analysis_defaults["provider"]
+        )
+        self.log_analysis_model = log_analysis_cfg.get(
+            "model", log_analysis_defaults["model"]
+        )
+        # Store the whole sub-config if needed for _get_provider_instance
+        self.log_analysis_provider_config = {
+            "model": self.log_analysis_model,
+            "endpoint": log_analysis_cfg.get(
+                "endpoint", log_analysis_defaults["endpoint"]
+            ),
+            # Add other relevant parameters from log_analysis_cfg or defaults
+        }
+        logger.info(
+            f"[AI3] Log analysis configured: Provider='{self.log_analysis_provider_name}', "
+            f"Model='{self.log_analysis_model}'"
+        )
+
+    def _initialize_code_fix_config(self):
+        """Initializes configuration for the code fixing provider."""
+        code_fix_defaults = {
+            "provider": DEFAULT_CODE_FIX_PROVIDER,
+            "model": DEFAULT_CODE_FIX_MODEL,
+        }
+        code_fix_cfg = self.ai3_config.get("code_fixing", {})
+
+        self.code_fix_provider_name = code_fix_cfg.get(
+            "provider", code_fix_defaults["provider"]
+        )
+        self.code_fix_model = code_fix_cfg.get("model", code_fix_defaults["model"])
+        self.code_fix_provider_config = {
+            "model": self.code_fix_model,
+            # Add other relevant parameters like temperature, max_tokens
+            "temperature": code_fix_cfg.get("temperature", 0.3),  # Example
+            "max_tokens": code_fix_cfg.get("max_tokens", 2048),  # Example
+        }
+        logger.info(
+            f"[AI3] Code fixing configured: Provider='{self.code_fix_provider_name}', "
+            f"Model='{self.code_fix_model}'"
+        )
+
+    async def _send_test_recommendation_to_mcp(
+        self, recommendation_data: Dict[str, Any]
+    ) -> bool:
+        """Sends test analysis results and recommendations to MCP."""
+        api_url = f"{self.mcp_api_url}/test_recommendation"
+        payload = {
+            "source": "ai3",
+            "recommendation": recommendation_data.get("recommendation", "review"),
+            "summary": recommendation_data.get("summary", "No summary provided."),
+            "details": recommendation_data,  # Send the whole analysis
+            "run_id": recommendation_data.get("run_id"),
+            "run_url": recommendation_data.get("run_url"),
+            "failed_files": recommendation_data.get("failed_files", []),
+            "fixed_files": recommendation_data.get(
+                "fixed_files", []
+            ),  # From _attempt_test_fixes
+            "unfixed_files": recommendation_data.get(
+                "unfixed_files", []
+            ),  # From _attempt_test_fixes
+        }
+        logger.info(
+            f"[AI3->MCP] Sending test recommendation: {payload.get('recommendation')}"
+        )
+        try:
+            async with self.client_session.post(
+                api_url, json=payload, timeout=30
+            ) as resp:
+                response_text = await resp.text()
+                if resp.status == 200:
+                    logger.info(
+                        f"[AI3->MCP] Test recommendation sent. Response: {response_text}"
+                    )
+                    return True
+                else:
+                    logger.error(
+                        f"[AI3->MCP] Failed to send test recommendation. Status: {resp.status}, "
+                        f"Response: {response_text}"
+                    )
+                    return False
+        except asyncio.TimeoutError:
+            logger.error("[AI3->MCP] Timeout sending test recommendation.")
+            return False
+        except aiohttp.ClientConnectionError as e:
+            logger.error(
+                f"[AI3->MCP] Connection error sending test recommendation: {e}"
+            )
+            return False
+        except Exception as e:
+            logger.error(
+                f"[AI3->MCP] Unexpected error sending test recommendation: {e}",
+                exc_info=True,
+            )
+            return False
+
     async def start_monitoring(self):
         """Start all monitoring background tasks."""
         logger.info("[AI3] Starting background monitoring tasks...")
-
         self.monitoring_active = True
-
-        # Create and start background tasks
-        monitor_tasks = [
+        monitor_tasks_coroutines = [
             self.monitor_system_health(),
             self.monitor_github_actions(),
             self.monitor_idle_workers(),
+            self.monitor_tests(),  # Added test monitoring
             # Add more monitoring tasks as needed
         ]
-
-        for task in monitor_tasks:
-            background_task = asyncio.create_task(task)
-            self.background_tasks.append(background_task)
-
-        logger.info(
-            f"[AI3] Started {len(self.background_tasks)} background monitoring tasks"
-        )
+        self.background_tasks = [
+            asyncio.create_task(coro) for coro in monitor_tasks_coroutines
+        ]
+        logger.info(f"[AI3] Started {len(self.background_tasks)} background tasks")
 
     async def stop_monitoring(self):
         """Stop all monitoring background tasks."""
-        logger.info(
-            f"[AI3] Stopping {len(self.background_tasks)} background monitoring tasks..."
-        )
-
+        logger.info(f"[AI3] Stopping {len(self.background_tasks)} background tasks...")
         self.monitoring_active = False
-
-        # Cancel all running background tasks
         for task in self.background_tasks:
             if not task.done():
                 task.cancel()
-
-        # Wait for all tasks to complete their cancellation
         if self.background_tasks:
             await asyncio.gather(*self.background_tasks, return_exceptions=True)
-
         self.background_tasks.clear()
         logger.info("[AI3] All background monitoring tasks stopped")
 
-    def _initialize_ollama_config(self):
-        # Check if structure_providers exists in ai3 configuration
-        structure_providers = (
-            self.config.get("ai_config", {})
-            .get("ai3", {})
-            .get("structure_providers", ["ollama1"])
-        )
-
-        # Get the first provider from the structure_providers list
-        ollama_config_key = None
-        for provider_name in structure_providers:
-            if provider_name.startswith("ollama"):
-                ollama_config_key = provider_name
-                break
-
-        # Default to "ollama" if no ollama provider found in structure_providers
-        if not ollama_config_key:
-            ollama_config_key = "ollama"
-
-        # Get the Ollama provider configuration
-        ollama_provider_config = self.config.get("providers", {}).get(
-            ollama_config_key, {}
-        )
-
-        self.ollama_endpoint = ollama_provider_config.get("endpoint")
-        self.ollama_model = ollama_provider_config.get("model")
-
-        if self.ollama_endpoint and self.ollama_model:
-            self.ollama_initialized = True
-            logger.info(
-                "[AI3-Ollama] Successfully initialized Ollama with endpoint "
-                f"'{self.ollama_endpoint}' and model '{self.ollama_model}'"
-            )
-        else:
-            logger.warning(
-                "[AI3-Ollama] Failed to initialize Ollama: Configuration not found "
-                f"for key '{ollama_config_key}' in config.json"
-            )
-
     async def clear_repository(self) -> bool:
-        """Clears the repository directory."""
-        logger.info(f"[AI3-Git] Attempting to clear repository at: {self.repo_dir}")
+        """Clears the project repository directory."""
+        repo_path = Path(self.repo_dir)
+        logger.info(f"[AI3] Clearing repository directory: {repo_path}")
         try:
-            if os.path.exists(self.repo_dir):
-                # Check if it's a git repository before trying to use self.repo
-                try:
-                    temp_repo = Repo(self.repo_dir)
-                    # If it is a repo, try to clean it using git commands if preferred
-                    # For simplicity here, we'll just remove the directory
-                    logger.info(
-                        f"[AI3-Git] Removing existing repository directory: {self.repo_dir}"
-                    )
-                except InvalidGitRepositoryError:
-                    logger.info(
-                        f"[AI3-Git] Directory exists but is not a git repo: {self.repo_dir}. Removing."
-                    )
-                except NoSuchPathError:  # Should not happen if os.path.exists is true
-                    logger.warning(f"[AI3-Git] Repo path disappeared: {self.repo_dir}")
+            if repo_path.exists():
+                # Be careful with shutil.rmtree
+                # Add checks or make it configurable if it's too dangerous
+                for item in repo_path.iterdir():
+                    if item.is_dir():
+                        # Preserve .git directory if it exists and is a git repo
+                        if item.name == ".git" and (repo_path / ".git").is_dir():
+                            logger.info("[AI3] Preserving .git directory.")
+                            continue
+                        shutil.rmtree(item)
+                    else:
+                        item.unlink()
+                logger.info(f"[AI3] Repository directory cleared: {repo_path}")
+            else:
+                logger.info(
+                    f"[AI3] Repository directory does not exist, no need to clear: {repo_path}"
+                )
 
-                # Use shutil.rmtree to remove the directory and its contents
-                shutil.rmtree(self.repo_dir)
-                logger.info(f"[AI3-Git] Removed existing repository: {self.repo_dir}")
+            # Recreate the directory if it was removed entirely by rmtree (if .git wasn't there)
+            repo_path.mkdir(exist_ok=True)
 
-            # Recreate the directory for the new repository
-            os.makedirs(self.repo_dir, exist_ok=True)
-            logger.info(f"[AI3-Git] Created new repository directory: {self.repo_dir}")
-            return True
-        except Exception as e:
-            logger.error(f"[AI3-Git] Error clearing repository: {e}", exc_info=True)
-            return False
-
-    async def setup_structure(self):
-        logger.info("[AI3] Starting project structure setup...")
-        # Ensure MCP API is available
-        try:
-            async with self.client_session.get(
-                self.mcp_api_url + "/health", timeout=30
-            ) as resp:
-                if resp.status != 200:
-                    logger.critical(
-                        f"[AI3] MCP API health check failed with status {resp.status}. Waiting and retrying..."
-                    )
-                    await asyncio.sleep(10)  # Wait before retry
-        except Exception as e:
-            logger.critical(
-                f"[AI3] MCP API health check failed: {e}. Waiting and retrying..."
-            )
-            await asyncio.sleep(10)  # Wait before retry
-
-        if not await self.clear_repository():
-            logger.critical(
-                "[AI3] Repository clearing failed. Cannot proceed with structure setup."
-            )
             await _report_status_to_mcp(
-                "error_repo_clear_failed",
-                {"details": "Failed to clear repository"},
+                "repo_cleared",
+                {"path": str(repo_path)},
                 self.mcp_api_url,
                 self.client_session,
             )
-            return
+            return True
+        except Exception as e:
+            logger.error(
+                f"[AI3] Error clearing repository {repo_path}: {e}", exc_info=True
+            )
+            await _report_status_to_mcp(
+                "repo_clear_failed",
+                {"path": str(repo_path), "error": str(e)},
+                self.mcp_api_url,
+                self.client_session,
+            )
+            return False
 
-        # Initialize the Git repository after clearing
-        # Change current directory to self.repo_dir before calling Repo.init
+    async def _perform_mcp_health_check(self) -> bool:
+        """Performs health check for MCP API."""
+        try:
+            async with self.client_session.get(
+                self.mcp_api_url + "/health", timeout=10  # Shorter timeout
+            ) as resp:
+                if resp.status == 200:
+                    logger.info("[AI3] MCP API health check OK.")
+                    return True
+                logger.warning(
+                    f"[AI3] MCP API health check failed: {resp.status}. Retrying..."
+                )
+        except Exception as e:
+            logger.error(f"[AI3] MCP API health check error: {e}. Retrying...")
+        await asyncio.sleep(ERROR_RETRY_DELAY)  # Wait before retry
+        return False
+
+    async def _initialize_git_repo_in_dir(self) -> bool:
+        """Initializes a Git repository in self.repo_dir."""
         original_cwd = os.getcwd()
         try:
+            # Ensure the repository directory exists before changing into it
+            Path(self.repo_dir).mkdir(parents=True, exist_ok=True)
             os.chdir(self.repo_dir)
-            self.repo = Repo.init(
-                "."
-            )  # Initialize in the current directory (self.repo_dir)
+            self.repo = Repo.init(".")
             logger.info(
-                f"[AI3-Git] Successfully initialized new repository at: {self.repo_dir}"
+                f"[AI3-Git] Initialized new Git repo at: {self.repo_dir} (CWD: {os.getcwd()})"
             )
 
-            # Create and commit .gitignore to create an initial commit
-            gitignore_path = os.path.join(self.repo_dir, ".gitignore")
-            if not os.path.exists(gitignore_path):
-                with open(gitignore_path, "w", encoding="utf-8") as f:
+            # .gitignore path is now relative to the CWD (which is self.repo_dir, the repo root)
+            gitignore_filename_in_repo = GITIGNORE_FILENAME
+
+            if not os.path.exists(gitignore_filename_in_repo):
+                logger.info(
+                    f"[AI3-Git] Creating {gitignore_filename_in_repo} in {os.getcwd()} (fallback)."
+                )
+                with open(gitignore_filename_in_repo, "w", encoding="utf-8") as f:
                     f.write(
-                        """*.pyc
-__pycache__/
-.DS_Store
-.env
-logs/
-tmp/
-node_modules/
-dist/
-build/
-*.log
-coverage.xml
-.pytest_cache/
-.mypy_cache/
-.idea/
-.vscode/
-"""
-                    )
-                logger.info(f"[AI3-Git] Created .gitignore at {gitignore_path}")
-
-                # Create initial commit manually instead of using _commit_changes
-                if self.repo:
-                    try:
-                        self.repo.git.add(gitignore_path)
-                        self.repo.git.commit("-m", "Initial commit: .gitignore")
-                        logger.info("[AI3-Git] Successfully created initial commit")
-                    except Exception as e:
-                        logger.error(
-                            f"[AI3-Git] Error creating initial commit: {e}",
-                            exc_info=True,
-                        )
-
+                        "__pycache__/\\n*.pyc\\nlogs/\\ntmp/\\nnode_modules/\\ndist/\\nbuild/\\n*.log\\ncoverage.xml\\n.pytest_cache/\\n.mypy_cache/\\n.idea/\\n.vscode/\\n"
+                    )  # Basic .gitignore
+                _commit_changes(
+                    self.repo,
+                    [gitignore_filename_in_repo],
+                    f"Initial commit: Add {gitignore_filename_in_repo}",
+                )
+            return True
         except Exception as e:
             logger.critical(
-                f"[AI3-Git] Failed to initialize Git repository: {e}", exc_info=True
+                f"[AI3-Git] Failed to init Git repo in '{self.repo_dir}': {e}",
+                exc_info=True,
             )
             await _report_status_to_mcp(
                 "error_git_init_failed",
-                {"details": str(e)},
+                {"details": str(e), "path": self.repo_dir},
                 self.mcp_api_url,
                 self.client_session,
             )
-            return
+            return False
         finally:
-            os.chdir(original_cwd)  # Restore original CWD
+            os.chdir(original_cwd)
 
-        # Report successful repository clearing
-        await _report_status_to_mcp(
-            "repo_cleared", None, self.mcp_api_url, self.client_session
-        )
-
-        # Check for and remove unexpected "project/" directory if it exists
-        project_path = os.path.join(self.repo_dir, "project")
-        if os.path.exists(project_path) and os.path.isdir(project_path):
-            logger.warning(
-                "[AI3-Git] Found unexpected 'project/' directory at "
-                f"{project_path}. Removing it."
-            )
-            try:
-                shutil.rmtree(project_path)
-                logger.info(f"[AI3-Git] Successfully removed {project_path}")
-            except Exception as e:
-                logger.error(f"[AI3-Git] Error removing {project_path}: {e}")
-
-        # Generate structure with retry mechanism
-        retries = 3
+    async def _generate_and_create_project_structure(self) -> Optional[Dict[str, Any]]:
+        """Generates structure JSON and creates files."""
         structure = None
-        chosen_provider = None
-
-        for attempt in range(retries):
+        for attempt in range(3):  # Retry structure generation
+            logger.info(f"[AI3] Structure generation attempt {attempt + 1}/3")
             try:
-                logger.info(f"[AI3] Structure generation attempt {attempt+1}/{retries}")
-                structure, chosen_provider = await generate_structure(
+                structure, _ = await generate_structure(  # chosen_provider unused here
                     self.target,
                     self.provider_factory,
-                    self.config,  # Pass the full config_data here
+                    self.config_data,
                     self.client_session,
                 )
                 if structure:
+                    logger.info(
+                        "[AI3] Successfully generated structure. Root keys: "
+                        f"{list(structure.keys())}"
+                    )
                     break
-                logger.warning(
-                    f"[AI3] Structure generation attempt {attempt+1} failed. Retrying..."
-                )
-                await asyncio.sleep(5)  # Wait before retry
             except Exception as e:
-                logger.error(
-                    f"[AI3] Error in structure generation attempt {attempt+1}: {e}"
-                )
-                await asyncio.sleep(5)  # Wait before retry
+                logger.error(f"[AI3] Error in structure gen attempt {attempt + 1}: {e}")
+            if attempt < 2:  # If not the last attempt
+                await asyncio.sleep(ERROR_RETRY_DELAY)  # Wait before retrying
 
         if not structure:
-            logger.critical(
-                "[AI3] All structure generation attempts failed. Cannot proceed."
-            )
+            logger.critical("[AI3] All structure generation attempts failed.")
             await _report_status_to_mcp(
                 "error_structure_generation_failed",
-                {"details": "All LLM structure generation attempts failed"},
+                {"details": "All LLM structure gen attempts failed"},
                 self.mcp_api_url,
                 self.client_session,
             )
-            return
+            return None
 
-        logger.info(
-            f"[AI3] Successfully generated structure. Root keys: {list(structure.keys())}"
-        )
-        self.current_project_structure = structure  # Store the structure
+        self.current_project_structure = structure  # Store it
 
-        # Handle potential duplicate project folders from LLM
-        # (e.g., "nes_flash_game" and "retro_nes_flash_game")
-        has_retro = "retro_nes_flash_game/" in structure
-        has_nes = "nes_flash_game/" in structure
-
+        # Handle potential duplicate project folders
+        has_retro = RETRO_NES_FLASH_GAME_DIR in structure
+        has_nes = NES_FLASH_GAME_DIR in structure
         if has_retro and has_nes:
             logger.warning(
-                "[AI3] Both 'retro_nes_flash_game' and 'nes_flash_game' found "
-                "in LLM structure. Removed 'nes_flash_game'."
+                f"[AI3] Both '{RETRO_NES_FLASH_GAME_DIR}' and '{NES_FLASH_GAME_DIR}' found. "
+                f"Removed '{NES_FLASH_GAME_DIR}'."
             )
-            del structure["nes_flash_game/"]
+            del structure[NES_FLASH_GAME_DIR]
         elif has_nes and not has_retro:
             logger.info(
-                "[AI3] Only 'nes_flash_game' found in LLM structure. Renamed to "
-                "'retro_nes_flash_game'."
+                f"[AI3] Only '{NES_FLASH_GAME_DIR}' found. Renamed to '{RETRO_NES_FLASH_GAME_DIR}'."
             )
-            structure["retro_nes_flash_game/"] = structure.pop("nes_flash_game/")
+            structure[RETRO_NES_FLASH_GAME_DIR] = structure.pop(NES_FLASH_GAME_DIR)
 
-        # Remove 'idea' entry from the LLM structure if it exists at the root,
-        # to prevent conflict with the system-generated 'idea.md'.
-        if "idea" in structure:  # Check if "idea" key exists at the root
-            del structure["idea"]
-            logger.info(
-                "[AI3] Removed 'idea' entry (whether file or directory placeholder) "
-                "from the root of the generated project structure to prevent "
-                "conflict with 'idea.md'."
-            )
-        if "idea.md" in structure:  # Also remove idea.md if LLM tried to make one
-            del structure["idea.md"]
-            logger.info(
-                "[AI3] Removed 'idea.md' from LLM structure, will generate fresh."
-            )
+        # Remove 'idea' or 'idea.md' from LLM structure to avoid conflict
+        for key_to_remove in ["idea", IDEA_MD_FILENAME]:
+            if key_to_remove in structure:
+                del structure[key_to_remove]
+                logger.info(f"[AI3] Removed '{key_to_remove}' from LLM structure.")
 
-        # Create files - with retry mechanism for robustness
-        retry_count = 0
-        max_retries = 3
-        created_files = []
-        skipped_files = []
-
-        while retry_count < max_retries:
+        created_files, skipped_files = [], []
+        for attempt in range(3):  # Retry file creation
             try:
                 created_files, skipped_files = await create_files_from_structure(
-                    self.repo_dir, structure, self.repo, initial_commit=True
+                    self.repo_dir, structure, self.repo, True  # Pass repo for commit
                 )
-                if (
-                    created_files
-                ):  # If we created at least one file, consider it a success
+                if created_files or skipped_files:  # If something happened
                     break
                 logger.warning(
-                    f"[AI3] No files created, retrying ({retry_count+1}/{max_retries})"
+                    f"[AI3] No files created/skipped, retrying ({attempt+1}/3)"
                 )
-                retry_count += 1
-                await asyncio.sleep(3)  # Short wait before retry
             except Exception as e:
-                logger.error(f"[AI3] Error creating files from structure: {e}")
-                retry_count += 1
-                await asyncio.sleep(3)  # Short wait before retry
-
-        if not created_files and retry_count >= max_retries:
-            logger.critical("[AI3] Failed to create any files after multiple attempts")
-            await _report_status_to_mcp(
-                "error_file_creation_failed",
-                {"details": "Failed to create project files after multiple attempts"},
-                self.mcp_api_url,
-                self.client_session,
-            )
-            # Continue anyway to try generating idea.md at least
+                logger.error(f"[AI3] Error creating files (attempt {attempt+1}): {e}")
+            if attempt < 2:
+                await asyncio.sleep(ERROR_RETRY_DELAY)
 
         logger.info(
-            f"[AI3] File creation completed: {len(created_files)} files created, "
-            f"{len(skipped_files)} skipped"
+            f"[AI3] File creation: {len(created_files)} created, {len(skipped_files)} skipped"
         )
-
         await _report_status_to_mcp(
             "structure_creation_completed",
-            {"created_count": len(created_files), "skipped_count": len(skipped_files)},
+            {"created": len(created_files), "skipped": len(skipped_files)},
             self.mcp_api_url,
-            self.client_session,  # type: ignore
+            self.client_session,
         )
+        if not created_files and not skipped_files:  # If truly nothing happened
+            logger.critical("[AI3] Failed to create any project files.")
+            # Continue to ensure idea.md is attempted
 
-        # Generate idea.md with retry mechanism
-        idea_md_content = None
-        for attempt in range(3):  # Try up to 3 times
+        return structure
+
+    async def _ensure_and_send_idea_md_to_mcp(self, final_structure: Dict[str, Any]):
+        """Ensures idea.md exists, updates structure, and sends to MCP."""
+        idea_md_created_or_exists = await ensure_idea_md_exists(
+            self.repo_dir,
+            self.target,
+            self.provider_factory,
+            self.config_data,
+            self.client_session,
+        )
+        if not idea_md_created_or_exists:
+            logger.error(f"[AI3] Critical: Failed to ensure {IDEA_MD_FILENAME} exists.")
+            # Proceed to send structure anyway, MCP might handle missing idea.md
+
+        # Add idea.md to the structure to be sent if not already (should be by ensure_idea_md_exists)
+        if IDEA_MD_FILENAME not in final_structure and os.path.exists(
+            os.path.join(self.repo_dir, IDEA_MD_FILENAME)
+        ):
             try:
-                idea_md_content = await generate_initial_idea_md(
-                    self.target, self.provider_factory, self.config, self.client_session  # type: ignore
-                )
-                if idea_md_content:
-                    break
-                logger.warning(
-                    f"[AI3] idea.md generation attempt {attempt+1} failed. Retrying..."
-                )
-                await asyncio.sleep(3)
+                async with aiofiles.open(
+                    os.path.join(self.repo_dir, IDEA_MD_FILENAME), "r", encoding="utf-8"
+                ) as f:
+                    final_structure[IDEA_MD_FILENAME] = await f.read()
             except Exception as e:
                 logger.error(
-                    f"[AI3] Error in idea.md generation attempt {attempt+1}: {e}"
+                    f"[AI3] Failed to read {IDEA_MD_FILENAME} for MCP structure: {e}"
                 )
-                await asyncio.sleep(3)
+                final_structure[IDEA_MD_FILENAME] = "# Error reading idea.md"
 
-        idea_md_path = os.path.join(self.repo_dir, "idea.md")
-
-        if idea_md_content:
-            try:
-                async with aiofiles.open(idea_md_path, "w", encoding="utf-8") as f:
-                    await f.write(idea_md_content)
-                logger.info(
-                    f"[AI3] Successfully wrote initial content to {idea_md_path}"
-                )
-                if self.repo:
-                    _commit_changes(
-                        self.repo, [idea_md_path], "AI3: Add initial idea.md"
-                    )
-            except Exception as e:
-                logger.error(f"[AI3] Error writing idea.md: {e}", exc_info=True)
-        else:
-            # Create a basic idea.md as fallback if generation failed
-            try:
-                basic_content = f"# Project: {self.target}\n\nThis project aims to create a solution based on the provided target description.\n\n## Project Goals\n\n- Implement the core functionality\n- Ensure good user experience\n- Follow industry best practices\n\n## Technical Considerations\n\nMore details will be added as the project progresses."
-                async with aiofiles.open(idea_md_path, "w", encoding="utf-8") as f:
-                    await f.write(basic_content)
-                logger.info(
-                    f"[AI3] Created basic fallback idea.md due to generation failure"
-                )
-                if self.repo:
-                    _commit_changes(
-                        self.repo, [idea_md_path], "AI3: Add basic idea.md fallback"
-                    )
-                idea_md_content = (
-                    basic_content  # Set the content so we can use it later
-                )
-            except Exception as e:
-                logger.error(
-                    f"[AI3] Error writing fallback idea.md: {e}", exc_info=True
-                )
-
-        # Explicitly remove any file named "idea" (without extension) if it exists
-        # This is a final safety check after structure creation.
-        idea_file_path = os.path.join(self.repo_dir, "idea")
-        if os.path.exists(idea_file_path):
-            try:
-                if os.path.isfile(idea_file_path):
-                    os.remove(idea_file_path)
-                    logger.info(
-                        f"[AI3] Ensured removal of '{idea_file_path}' to keep 'idea.md' "
-                        "as the sole project description file."
-                    )
-                    if self.repo:  # Commit this removal if it happened
-                        _commit_changes(
-                            self.repo,
-                            [idea_file_path],
-                            "AI3: Remove conflicting 'idea' file",
-                        )
-                elif os.path.isdir(idea_file_path):
-                    logger.warning(
-                        f"[AI3] Path 'idea' is a directory, not removing: {idea_file_path}"
-                    )
-            except Exception as e:
-                logger.error(
-                    f"[AI3] Error during explicit removal of '{idea_file_path}': {e}",
-                    exc_info=True,
-                )
-
-        # Ensure idea.md exists before sending the final structure to MCP
-        # Try up to 3 more times if the above attempts failed
-        if not os.path.exists(idea_md_path):
-            await ensure_idea_md_exists(
-                self.repo_dir,
-                self.target,
-                self.provider_factory,
-                self.config,
-                self.client_session,
-            )
-
-        # Retry sending structure to MCP if it fails
         mcp_send_success = False
         for attempt in range(3):
-            try:
-                mcp_send_success = await send_structure_to_mcp(
-                    structure, self.target, self.mcp_api_url, self.client_session  # type: ignore
-                )
-                if mcp_send_success:
-                    break
-                logger.warning(
-                    f"[AI3] MCP structure send attempt {attempt+1} failed. Retrying..."
-                )
-                await asyncio.sleep(5)
-            except Exception as e:
-                logger.error(
-                    f"[AI3] Error in MCP structure send attempt {attempt+1}: {e}"
-                )
-                await asyncio.sleep(5)
+            logger.info(f"[AI3] Sending structure to MCP (attempt {attempt+1}/3)")
+            if await send_structure_to_mcp(
+                final_structure, self.target, self.mcp_api_url, self.client_session
+            ):
+                mcp_send_success = True
+                break
+            logger.warning(f"[AI3] MCP structure send attempt {attempt+1} failed.")
+            if attempt < 2:
+                await asyncio.sleep(ERROR_RETRY_DELAY)
 
         if not mcp_send_success:
-            logger.error(
-                "[AI3] Failed to send final structure to MCP after multiple attempts."
-            )
+            logger.error("[AI3] Failed to send final structure to MCP.")
             await _report_status_to_mcp(
                 "error_mcp_send_failed",
-                {"details": "Failed to send structure to MCP after multiple attempts"},
+                {"details": "Failed to send structure to MCP"},
                 self.mcp_api_url,
                 self.client_session,
             )
@@ -1678,33 +1379,218 @@ coverage.xml
             logger.info("[AI3] Final structure successfully sent to MCP.")
             await _report_status_to_mcp(
                 "structure_setup_completed",
-                {"final_structure_keys": list(structure.keys())},
+                {"final_keys": list(final_structure.keys())},
                 self.mcp_api_url,
                 self.client_session,
             )
 
-        # Explicitly signal AI1 to start if structure was generated successfully
-        if structure and (created_files or os.path.exists(idea_md_path)):
+    async def setup_structure(self):
+        logger.info("[AI3] Starting project structure setup...")
+        if not await self._perform_mcp_health_check():
+            logger.critical("[AI3] MCP API unavailable after retries. Aborting setup.")
+            return
+
+        if not await self.clear_repository():
+            logger.critical("[AI3] Repo clearing failed. Aborting setup.")
+            await _report_status_to_mcp(
+                "error_repo_clear_failed",
+                {"details": "Failed to clear repo"},
+                self.mcp_api_url,
+                self.client_session,
+            )
+            return
+        await _report_status_to_mcp(
+            "repo_cleared", None, self.mcp_api_url, self.client_session
+        )
+
+        if not await self._initialize_git_repo_in_dir():
+            logger.critical("[AI3] Git repo init failed. Aborting setup.")
+            return  # Error reported in helper
+
+        # Remove unexpected "project/" directory
+        project_path = Path(self.repo_dir) / "project"
+        if project_path.exists() and project_path.is_dir():
+            logger.warning(f"[AI3] Removing unexpected 'project/' dir: {project_path}")
+            try:
+                shutil.rmtree(project_path)
+            except Exception as e:
+                logger.error(f"[AI3] Error removing 'project/' dir: {e}")
+
+        generated_structure = await self._generate_and_create_project_structure()
+        if not generated_structure:
+            logger.critical(
+                "[AI3] Structure generation/creation failed. Aborting further setup."
+            )
+            # Errors reported in helper
+            return
+
+        await self._ensure_and_send_idea_md_to_mcp(generated_structure)
+
+        # Explicitly signal AI1 to start if structure was generated
+        # This is also done inside send_structure_to_mcp, but can be a fallback
+        if generated_structure:
             try:
                 async with self.client_session.post(
                     f"{self.mcp_api_url}/start_ai1",
-                    json={"reason": "Structure generation complete"},
-                    timeout=30,
+                    json={"reason": "AI3 setup_structure complete"},
+                    timeout=15,
                 ) as resp:
                     if resp.status == 200:
-                        logger.info(
-                            "[AI3] Successfully signaled AI1 to start processing"
-                        )
+                        logger.info("[AI3] Signaled AI1 to start (post-setup).")
                     else:
                         logger.warning(
-                            f"[AI3] Signal to start AI1 returned status {resp.status}"
+                            f"[AI3] Signal AI1 (post-setup) status: {resp.status}"
                         )
             except Exception as e:
-                logger.error(f"[AI3] Error signaling AI1 to start: {e}")
+                logger.error(f"[AI3] Error signaling AI1 (post-setup): {e}")
 
         logger.info("[AI3] Structure setup phase completed.")
 
-    # ... (AI3 methods with fixes for line length, undefined names, etc.)
+    async def _check_service_status(
+        self, service_name: str, health_metrics: Dict[str, Any]
+    ):
+        """Helper to check status of a single service."""
+        pid_file = Path(LOGS_DIR) / f"{service_name}.pid"
+        log_file = Path(LOGS_DIR) / f"{service_name}.log"
+        status_info = {
+            "status": "UNKNOWN",
+            "pid_found": False,
+            "running": False,
+            "log_exists": log_file.exists(),
+        }
+        try:
+            if pid_file.exists():
+                status_info["pid_found"] = True
+                with open(pid_file, "r") as pf:
+                    pid = int(pf.read().strip())
+                if psutil.pid_exists(pid):
+                    process = psutil.Process(pid)
+                    # Basic check if process name/cmdline matches expected, if possible
+                    # For now, just checking if PID is running
+                    status_info["running"] = True
+                    status_info["status"] = "RUNNING"
+                else:
+                    status_info["status"] = "STOPPED_UNEXPECTEDLY"
+                    health_metrics["service_status"]["overall"] = "ERROR"
+                    health_metrics["service_status"]["errors"].append(
+                        f"Service {service_name} (PID {pid}) not running."
+                    )
+            else:
+                status_info["status"] = "NO_PID_FILE"
+        except (
+            psutil.NoSuchProcess,
+            ValueError,
+            IOError,
+        ) as e:  # Added ValueError for bad PID file
+            status_info["status"] = "ERROR_CHECKING_PID"
+            health_metrics["service_status"]["overall"] = "ERROR"
+            health_metrics["service_status"]["errors"].append(
+                f"Error checking PID for {service_name}: {e}"
+            )
+        health_metrics["services"][service_name] = status_info
+
+    async def _scan_log_file_for_errors(
+        self, log_file_path: Path, health_metrics: Dict[str, Any]
+    ):
+        """Helper to scan a single log file for errors."""
+        try:
+            async with aiofiles.open(
+                log_file_path, "r", encoding="utf-8", errors="ignore"
+            ) as lf:
+                recent_lines = (await lf.readlines())[-100:]  # Check last 100 lines
+            for i, line_content in enumerate(recent_lines):
+                error_patterns = ["ERROR", "CRITICAL", "Exception", "Traceback"]
+                if any(pattern in line_content for pattern in error_patterns):
+                    error_detail = (
+                        f"{log_file_path.name} "
+                        f"(line ~{len(recent_lines) - i}): {line_content.strip()}"
+                    )
+                    health_metrics["log_errors"]["details"].append(error_detail)
+        except Exception as e_log:
+            logger.error(f"[AI3-Health] Error reading log {log_file_path}: {e_log}")
+            health_metrics["log_errors"]["details"].append(
+                f"Error reading {log_file_path.name}: {e_log}"
+            )
+
+    async def _check_system_health(self) -> Dict[str, Any]:
+        health_metrics: Dict[str, Any] = {
+            "status": "OK",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "services": {},
+            "resource_usage": {},
+            "log_errors": {"count": 0, "details": []},
+            "error_count": 0,
+            "warnings": [],
+            "requires_attention": False,
+            "service_status": {
+                "overall": "OK",
+                "errors": [],
+            },  # Initialize service_status
+        }
+        try:
+            import psutil  # Import locally
+
+            mem = psutil.virtual_memory()
+            health_metrics["resource_usage"]["memory"] = {
+                "total_gb": f"{mem.total / (1024**3):.2f}",
+                "available_gb": f"{mem.available / (1024**3):.2f}",
+                "percent_used": f"{mem.percent:.2f}%",
+            }
+            if mem.percent > 85:
+                health_metrics["warnings"].append("High memory usage.")
+
+            disk_path = self.repo_dir if Path(self.repo_dir).exists() else "/"
+            disk = psutil.disk_usage(disk_path)
+            health_metrics["resource_usage"]["disk"] = {
+                "total_gb": f"{disk.total / (1024**3):.2f}",
+                "free_gb": f"{disk.free / (1024**3):.2f}",
+                "percent_used": f"{disk.percent:.2f}%",
+            }
+            if disk.percent > 90:
+                health_metrics["warnings"].append("High disk usage.")
+        except ImportError:
+            logger.warning("[AI3-Health] psutil not found. No resource usage.")
+            for key in ["memory", "disk"]:
+                health_metrics["resource_usage"][key] = {"status": "psutil missing"}
+        except Exception as e:
+            logger.error(f"[AI3-Health] Error getting resource usage: {e}")
+            health_metrics["resource_usage"]["error"] = str(e)
+
+        services_to_check = [
+            "mcp_api",
+            "ai1",
+            "ai2_executor",
+            "ai2_tester",
+            "ai2_documenter",
+        ]
+        for service_name in services_to_check:
+            await self._check_service_status(service_name, health_metrics)
+
+        try:
+            log_files_to_scan = list(Path(LOGS_DIR).glob("*.log"))
+            for log_file_path in log_files_to_scan:
+                await self._scan_log_file_for_errors(log_file_path, health_metrics)
+        except Exception as e_scan_logs:
+            logger.error(f"[AI3-Health] Error scanning log dir: {e_scan_logs}")
+            health_metrics["log_errors"]["details"].append(
+                f"Error scanning log dir: {e_scan_logs}"
+            )
+
+        health_metrics["log_errors"]["count"] = len(
+            health_metrics["log_errors"]["details"]
+        )
+        health_metrics["error_count"] = (
+            len(health_metrics["service_status"].get("errors", []))
+            + health_metrics["log_errors"]["count"]
+        )
+        if health_metrics["error_count"] > 0 or health_metrics["warnings"]:
+            health_metrics["requires_attention"] = True
+            health_metrics["status"] = (
+                "WARNING" if not health_metrics["service_status"]["errors"] else "ERROR"
+            )
+
+        return health_metrics
+
     async def monitor_system_health(self):
         # ...
         try:
@@ -1715,355 +1601,126 @@ coverage.xml
             # ...
             if health_status.get("requires_attention"):
                 logger.warning(
-                    f"[AI3] System health requires attention: {health_status}"
-                )
-                # TODO: Implement ai_comm
-                # await self._report_system_error_to_ai1(
-                #     "System Health Alert",
-                #     f"Details: {health_status.get('warnings', 'N/A')}, "
-                #     f"Errors: {health_status.get('error_count', 0)}",
-                #     "system_health.log" # Placeholder log file
-                # )
+                    f"[AI3-Monitor] System health requires attention: {health_status}"
+                )  # Log full status
+                # TODO: Implement more sophisticated alerting or recovery
             # ...
         except Exception as e:
             logger.error(
-                f"[AI3-MonitorSysHealth] Error in system health monitoring loop: {e}",
+                f"[AI3-MonitorSysHealth] Error in health monitoring loop: {e}",
                 exc_info=True,
             )
 
-    # ...
-    async def _check_system_health(self) -> Dict[str, Any]:
-        health_metrics: Dict[str, Any] = {
-            "status": "OK",
-            "timestamp": datetime.now(timezone.utc).isoformat(),  # Use timezone.utc
-            "services": {},
-            "resource_usage": {},
-            "log_errors": {"count": 0, "details": []},
-            "error_count": 0,
-            "warnings": [],
-            "requires_attention": False,
-        }
-        try:
-            import psutil  # Import psutil locally
-
-            mem = psutil.virtual_memory()
-            health_metrics["resource_usage"]["memory"] = {
-                "total_gb": f"{mem.total / (1024**3):.2f}",
-                "available_gb": f"{mem.available / (1024**3):.2f}",
-                "percent_used": f"{mem.percent:.2f}%",
-            }
-            if mem.percent > 85:
-                health_metrics["warnings"].append("High memory usage (>85%)")
-
-            disk = psutil.disk_usage(
-                self.repo_dir if os.path.exists(self.repo_dir) else "/"
-            )
-            health_metrics["resource_usage"]["disk"] = {
-                "total_gb": f"{disk.total / (1024**3):.2f}",
-                "free_gb": f"{disk.free / (1024**3):.2f}",
-                "percent_used": f"{disk.percent:.2f}%",
-            }
-            if disk.percent > 90:
-                health_metrics["warnings"].append("High disk usage (>90%)")
-        except ImportError:
-            logger.warning(
-                "[AI3-Health] psutil module not found. Cannot report detailed resource usage."
-            )
-            health_metrics["resource_usage"]["memory"] = {
-                "status": "psutil module not available"
-            }
-            health_metrics["resource_usage"]["disk"] = {
-                "status": "psutil module not available"
-            }
-        except Exception as e:
-            logger.error(f"[AI3-Health] Error getting resource usage: {e}")
-            health_metrics["resource_usage"]["error"] = str(e)
-
-        # Check service status (conceptual, needs actual service checks)
-        services_to_check = [
-            "mcp_api",
-            "ai1",
-            "ai2_executor",
-            "ai2_tester",
-            "ai2_documenter",
-        ]
-        service_status: Dict[str, Any] = {"overall": "OK", "errors": []}
-
-        for service_name in services_to_check:
-            pid_file = Path(LOGS_DIR) / f"{service_name}.pid"  # LOGS_DIR from utils
-            log_file = Path(LOGS_DIR) / f"{service_name}.log"
-            status = {
-                "status": "UNKNOWN",
-                "pid_found": False,
-                "running": False,
-                "log_exists": log_file.exists(),
-            }
-
-            if pid_file.exists():
-                status["pid_found"] = True
-                try:
-                    pid = int(pid_file.read_text().strip())
-                    if psutil.pid_exists(pid):  # psutil needs to be imported
-                        # p = psutil.Process(pid) # Requires psutil
-                        # if p.name().lower() in service_name: # Basic check
-                        status["running"] = True
-                        status["status"] = "RUNNING"
-                        # else:
-                        #     status["status"] = "PID_MISMATCH"
-                        #     service_status["errors"].append(f"Service {service_name} PID mismatch.")
-                    else:
-                        status["status"] = "NOT_RUNNING_PID_STALE"
-                        service_status["errors"].append(
-                            f"Service {service_name} has PID file but process {pid} is not running"
-                        )
-                except (
-                    ValueError,
-                    FileNotFoundError,
-                    psutil.NoSuchProcess if "psutil" in sys.modules else Exception,
-                ) as e:  # Handle if psutil not imported
-                    status["status"] = "ERROR_CHECKING_PID"
-                    service_status["errors"].append(
-                        f"Error checking PID for {service_name}: {e}"
-                    )
-            else:  # No PID file
-                status["status"] = "NO_PID_FILE"
-                # This might be normal for some services or if they haven't started
-                # health_metrics["warnings"].append(f"No PID file for service {service_name}")
-
-            health_metrics["services"][service_name] = status
-            if status["status"] not in [
-                "RUNNING",
-                "UNKNOWN",
-                "NO_PID_FILE",
-            ]:  # Consider NO_PID_FILE as warning not error initially
-                service_status["overall"] = "DEGRADED"
-
-        health_metrics["service_status"] = service_status
-        if service_status["overall"] != "OK":
-            health_metrics["warnings"].append(
-                f"One or more services are in a '{service_status['overall']}' state."
-            )
-
-        # Basic log error check (last N lines for keywords)
-        error_logs_details = []
-        try:
-            log_files_to_scan = list(
-                Path(LOGS_DIR).glob("*.log")
-            )  # LOGS_DIR from utils
-            for log_file_path in log_files_to_scan:
-                try:
-                    with open(
-                        log_file_path, "r", encoding="utf-8", errors="ignore"
-                    ) as f:
-                        # Read last N lines for quick scan
-                        log_lines = f.readlines()
-                        recent_lines = (
-                            log_lines[-100:] if len(log_lines) > 100 else log_lines
-                        )
-                        error_patterns = ["ERROR", "CRITICAL", "Exception", "Traceback"]
-                        for i, line_content in enumerate(recent_lines):
-                            if any(
-                                pattern in line_content for pattern in error_patterns
-                            ):
-                                error_logs_details.append(
-                                    f"{log_file_path.name} (line ~{len(log_lines) - len(recent_lines) + i}): {line_content.strip()}"
-                                )
-                except Exception as e_log:
-                    logger.error(
-                        f"[AI3-Health] Error reading log file {log_file_path}: {e_log}"
-                    )
-                    error_logs_details.append(
-                        f"Error reading {log_file_path.name}: {e_log}"
-                    )
-        except Exception as e_scan_logs:
-            logger.error(f"[AI3-Health] Error scanning log directory: {e_scan_logs}")
-            error_logs_details.append(f"Error scanning log directory: {e_scan_logs}")
-
-        if error_logs_details:
-            health_metrics["log_errors"]["count"] = len(error_logs_details)
-            health_metrics["log_errors"]["details"] = error_logs_details[
-                :20
-            ]  # Limit details
-            health_metrics["warnings"].append(
-                f"Found {len(error_logs_details)} error indicators in logs."
-            )
-
-        health_metrics["error_count"] = (
-            len(health_metrics["service_status"].get("errors", []))
-            + health_metrics["log_errors"]["count"]  # Use count here
+    async def _analyze_log_line_with_ollama(
+        self, log_file: Path, line_content: str, context: str, line_num: int
+    ) -> bool:
+        """Analyzes a single log line with Ollama to detect errors."""
+        prompt = (
+            f"Log File: {log_file.name}\\nContext (lines around {line_num}):\\n"
+            f"```log\\n{context}```\\n"
+            f"Current line under analysis (line {line_num}): {line_content.strip()}\\n\\n"
+            "Is this log line a significant error related to file ops, code execution, "
+            "or system stability in a dev project (often in 'repo/' dir)? "
+            "Ignore benign errors/routine messages. "
+            'Respond JSON: {"is_error": true/false, "reason": "brief explanation"}'
         )
+        analysis_json_str = await call_ollama(
+            self.client_session,
+            prompt,
+            self.ollama_endpoint,
+            self.ollama_model,
+            temperature=0.1,
+            max_tokens=150,
+            timeout=45,
+        )
+        if analysis_json_str:
+            try:
+                analysis = json.loads(analysis_json_str)
+                if analysis.get("is_error"):
+                    logger.warning(
+                        f"[AI3-Ollama] Detected error in {log_file.name} (line {line_num}): "
+                        f"{line_content.strip()} - Reason: {analysis.get('reason')}"
+                    )
+                    return True
+            except json.JSONDecodeError:
+                logger.warning(
+                    f"[AI3-Ollama] Invalid JSON from Ollama for log line: "
+                    f"{analysis_json_str}"
+                )
+        return False
 
-        if health_metrics["error_count"] > 0 or health_metrics["warnings"]:
-            health_metrics["requires_attention"] = True
-            if health_metrics["error_count"] > 0:
-                health_metrics["status"] = "ERROR"
-            elif health_metrics["warnings"]:
-                health_metrics["status"] = "WARNING"
-
-        return health_metrics
-
-    # ...
     async def scan_logs_for_errors(self):
-        """Scans configured log files for errors related to 'repo/' using Ollama."""
-        if not self.ollama_initialized:
-            logger.warning(
-                "[AI3] Ollama not initialized. Skipping log scan for errors."
-            )
+        """Scans log files for errors using Ollama."""
+        if not self.ollama_initialized or not self.client_session:
+            logger.warning("[AI3-Ollama] Not initialized. Skipping log scan.")
             return []
 
-        logger.info("[AI3] Starting log scan for errors using Ollama...")
-        # logs_dir_path = Path(LOGS_DIR) # LOGS_DIR from utils
-        logs_dir_path = Path(
-            self.config.get("logs_dir", LOGS_DIR)
-        )  # Use configured or default
-        if not logs_dir_path.exists() or not logs_dir_path.is_dir():
-            logger.error(
-                f"[AI3] Logs directory '{logs_dir_path}' not found. Cannot scan for errors."
-            )
+        logger.info("[AI3-Ollama] Starting log scan for errors...")
+        logs_dir = Path(self.config.get("logs_dir", LOGS_DIR))
+        if not logs_dir.is_dir():
+            logger.error(f"[AI3-Ollama] Logs dir '{logs_dir}' not found.")
             return []
 
-        # Ensure Ollama config is loaded (should be by _initialize_ollama_config)
-        if not self.ollama_endpoint or not self.ollama_model:
-            logger.error(
-                "[AI3] Ollama configuration not found in config.json. "
-                "Cannot proceed with log analysis."
-            )
-            return []
-
-        logger.info(
-            "[AI3] Ollama configured with endpoint "
-            f"'{self.ollama_endpoint}' and model '{self.ollama_model}'"
-        )
-
-        detected_errors = []
+        detected_errors_info = []
         log_files = [
-            f for f in logs_dir_path.iterdir() if f.is_file() and f.suffix == ".log"
+            f for f in logs_dir.iterdir() if f.is_file() and f.suffix == ".log"
         ]
 
         for log_file in log_files:
+            lines_analyzed, errors_in_file = 0, 0
             try:
-                logger.info(f"[AI3] Scanning log file: {log_file.name}")
-                lines_analyzed = 0
-                errors_detected_in_file = 0
-
                 async with aiofiles.open(
                     log_file, "r", encoding="utf-8", errors="ignore"
-                ) as f:
-                    lines = await f.readlines()
-                    logger.info(f"[AI3] Read {len(lines)} lines from {log_file.name}")
-
-                    for i, line_content in enumerate(lines):
-                        if lines_analyzed >= MAX_LOG_LINE_ANALYSIS:
-                            logger.info(
-                                f"[AI3] Reached max analysis lines for {log_file.name}"
-                            )
-                            break
-
-                        # Basic filter for common error keywords to reduce LLM calls
-                        if not any(
-                            kw in line_content.upper()
-                            for kw in ["ERROR", "FAIL", "EXCEPTION", "CRITICAL"]
-                        ):
-                            continue
-
-                        logger.debug(
-                            f"[AI3] Analyzing log line {i+1}/{len(lines)} in {log_file.name}"
-                        )
-
-                        context_start = max(0, i - MAX_CONTEXT_LINES)
-                        context_end = min(len(lines), i + MAX_CONTEXT_LINES + 1)
-                        context = "".join(lines[context_start:context_end])
-
-                        prompt = (
-                            f"Log file: {log_file.name}\\n"
-                            f"Context (lines {context_start+1}-{context_end}):\\n```log\\n{context}```\\n"
-                            f"Current line under analysis (line {i+1}): {line_content.strip()}\\n\\n"
-                            "Analyze this log line and its context. Determine if it indicates a "
-                            "significant error, particularly related to file operations, code execution, "
-                            "or system stability within a software development project (files often in a 'repo/' directory). "
-                            "Ignore benign errors or routine operational messages unless they clearly point to a problem. "
-                            "Respond in JSON format: "
-                            '{{"is_error": bool, "confidence": float (0.0-1.0), "error_type": "str (e.g., FileSystem, CodeExecution, Configuration, Network, Unknown)", "summary": "str (brief summary of the error)", "affected_file_or_module": "str (if identifiable, otherwise null)"}}'
-                        )
-
-                        # TODO: Implement or import apply_request_delay
-                        # await apply_request_delay("ai3_ollama")
-                        analysis_json_str = (
-                            await call_ollama(  # Use specific call_ollama
-                                self.client_session,  # type: ignore
-                                prompt,
-                                self.ollama_endpoint,
-                                self.ollama_model,
-                                temperature=0.3,
-                                max_tokens=300,  # Smaller response expected
-                                timeout=45,  # Shorter timeout for log line analysis
-                            )
-                        )
-                        lines_analyzed += 1
-
-                        if analysis_json_str:
-                            try:
-                                result = json.loads(analysis_json_str)
-                                if (
-                                    result.get("is_error")
-                                    and result.get("confidence", 0.0) > 0.6
-                                ):
-                                    logger.info(
-                                        f"[AI3] Ollama detected error in {log_file.name}: {line_content.strip()}"
-                                    )
-                                    error_detail = {
-                                        "log_file": log_file.name,
-                                        "line_number": i + 1,
-                                        "line_content": line_content.strip(),
-                                        "ollama_analysis": result,
-                                    }
-                                    detected_errors.append(error_detail)
-                                    errors_detected_in_file += 1
-                                    # TODO: Implement ai_comm
-                                    # report_sent = await self._report_system_error_to_ai1(
-                                    #     f"Ollama detected error in {log_file.name}",
-                                    #     result.get("summary", "No summary"),
-                                    #     log_file.name,
-                                    #     context=error_detail
-                                    # )
-                                    # if report_sent:
-                                    #     logger.info(
-                                    #         "[AI3] Successfully reported error to AI1 from "
-                                    #         f"{log_file.name}"
-                                    #     )
-                                    # else:
-                                    #     logger.warning(
-                                    #         "[AI3] Failed to report error to AI1 from "
-                                    #         f"{log_file.name}"
-                                    #     )
-
-                            except json.JSONDecodeError:
-                                logger.warning(
-                                    "[AI3] Invalid JSON response from Ollama for line: "
-                                    f"{line_content.strip()[:100]}..."
-                                )
-                                logger.debug(
-                                    f"[AI3] Full invalid response: {analysis_json_str}"
-                                )
-                        # else: # No response from Ollama or empty
-                        # logger.debug(f"[AI3] No Ollama response for line: {line_content.strip()[:100]}...")
-
+                ) as lf:
+                    lines = await lf.readlines()
                 logger.info(
-                    f"[AI3] Completed analysis of {log_file.name}: "
-                    f"{lines_analyzed} lines analyzed, {errors_detected_in_file} errors detected"
+                    f"[AI3-Ollama] Read {len(lines)} lines from {log_file.name}"
                 )
+
+                for i, line_content in enumerate(lines):
+                    if lines_analyzed >= MAX_LOG_LINE_ANALYSIS:
+                        logger.info(
+                            f"[AI3-Ollama] Max analysis lines for {log_file.name}"
+                        )
+                        break
+
+                    # Basic keyword filter
+                    if not any(
+                        kw in line_content.upper()
+                        for kw in ["ERROR", "FAIL", "EXCEPTION", "CRITICAL"]
+                    ):
+                        continue
+
+                    lines_analyzed += 1
+                    context_start = max(0, i - MAX_CONTEXT_LINES)
+                    context_end = min(len(lines), i + MAX_CONTEXT_LINES + 1)
+                    context = "".join(lines[context_start:context_end])
+
+                    if await self._analyze_log_line_with_ollama(
+                        log_file, line_content, context, i + 1
+                    ):
+                        errors_in_file += 1
+                        detected_errors_info.append(
+                            {
+                                "file": log_file.name,
+                                "line_num": i + 1,
+                                "content": line_content.strip(),
+                            }
+                        )
+                        # TODO: Implement ai_comm for reporting if needed here
+                        # self._report_system_error_to_ai1(...)
             except Exception as e:
-                logger.error(
-                    f"[AI3] Error processing log file {log_file.name}: {e}",
-                    exc_info=True,
+                logger.error(f"[AI3-Ollama] Error processing {log_file.name}: {e}")
+            if lines_analyzed > 0:
+                logger.info(
+                    f"[AI3-Ollama] {log_file.name}: {errors_in_file} errors in {lines_analyzed} analyzed lines."
                 )
 
         logger.info(
-            f"[AI3] Log scanning completed. Total errors detected by Ollama: {len(detected_errors)}"
+            f"[AI3-Ollama] Log scan done. Total errors: {len(detected_errors_info)}"
         )
-        return detected_errors
+        return detected_errors_info
 
-    # ...
     async def monitor_github_actions(self):
         # ...
         github_repo = os.getenv("GITHUB_REPO_TO_MONITOR") or self.config.get(
@@ -2072,19 +1729,17 @@ coverage.xml
         github_token = os.getenv("GITHUB_TOKEN") or self.config.get("github_token")
 
         if not github_repo:
-            logger.info(
-                "[AI3] Warning: GitHub repository not configured. "
-                "Cannot monitor GitHub Actions."
-            )
+            logger.debug(
+                "[AI3-GitHub] GITHUB_REPO_TO_MONITOR not set. Skipping."
+            )  # Debug, not warning
             return
         if not github_token:
-            logger.info(
-                "[AI3] Warning: GITHUB_TOKEN not configured. "
-                "Cannot monitor GitHub Actions."
-            )
+            logger.warning(
+                "[AI3-GitHub] GITHUB_TOKEN not set. Skipping."
+            )  # Warning, as it's needed if repo is set
             return
 
-        logger.debug(f"[AI3] Checking GitHub Actions runs for {github_repo}...")
+        logger.debug(f"[AI3-GitHub] Checking Actions for {github_repo}...")
         api_url = f"{GITHUB_API_BASE_URL}/repos/{github_repo}/actions/runs"
         headers = {
             "Authorization": f"token {github_token}",
@@ -2092,141 +1747,145 @@ coverage.xml
         }
         # ...
         try:
-            async with self.client_session.get(api_url, headers=headers, params={"status": "completed"}, timeout=30) as response:  # type: ignore
+            # type: ignore below because aiohttp.ClientSession.get has overloads
+            # that mypy struggles with when params is included.
+            async with self.client_session.get(  # type: ignore
+                api_url, headers=headers, params={"status": "completed"}, timeout=30
+            ) as response:
                 if response.status == 200:
                     runs_data = await response.json()
                     workflow_runs = runs_data.get("workflow_runs", [])
-                    logger.info(
-                        f"[AI3] Fetched {len(workflow_runs)} completed workflow runs."
+                    logger.debug(
+                        f"[AI3-GitHub] Fetched {len(workflow_runs)} completed runs."
                     )
-
-                    # Sort runs by creation time, newest first
+                    # Sort by creation time, newest first
                     sorted_runs = sorted(
                         workflow_runs, key=lambda x: x["created_at"], reverse=True
                     )
-
-                    new_runs_found = False
+                    new_runs_processed_this_cycle = 0
                     for run in sorted_runs:
                         run_id = run["id"]
                         if run_id not in self.processed_github_run_ids:
-                            new_runs_found = True
-                            run_conclusion = run.get("conclusion")
                             logger.info(
-                                "[AI3] Found new completed GitHub Actions run: "
-                                f"ID={run_id}, Conclusion={run_conclusion}"
+                                f"[AI3-GitHub] New completed run: ID {run_id}, "
+                                f"Status {run.get('status')}, Conclusion {run.get('conclusion')}"
                             )
                             await self._analyze_workflow_run(
                                 run_id,
-                                run_conclusion,
-                                headers,
-                                GITHUB_API_BASE_URL,  # Use constant
+                                run.get("conclusion"),
+                                headers,  # Pass headers
+                                # Removed api_base_url as it's constant
                             )
                             self.processed_github_run_ids.add(run_id)
-                            # Limit processing to a few new runs per cycle to avoid rate limits
-                            if (
-                                len(self.processed_github_run_ids) > 1000
-                            ):  # Prune old IDs
-                                self.processed_github_run_ids = set(
-                                    list(self.processed_github_run_ids)[-500:]
+                            new_runs_processed_this_cycle += 1
+                            if new_runs_processed_this_cycle >= 5:  # Limit per cycle
+                                logger.info(
+                                    "[AI3-GitHub] Reached processing limit for this cycle."
                                 )
-
-                    if (
-                        not new_runs_found and workflow_runs
-                    ):  # Only log if there were runs but none new
-                        logger.info(
-                            "[AI3] No new completed GitHub Actions runs found this cycle."
-                        )
-                    elif not workflow_runs:
-                        logger.info(
-                            "[AI3] No completed GitHub Actions runs found for the repository."
-                        )
+                                break
+                    if new_runs_processed_this_cycle == 0 and sorted_runs:
+                        logger.debug("[AI3-GitHub] No new completed runs this cycle.")
+                    elif not sorted_runs:
+                        logger.debug("[AI3-GitHub] No completed runs found for repo.")
 
                 elif response.status == 404:
-                    logger.error(
-                        f"[AI3] GitHub repository '{github_repo}' not found or "
-                        "access denied. Stopping GitHub monitoring."
+                    logger.warning(
+                        f"[AI3-GitHub] Repo '{github_repo}' not found or "
+                        "actions disabled."
                     )
-                    self.monitoring_active = False  # Stop if repo not found
                 elif response.status == 401:
                     logger.error(
-                        "[AI3] GitHub API authentication failed (Invalid GITHUB_TOKEN?). "
-                        "Stopping GitHub monitoring."
+                        "[AI3-GitHub] API auth failed (Invalid GITHUB_TOKEN?)."
                     )
-                    self.monitoring_active = False  # Stop if auth fails
                 else:
                     logger.error(
-                        "[AI3] Failed to fetch GitHub Actions runs: Status "
-                        f"{response.status} - {await response.text()}"
+                        f"[AI3-GitHub] API error: {response.status} - {await response.text()}"
                     )
         except asyncio.TimeoutError:
-            logger.warning("[AI3] Timeout during GitHub Actions monitoring.")
+            logger.warning("[AI3-GitHub] API request timed out.")
         except aiohttp.ClientError as e:
-            logger.error(
-                f"[AI3] Connection error during GitHub Actions monitoring: {e}"
-            )
+            logger.error(f"[AI3-GitHub] HTTP client error: {e}")
         except Exception as e:
-            logger.error(
-                f"[AI3] Error in GitHub Actions monitoring loop: {e}",
-                exc_info=True,
-            )
+            logger.error(f"[AI3-GitHub] Unexpected error: {e}", exc_info=True)
 
-    # ...
     async def _analyze_workflow_run(
         self,
         run_id: int,
         run_conclusion: Optional[str],
-        headers: dict,
-        api_base_url: str,
+        headers: dict,  # Keep headers for potential future use (e.g. fetching logs)
+        # api_base_url: str, # Removed, use constant GITHUB_API_BASE_URL
     ):
         logger.info(
             f"[AI3] Analyzing workflow run ID: {run_id}, Conclusion: {run_conclusion}"
         )
-        # ...
-        # TODO: Implement ai_comm
-        # await self._send_test_recommendation(recommendation, context)
+        # Placeholder: Fetch detailed logs if needed. For now, assume summary is enough.
+        # logs_url = f"{GITHUB_API_BASE_URL}/repos/{self.config.get('github_repo_to_monitor')}/actions/runs/{run_id}/logs"
+        # async with self.client_session.get(logs_url, headers=headers) as log_resp:
+        # if log_resp.status == 200:
+        # actual_logs = await log_resp.text() # This might be a zip file, needs handling
 
-    # ...
+        # For now, we'll use a simplified approach or assume logs are passed if complex
+        # This part uses Ollama to analyze, which might be too slow or resource-intensive
+        # for every run. Consider a simpler check first or making this configurable.
+        analysis_result = await self._analyze_github_actions_logs_with_ollama(
+            logs=f"Run ID {run_id} concluded with {run_conclusion}.",  # Simplified log input
+            run_id=run_id,
+            run_conclusion=run_conclusion,
+        )
+        analysis_result["run_id"] = run_id  # Ensure run_id is in the result
+
+        if analysis_result.get("recommendation") == "rework" and self.repo:
+            logger.info(f"[AI3] Rework recommended for run {run_id}. Attempting fixes.")
+            fix_summary = await self._attempt_test_fixes(analysis_result)
+            analysis_result["fix_attempts_summary"] = fix_summary
+            # Potentially re-evaluate recommendation based on fix_summary
+            if fix_summary.get("all_files_fixed"):
+                logger.info(
+                    f"[AI3] All identified files fixed for run {run_id}. Updating recommendation to 'accept_after_fix'."
+                )
+                analysis_result["recommendation"] = "accept_after_fix"
+            elif fix_summary.get("some_files_fixed"):
+                logger.info(
+                    f"[AI3] Some files fixed for run {run_id}. Recommendation remains 'rework'."
+                )
+                analysis_result["recommendation"] = "rework_after_partial_fix"
+
+        # Send recommendation to MCP API
+        await self._send_test_recommendation_to_mcp(analysis_result)
+
+        # Old logging, replaced by MCP call
+        # logger.info(f"[AI3-GitHub] Analysis for run {run_id}: {analysis_result}")
+
     async def _analyze_github_actions_logs_with_ollama(
         self, logs: str, run_id: int, run_conclusion: Optional[str]
     ) -> Dict[str, Any]:
         # ...
         prompt = (
             f"GitHub Actions Run ID: {run_id}, Conclusion: {run_conclusion}\\n"
-            f"Logs:\\n```\\n{logs[:15000]}```\\n\\n"  # Limit log size
-            "Analyze the following GitHub Actions logs and determine if there are "
-            "test or linting errors. Identify any specific files that failed. "
-            "If tests failed, recommend 'rework'. If tests passed or only minor "
-            "linting issues (that might be auto-fixed) occurred, recommend 'accept'. "
-            "If unsure or logs are inconclusive, recommend 'accept' but note it. "
-            'Respond in JSON format: {{"recommendation": "accept"|"rework", '
-            '"failed_files": list[str], "summary": "str (brief summary of findings)", '
-            '"confidence": float (0.0-1.0)}}'
+            f"Logs (first 15k chars):\\n```\\n{logs[:15000]}```\\n\\n"
+            "Analyze GitHub Actions logs: test/lint errors? Failed files? "
+            "Recommend 'rework' for failed tests, 'accept' for passed/minor lint. "
+            "If unsure, 'accept' with note. "
+            'JSON: {"recommendation": "accept"|"rework", '
+            '"failed_files": list[str], "summary": "str", '
+            '"confidence": float (0.0-1.0)}'
         )
-
-        default_recommendation = {
-            "recommendation": "accept" if run_conclusion != "failure" else "rework",
-            "failed_files": [],
-            "summary": f"Default based on run conclusion: {run_conclusion}",
-            "confidence": 0.5,
-            "run_url": f"https://github.com/{self.config.get('github_repo_to_monitor')}/actions/runs/{run_id}",
-        }
-
+        # ...existing code...
         if not self.ollama_initialized or not self.client_session:
             logger.warning(
-                "[AI3] Ollama or client session not initialized. Returning default recommendation."
+                "[AI3-Ollama] Not init. Default recommendation for GH Actions."
             )
             return default_recommendation
 
         analysis_json_str = await call_ollama(
-            self.client_session,
+            self.client_session,  # Pass client_session
             prompt,
-            self.ollama_endpoint,  # type: ignore
-            self.ollama_model,  # type: ignore
+            self.ollama_endpoint,  # Pass endpoint
+            self.ollama_model,  # Pass model
             temperature=0.2,
             max_tokens=500,
             timeout=60,
         )
-
         if analysis_json_str:
             try:
                 result = json.loads(analysis_json_str)
@@ -2244,7 +1903,6 @@ coverage.xml
                 return default_recommendation
         return default_recommendation
 
-    # ...
     async def monitor_idle_workers(self):
         # ...existing code...
         # Placeholder for actual queue size retrieval
@@ -2260,266 +1918,536 @@ coverage.xml
     async def _report_system_error_to_ai1(
         self,
         error_type: str,
-        error_description: str,
+        # error_description: str, # Parameter removed as it was unused
         log_file: str,
         context: Optional[Dict] = None,
     ):
-        """Reports a system error to AI1 using the standardized communication protocol"""
-        logger.info(f"[AI3 -> AI1] Attempting to report system error: {error_type}")
-        # TODO: This needs a proper implementation with ai_comm or similar
-        # try:
-        #     # Assuming ai_comm is a module or object that provides messaging capabilities
-        #     # This is a placeholder for the actual communication mechanism
-        #     # message_bus = await ai_comm.get_message_bus() # Placeholder
-        #     # error_message = ai_comm.Message( # Placeholder
-        #     #     source="ai3",
-        #     #     target="ai1",
-        #     #     type="system_error",
-        #     #     payload={
-        #     #         "error_type": error_type,
-        #     #         "description": error_description,
-        #     #         "log_file": log_file,
-        #     #         "timestamp": datetime.now(timezone.utc).isoformat(),
-        #     #         "context": context or {}
-        #     #     }
-        #     # )
-        #     # await message_bus.publish(error_message) # Placeholder
-        #     logger.info(f"[AI3 -> AI1] Reported system error from {log_file} to AI1.")
-        #     return True
-        # except Exception as e:
-        #     logger.error(
-        #         f"[AI3 -> AI1] Failed to report system error to AI1: {e}", exc_info=True
-        #     )
-        #     return False
+        """Reports a system error to AI1 (placeholder)."""
+        logger.info(f"[AI3->AI1] Attempting report: {error_type} from {log_file}")
+        # TODO: Implement with ai_comm or similar
+        # ...
         logger.warning(
-            "[AI3 -> AI1] _report_system_error_to_ai1: ai_comm not implemented."
+            "[AI3->AI1] _report_system_error_to_ai1: ai_comm not implemented."
         )
-        return False  # Placeholder return
+        return False
 
-    # ...
     async def main_loop(self):
         # ...
         if self.current_project_structure is None:  # Check if structure was set up
-            logger.info(
-                "[AI3] Structure phase complete. Switching to monitoring mode "
-                "(using APIs, not structure providers)."
+            logger.warning(
+                "[AI3] Project structure not available. Monitoring may be limited."
             )
         # ...
 
-    async def _attempt_test_fixes(self, failing_tests: Dict[str, Any]):
-        logger.warning(
-            "[AI3] _attempt_test_fixes is not fully implemented and was skipped."
+    async def _attempt_test_fixes(
+        self, analysis_result: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Attempts to fix failing files identified by GitHub Actions analysis.
+        Returns a summary of fix attempts.
+        """
+        logger.info("[AI3] Attempting to fix identified test/linting errors...")
+        failed_files_from_analysis = analysis_result.get("failed_files", [])
+        error_summary = analysis_result.get(
+            "summary", "No specific error summary provided."
         )
-        return
-        # Old body commented out:
-        # prompt = (
-        #     f"Test File: {test_file}\\\\n"
-        #     f"Test File Content (first 1000 chars):\\\\n```\\\\n{test_content[:1000]}\\\\n```\\\\n\\n"
-        #     f"Code File: {code_file_rel}\\\\n"
-        #     f"Code File Content (first 3000 chars):\\\\n```\\\\n{code_content[:3000]}\\\\n```\\\\n\\n"
-        #     f"Test Result Details (first 1000 chars):\\\\n```\\\\n"
-        #     f"{json.dumps(test_result.get('details', 'No details')[:1000], indent=2)}\\\\n```\\\\n\\n"
-        #     "The tests in the test file are failing for the corresponding code file. "
-        #     "The error details are provided above. "
-        #     f"Please analyze the error and the code, then provide a fix for the CODE FILE ({code_file_rel}). "
-        #     f"Output ONLY the corrected code for {code_file_rel}, enclosed in triple backticks "
-        #     "(e.g., ```python ...corrected code... ``` or ```javascript ...corrected code... ```). "
-        #     "Do not include explanations or the test file code in your response. "
-        #     "If you cannot determine a fix, output an empty code block: ```<code>\\\\n```"
-        # )
-        # # ...
-        # code_fix_content_raw = await call_llm_provider(  # Generic call_llm_provider
-        #     provider_name_for_fix,
-        #     prompt,
-        #     session=self.client_session,  # type: ignore
-        #     config=self.config,  # Pass full config
-        #     # system_prompt="You are an expert debugging assistant. Provide only the corrected code.", # Pass as kwarg if provider supports
-        #     max_tokens=2000,  # Allow larger fixes
-        #     temperature=0.4,  # Slightly more creative for fixes
-        #     # Additional kwargs for specific provider if needed
-        #     model_kwargs={
-        #         "system_prompt": "You are an expert debugging assistant. Provide only the corrected code."
-        #     },  # Example
-        # )
-        # # ...
-        # # Regex to extract code, more permissive of language specifier
-        # match = re.search(
-        #     r"```(?:code|python|javascript|typescript|java|c\\+\\+|go|rust|php)?\\s*\\n(.*?)\\n```",
-        #     code_fix_content_raw,
-        #     re.DOTALL | re.IGNORECASE,
-        # )
-        # ...
 
+        fixed_files: List[str] = []
+        failed_to_fix_files: List[str] = []
 
-async def call_ollama(  # Specific Ollama call
-    session: aiohttp.ClientSession,
-    prompt: str,
-    endpoint: str,
-    model: str,
-    temperature: float = 0.7,
-    max_tokens: int = 2000,
-    timeout: int = 120,  # Increased default timeout for Ollama
-) -> Optional[str]:
-    if not endpoint or not model:
-        logger.error("[AI3-Ollama] Endpoint or model not configured for Ollama call.")
-        return None
+        if not failed_files_from_analysis:
+            logger.info("[AI3] No failed files provided for fix attempt.")
+            return {
+                "fixes_attempted": False,
+                "summary_message": "No failed files to process.",
+            }
 
-    logger.info(
-        "[AI3-Ollama] Calling Ollama API with model "
-        f"'{model}' at endpoint '{endpoint}'"
-    )
-    # logger.debug(
-    #     f"[AI3-Ollama] Prompt: {prompt[:100]}{'...' if len(prompt) > 100 else ''}"
-    # )
-    payload = {
-        "model": model,
-        "prompt": prompt,
-        "stream": False,  # Ensure non-streaming for single response
-        "options": {"temperature": temperature, "num_predict": max_tokens},
-    }
-    # logger.debug(f"[AI3-Ollama] Sending request with payload: {payload}")
-    start_time = time.time()
-    try:
-        async with session.post(
-            f"{endpoint}/api/generate", json=payload, timeout=timeout
-        ) as response:
-            elapsed_time = time.time() - start_time
-            response.raise_for_status()  # Raise HTTPError for bad responses (4xx or 5xx)
-            data = await response.json()
-            result = data.get("response", "").strip()
-            logger.info(
-                f"[AI3-Ollama] Response received in {elapsed_time:.2f}s: "
-                f"{result[:100]}{'...' if len(result) > 100 else ''}"
+        if not self.repo:
+            logger.error("[AI3] Repository not initialized. Cannot attempt fixes.")
+            return {
+                "fixes_attempted": False,
+                "summary_message": "Repository not initialized.",
+            }
+
+        provider_name_for_fix = self.ai_config.get("code_fix_provider", "codestral")
+        # Model for fix provider can be specified in config or defaults in _get_provider_instance
+
+        for rel_file_path in failed_files_from_analysis:
+            full_file_path = Path(self.repo_dir) / rel_file_path
+            logger.info(f"[AI3] Attempting to fix file: {full_file_path}")
+
+            if not full_file_path.exists() or not full_file_path.is_file():
+                logger.warning(
+                    f"[AI3] File not found or is not a file: {full_file_path}"
+                )
+                failed_to_fix_files.append(rel_file_path)
+                continue
+
+            try:
+                async with aiofiles.open(full_file_path, "r", encoding="utf-8") as f:
+                    original_content = await f.read()
+            except Exception as e:
+                logger.error(f"[AI3] Error reading file {full_file_path}: {e}")
+                failed_to_fix_files.append(rel_file_path)
+                continue
+
+            fix_prompt = (
+                f"You are an expert software developer. The following file has errors.\n"
+                f"File Path: {rel_file_path}\n"
+                f"Error(s) Reported:\n{error_summary}\n\n"
+                f"Original Code:\n```{Path(rel_file_path).suffix.lstrip('.') if Path(rel_file_path).suffix else 'text'}\n"
+                f"{original_content}\n```\n\n"
+                "Please provide the corrected code for the ENTIRE file. "
+                "Output ONLY the corrected code block for the file, enclosed in triple backticks "
+                "(e.g., ```language\n...code...\n```). "
+                "If you cannot determine a fix or the error is too complex, output an empty code block: "
+                "```\n```"
             )
-            return result
-    except asyncio.TimeoutError:
-        logger.error(
-            f"[AI3-Ollama] Timeout calling Ollama API after {timeout}s"
-        )  # Use param
-        return None
-    except aiohttp.ClientResponseError as e:  # Catch HTTP errors
-        logger.error(
-            f"[AI3-Ollama] HTTP error from Ollama API: {e.message} "
-            f"(Status code: {e.status})"
-        )
-        # logger.debug(f"Ollama error response: {await response.text() if response else 'N/A'}")
-        return None
-    except json.JSONDecodeError as e:  # Catch JSON parsing errors
-        logger.error(f"[AI3-Ollama] Invalid JSON response from Ollama API: {e}")
-        # logger.debug(f"Ollama non-JSON response: {await response.text() if response else 'N/A'}")
-        return None
-    except Exception as e:
-        logger.error(
-            f"[AI3-Ollama] Unexpected error calling Ollama: {e}",
-            exc_info=True,
-        )
-        return None
 
-
-async def call_llm_provider(  # Generic LLM provider call
-    provider_name: str,
-    prompt: str,
-    session: Optional[aiohttp.ClientSession] = None,
-    config: Optional[Dict] = None,
-    max_retries: int = 1,
-    service_name: str = "ai3",
-    **kwargs,
-) -> Optional[str]:
-    if not config:
-        logger.error("[AI3-LLM] Config not provided to call_llm_provider.")
-        return None
-    if not session:
-        logger.error("[AI3-LLM] Session not provided to call_llm_provider.")
-        return None
-
-    provider_instance: Optional[BaseProvider] = None
-    response_str: Optional[str] = None
-
-    # TODO: Implement or import apply_request_delay
-    # await apply_request_delay(service_name)
-
-    try:
-        provider_config_arg = config.get("providers", {}).get(provider_name)
-        if not provider_config_arg:
-            logger.error(
-                f"[AI3-LLM] No configuration found for provider: {provider_name}"
+            provider_instance = await _get_provider_instance(
+                self.provider_factory,
+                provider_name_for_fix,
+                self.config_data,
+                self.ai3_config,
+                self.client_session,
+                ui_selected_provider=None,  # Not UI driven
+                ui_selected_model=None,  # Not UI driven
             )
-            return None
 
-        provider_instance = ProviderFactory.create_provider(
-            provider_name, config_arg=provider_config_arg
+            if not provider_instance:
+                logger.error(
+                    f"[AI3] Failed to create provider instance {provider_name_for_fix} for code fixing."
+                )
+                failed_to_fix_files.append(rel_file_path)
+                continue
+
+            corrected_content_str: Optional[str] = None
+            try:
+                logger.info(
+                    f"[AI3] Calling LLM provider {provider_name_for_fix} to fix {rel_file_path}"
+                )
+                # Use temperature/max_tokens from provider config or sensible defaults
+                temperature = provider_instance.config.get("temperature", 0.3)
+                max_tokens = provider_instance.config.get("max_tokens", 3000)
+                model_to_use = provider_instance.config.get("model")
+
+                corrected_content_str = await provider_instance.generate(
+                    prompt=fix_prompt,
+                    model=model_to_use,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                )
+            except Exception as e:
+                logger.error(
+                    f"[AI3] Error calling LLM for file {rel_file_path}: {e}",
+                    exc_info=True,
+                )
+                failed_to_fix_files.append(rel_file_path)
+                continue
+            finally:
+                if provider_instance and hasattr(provider_instance, "close_session"):
+                    await provider_instance.close_session()
+
+            if corrected_content_str:
+                # Extract code from ```language ... ``` or ``` ... ```
+                match = re.search(
+                    r"```(?:[a-zA-Z0-9_\\.-]+)?\\s*([\\s\\S]*?)\\s*```",
+                    corrected_content_str,
+                )
+                if match:
+                    extracted_code = match.group(1).strip()
+                    if (
+                        extracted_code and extracted_code != original_content
+                    ):  # Ensure there's a change
+                        try:
+                            async with aiofiles.open(
+                                full_file_path, "w", encoding="utf-8"
+                            ) as f:
+                                await f.write(extracted_code)
+                            logger.info(f"[AI3] Applied fix to {rel_file_path}")
+                            _commit_changes(
+                                self.repo,
+                                [str(full_file_path)],
+                                f"AI3: Attempt to fix errors in {rel_file_path} based on test/lint results.",
+                            )
+                            fixed_files.append(rel_file_path)
+                            # Remove from failed_to_fix if it was added due to an earlier error in this loop for this file
+                            if rel_file_path in failed_to_fix_files:
+                                failed_to_fix_files.remove(rel_file_path)
+                        except Exception as e:
+                            logger.error(
+                                f"[AI3] Error writing or committing fix for {rel_file_path}: {e}"
+                            )
+                            if rel_file_path not in failed_to_fix_files:
+                                failed_to_fix_files.append(rel_file_path)
+                            # Revert to original content on write/commit error? For now, no.
+                    elif not extracted_code:
+                        logger.info(
+                            f"[AI3] LLM returned empty code block for {rel_file_path}. No fix applied."
+                        )
+                        if rel_file_path not in failed_to_fix_files:
+                            failed_to_fix_files.append(rel_file_path)
+                    else:  # extracted_code == original_content
+                        logger.info(
+                            f"[AI3] LLM returned original content for {rel_file_path}. No fix applied."
+                        )
+                        if rel_file_path not in failed_to_fix_files:
+                            failed_to_fix_files.append(rel_file_path)
+                else:
+                    logger.warning(
+                        f"[AI3] Could not extract code from LLM response for {rel_file_path}. Response: {corrected_content_str[:200]}..."
+                    )
+                    if rel_file_path not in failed_to_fix_files:
+                        failed_to_fix_files.append(rel_file_path)
+            else:
+                logger.warning(
+                    f"[AI3] LLM provider returned no response for {rel_file_path}."
+                )
+                if rel_file_path not in failed_to_fix_files:
+                    failed_to_fix_files.append(rel_file_path)
+
+        num_attempted = len(failed_files_from_analysis)
+        num_fixed = len(fixed_files)
+        num_failed = len(failed_to_fix_files)  # Should be num_attempted - num_fixed
+
+        summary_message = f"Attempted fixes for {num_attempted} files. Fixed: {num_fixed}, Failed to fix: {num_failed}."
+        logger.info(f"[AI3] Fix attempt summary: {summary_message}")
+
+        return {
+            "fixes_attempted": True,
+            "files_fixed": fixed_files,
+            "files_failed_fix": failed_to_fix_files,  # Use the explicitly tracked list
+            "summary_message": summary_message,
+            "all_files_fixed": num_attempted > 0 and num_fixed == num_attempted,
+            "some_files_fixed": num_fixed > 0 and num_fixed < num_attempted,
+        }
+
+    async def monitor_tests(self):
+        """Monitors test results and automatically fixes errors when possible."""
+        logger.info("[AI3] Starting test monitoring...")
+
+        while self.monitoring_active:
+            try:
+                # Check for test logs
+                test_logs_path = Path(LOGS_DIR) / "test_results.log"
+                if test_logs_path.exists():
+                    await self._analyze_and_fix_test_results(test_logs_path)
+
+                # Check pytest output files if they exist
+                pytest_results = list(Path(self.repo_dir).glob("**/pytest-results.xml"))
+                for result_file in pytest_results:
+                    await self._analyze_and_fix_pytest_results(result_file)
+
+                # Wait before checking again
+                await asyncio.sleep(60)  # Check every minute
+            except asyncio.CancelledError:
+                logger.info("[AI3] Test monitoring task cancelled")
+                break
+            except Exception as e:
+                logger.error(f"[AI3] Error in test monitoring: {e}", exc_info=True)
+                await asyncio.sleep(120)  # Longer sleep on error
+
+    async def _analyze_and_fix_test_results(self, log_file: Path):
+        """Analyzes test logs and fixes errors when possible."""
+        if log_file in self.processed_log_files:
+            last_size = self.processed_log_files[log_file]
+            if log_file.stat().st_size == last_size:
+                # No changes since last check
+                return
+
+        # Use a lock to prevent concurrent analysis of the same file
+        if log_file not in self.active_log_analyses:
+            self.active_log_analyses[log_file] = asyncio.Lock()
+
+        lock = self.active_log_analyses[log_file]
+        if lock.locked():
+            logger.debug(
+                f"[AI3] Analysis of {log_file.name} already in progress, skipping"
+            )
+            return
+
+        async with lock:
+            try:
+                current_size = log_file.stat().st_size
+
+                # Read the file
+                async with aiofiles.open(
+                    log_file, "r", encoding="utf-8", errors="ignore"
+                ) as f:
+                    log_content = await f.read()
+
+                # Analyze the log file
+                analysis_result = await self._analyze_test_logs_with_llm(
+                    log_content, log_file.name
+                )
+
+                if analysis_result.get("recommendation") in ["rework", "needs_fix"]:
+                    logger.info(
+                        f"[AI3] Test failures detected in {log_file.name}. Attempting fixes."
+                    )
+                    fix_summary = await self._attempt_test_fixes(analysis_result)
+
+                    # Update recommendation based on fix results
+                    if fix_summary.get("all_files_fixed", False):
+                        analysis_result["recommendation"] = "accept_after_fix"
+                        logger.info(
+                            f"[AI3] All test failures in {log_file.name} fixed successfully."
+                        )
+                    elif fix_summary.get("some_files_fixed", False):
+                        analysis_result["recommendation"] = "rework_after_partial_fix"
+                        logger.info(
+                            f"[AI3] Some test failures in {log_file.name} fixed."
+                        )
+
+                    # Update analysis with fix information
+                    analysis_result["fix_summary"] = fix_summary
+
+                # Send recommendation to MCP API
+                await self._send_test_recommendation_to_mcp(analysis_result)
+
+                # Mark as processed
+                self.processed_log_files[log_file] = current_size
+
+            except Exception as e:
+                logger.error(
+                    f"[AI3] Error analyzing test results from {log_file}: {e}",
+                    exc_info=True,
+                )
+
+    async def _analyze_test_logs_with_llm(
+        self, log_content: str, log_filename: str
+    ) -> Dict[str, Any]:
+        """Uses LLM to analyze test logs and identify issues."""
+        prompt = (
+            f"Test Log File: {log_filename}\n"
+            f"Log content (first 15k chars):\n```\n{log_content[:15000]}\n```\n\n"
+            "Analyze the test log content. Identify any test failures, their causes, "
+            "and which files need to be fixed. Determine whether the issues are simple "
+            "enough for automatic fixing, or if they need more complex rework.\n\n"
+            "Format your response as a JSON object with these fields:\n"
+            '{"recommendation": "accept"|"rework"|"needs_fix", '
+            '"failed_files": list[str], "summary": "str", '
+            '"failure_details": {file: error_details}, "confidence": float (0.0-1.0)}'
         )
 
-        # The actual generation call is missing in the original snippet.
-        # This is a placeholder to illustrate where it would go.
-        # For example:
-        # model_kwargs = kwargs.get("model_kwargs", {})
-        # if "system_prompt" in kwargs: # Example of passing specific args
-        #     model_kwargs["system_prompt"] = kwargs["system_prompt"]
-        #
-        # response_str = await provider_instance.generate_text(
-        #     prompt,
-        #     max_tokens=kwargs.get("max_tokens", 2000),
-        #     temperature=kwargs.get("temperature", 0.7),
-        #     **model_kwargs
-        # )
-        logger.warning(
-            f"[AI3-LLM] call_llm_provider for {provider_name} is a placeholder/stub "
-            "and did not actually call the LLM to generate text. Returning None."
-        )
-        # For now, it will return None as the call is not implemented.
+        default_response = {
+            "recommendation": "accept",
+            "failed_files": [],
+            "summary": "No issues detected in test logs.",
+            "failure_details": {},
+            "confidence": 0.0,
+        }
 
-    except Exception as e:
-        logger.error(
-            f"[AI3-LLM] Error calling LLM provider {provider_name}: {e}", exc_info=True
-        )
-        # In a real scenario, retry logic (using max_retries) would be here.
-    finally:
-        if provider_instance:
-            if hasattr(provider_instance, "close_session") and callable(
-                getattr(provider_instance, "close_session")
+        try:
+            provider_instance = await _get_provider_instance(
+                self.provider_factory,
+                self.code_fix_provider_name,
+                self.config_data,
+                self.ai3_config,
+                self.client_session,
+                ui_selected_provider=None,
+                ui_selected_model=None,
+            )
+
+            if not provider_instance:
+                logger.error(f"[AI3] Failed to create provider for test log analysis")
+                return default_response
+
+            analysis_json_str = await provider_instance.generate(
+                prompt=prompt,
+                model=provider_instance.config.get("model"),
+                temperature=0.2,
+                max_tokens=2000,
+            )
+
+            if not analysis_json_str:
+                logger.warning(
+                    f"[AI3] Empty response from provider for test log analysis"
+                )
+                return default_response
+
+            try:
+                analysis = json.loads(analysis_json_str)
+                logger.info(
+                    f"[AI3] Test analysis complete. Recommendation: {analysis.get('recommendation')}"
+                )
+                return analysis
+            except json.JSONDecodeError:
+                logger.warning(
+                    f"[AI3] Invalid JSON from provider: {analysis_json_str[:200]}..."
+                )
+                return default_response
+
+        except Exception as e:
+            logger.error(f"[AI3] Error analyzing test logs: {e}", exc_info=True)
+            return default_response
+
+    async def _analyze_and_fix_pytest_results(self, result_file: Path):
+        """Analyzes pytest XML results and fixes errors when possible."""
+        try:
+            # Similar implementation to _analyze_and_fix_test_results but for pytest XML format
+            logger.info(f"[AI3] Analyzing pytest results from {result_file}")
+
+            # Check if already processed
+            if result_file in self.processed_log_files:
+                last_mtime = self.processed_log_files[result_file]
+                current_mtime = result_file.stat().st_mtime
+                if current_mtime <= last_mtime:
+                    return
+
+            # Read XML content
+            async with aiofiles.open(result_file, "r", encoding="utf-8") as f:
+                xml_content = await f.read()
+
+            # Parse XML to find failures
+            failed_tests = []
+            failed_files = []
+
+            # Simple regex-based parsing as a fallback
+            for match in re.finditer(
+                r'file="([^"]+)".*?failures="([^"0]+)"', xml_content
             ):
-                await provider_instance.close_session()
-    return response_str
+                file_path, failure_count = match.groups()
+                if int(failure_count) > 0:
+                    failed_tests.append(file_path)
+                    # Extract source file from test file
+                    source_file = self._get_source_file_from_test(file_path)
+                    if source_file:
+                        failed_files.append(source_file)
+
+            if failed_files:
+                logger.info(
+                    f"[AI3] Found {len(failed_files)} failed files in pytest results: {failed_files}"
+                )
+
+                # Create analysis result
+                analysis_result = {
+                    "recommendation": "rework" if failed_files else "accept",
+                    "failed_files": failed_files,
+                    "summary": f"Found {len(failed_tests)} failing tests affecting {len(failed_files)} source files.",
+                    "confidence": 0.8,
+                }
+
+                # Attempt fixes
+                if failed_files:
+                    fix_summary = await self._attempt_test_fixes(analysis_result)
+
+                    # Update recommendation based on fix results
+                    if fix_summary.get("all_files_fixed", False):
+                        analysis_result["recommendation"] = "accept_after_fix"
+                    elif fix_summary.get("some_files_fixed", False):
+                        analysis_result["recommendation"] = "rework_after_partial_fix"
+
+                    # Update analysis with fix information
+                    analysis_result["fix_summary"] = fix_summary
+
+                # Send recommendation to MCP API
+                await self._send_test_recommendation_to_mcp(analysis_result)
+
+            # Mark as processed with current mtime
+            self.processed_log_files[result_file] = result_file.stat().st_mtime
+
+        except Exception as e:
+            logger.error(
+                f"[AI3] Error analyzing pytest results from {result_file}: {e}",
+                exc_info=True,
+            )
+
+    def _get_source_file_from_test(self, test_file_path: str) -> Optional[str]:
+        """Extracts source file path from test file path."""
+        test_path = Path(test_file_path)
+
+        # Common patterns for test files
+        if test_path.name.startswith("test_"):
+            # test_module.py -> module.py
+            source_name = test_path.name[5:]
+            source_dir = test_path.parent
+            if "tests" in source_dir.parts:
+                # Adjust source directory if needed
+                parts = list(source_dir.parts)
+                try:
+                    test_index = parts.index("tests")
+                    # Replace "tests" with "src" or remove it
+                    if test_index > 0:
+                        if (Path(self.repo_dir) / "src").exists():
+                            parts[test_index] = "src"
+                        else:
+                            parts.pop(test_index)
+                        source_dir = Path(*parts)
+                except ValueError:
+                    pass
+
+            # Check if source file exists
+            potential_source = source_dir / source_name
+            if potential_source.exists():
+                return str(potential_source.relative_to(self.repo_dir))
+
+        # If no match found
+        return None
 
 
-# ... (rest of the file with similar fixes for line lengths, etc.)
+class TestRecommendation(BaseModel):
+    """Model for test recommendations from AI3 analysis"""
+
+    recommendation: str = Field(
+        ...,
+        description="Recommendation action: 'accept', 'rework', 'accept_after_fix', 'rework_after_partial_fix'",
+    )
+    summary: str = Field(..., description="Summary of test results")
+    confidence: float = Field(default=0.0, description="Confidence level (0.0-1.0)")
+    failed_files: List[str] = Field(
+        default_factory=list, description="List of files that failed tests"
+    )
+    run_id: Optional[int] = Field(
+        None, description="GitHub Actions run ID if applicable"
+    )
+    run_url: Optional[str] = Field(None, description="URL to GitHub Actions run")
+    context: Dict[str, Any] = Field(
+        default_factory=dict, description="Additional context information"
+    )
+
+
 async def main(target: str, config_path: Optional[str] = None):
     logger.info(f"[AI3] Starting AI3 system with target: {target}")
-    ai3 = None
+    ai3_instance = None  # Renamed for clarity
+    client_session = None  # Define here for finally block
     try:
         # Initialize aiohttp ClientSession
         client_session = aiohttp.ClientSession()
 
         # Create AI3 instance
-        provider_factory = ProviderFactory()  # Initialize ProviderFactory
-        config_data = load_config(config_path)  # Load config data
-        ai3 = AI3(target, provider_factory, config_data, client_session)
+        provider_factory = ProviderFactory()
+        config_data = load_config(config_path)
+        if not target and "target" in config_data:  # Get target from config if not arg
+            target = config_data["target"]
+            logger.info(f"[AI3] Using target from config: {target[:100]}...")
+        if not target:  # If still no target
+            logger.critical("[AI3] Target project description is missing. Exiting.")
+            sys.exit(1)
 
-        # Set up the project structure
-        await ai3.setup_structure()
+        ai3_instance = AI3(target, provider_factory, config_data, client_session)
 
-        # Start monitoring tasks
-        await ai3.start_monitoring()
+        await ai3_instance.setup_structure()
+        await ai3_instance.start_monitoring()
+        await ai3_instance.main_loop()
 
-        # Keep the system running
-        await ai3.main_loop()
     except KeyboardInterrupt:
-        logger.info("[AI3] Received keyboard interrupt. Shutting down gracefully.")
+        logger.info("[AI3] Keyboard interrupt. Shutting down.")
     except Exception as e:
         logger.critical(f"[AI3] Unhandled exception in main: {e}", exc_info=True)
-        # TODO: Implement ai_comm
-        # if ai3 and ai3.client_session and not ai3.client_session.closed:
-        #     await ai3._report_status_to_mcp("critical_error_shutdown", {"error": str(e)}, ai3.mcp_api_url, ai3.client_session)
-
+        # TODO: Implement ai_comm for reporting critical shutdown
+        # if ai3_instance and ai3_instance.client_session and not ai3_instance.client_session.closed:
+        #     await _report_status_to_mcp("critical_error_shutdown", {"error": str(e)},
+        #                                 ai3_instance.mcp_api_url, ai3_instance.client_session)
     finally:
-        if ai3:
-            await ai3.stop_monitoring()
-            if ai3.client_session and not ai3.client_session.closed:
-                await ai3.client_session.close()
-                logger.info("[AI3] Closed aiohttp ClientSession.")
+        if ai3_instance:
+            await ai3_instance.stop_monitoring()  # Ensure monitoring stops
+        if client_session and not client_session.closed:
+            await client_session.close()
+            logger.info("[AI3] Closed aiohttp client session.")
         logger.info("[AI3] AI3 system shutdown complete.")
-        # sys.exit(1 if 'e' in locals() and isinstance(e, Exception) else 0) # Exit with error if exception occurred
+        # Exit with error if an exception occurred in the try block
+        # sys.exit(1 if 'e' in locals() and isinstance(e, Exception) else 0)
 
 
 if __name__ == "__main__":
@@ -2535,21 +2463,27 @@ if __name__ == "__main__":
     args = parser.parse_args()  # Changed from ArgumentParser() to parse_args()
 
     # Get target from config if not specified via argument
-    if args.target is None:
+    target_arg = args.target
+    if target_arg is None:
         try:
-            config = load_config(args.config)
-            args.target = config.get("target", "Create a modern web application")
-            logger.info(
-                f"[AI3] Target not specified, using from config: {args.target[:100]}..."
-            )
+            temp_config = load_config(args.config)  # Load temporary to get target
+            target_arg = temp_config.get("target")  # Default to None if not in config
+            if target_arg:
+                logger.info(
+                    f"[AI3] Target not by arg, using from config: {target_arg[:100]}..."
+                )
+            else:  # If still None after checking config
+                logger.error(
+                    "[AI3] Target description not provided via --target or in config. Please specify a target."
+                )
+                sys.exit(1)
         except Exception as e:
-            logger.error(f"[AI3] Error loading target from config: {e}")
-            logger.info("[AI3] Using default target")
-            args.target = "Create a modern web application"
+            logger.error(f"[AI3] Error loading config to get target: {e}")
+            sys.exit(1)
 
     try:
-        asyncio.run(main(args.target, args.config))
+        asyncio.run(main(target_arg, args.config))  # Pass the resolved target
         sys.exit(0)
-    except Exception:  # Catch all exceptions from main to ensure sys.exit(1)
-        # Logging of this exception should happen inside main() or AI3 methods
+    except Exception:  # Catch-all for asyncio.run or main() if it re-raises
+        # Logging should have happened inside main() or AI3 methods
         sys.exit(1)

@@ -342,6 +342,10 @@ class ProviderFactory:
         elif provider_type == "fallback":
             return FallbackProvider(effective_config)
         else:
+            # Check for dynamically loaded provider plugins
+            plugin_provider_class = get_provider_plugin(provider_type)
+            if plugin_provider_class:
+                return plugin_provider_class(effective_config)
             raise ValueError(f"Неподдерживаемый тип провайдера: {provider_type}")
 
 
@@ -2689,3 +2693,116 @@ class Report:
         self.error_message = error_message
         # Добавить статус на основе наличия ошибки
         self.status = "error" if error_message else "completed"
+
+
+import importlib
+import importlib.util
+import os
+import sys
+from typing import Dict, List, Optional, Type
+
+# Dictionary to store dynamically loaded provider classes
+_plugin_providers = {}
+_plugin_providers_loaded = False
+
+
+def discover_provider_plugins() -> Dict[str, Type[BaseProvider]]:
+    """Discovers and loads provider plugins from the plugins directory.
+
+    Looks for Python files in the 'plugins/providers' directory and attempts to
+    load any classes that inherit from BaseProvider.
+
+    Returns:
+        Dict mapping provider names to provider classes
+    """
+    global _plugin_providers, _plugin_providers_loaded
+
+    # If already loaded, return cached result
+    if _plugin_providers_loaded:
+        return _plugin_providers
+
+    # Define plugin directory
+    plugin_dir = os.path.join(os.path.dirname(__file__), "plugins", "providers")
+
+    # Create directory if it doesn't exist
+    os.makedirs(plugin_dir, exist_ok=True)
+
+    # Check if __init__.py exists in plugin directory
+    init_file = os.path.join(plugin_dir, "__init__.py")
+    if not os.path.exists(init_file):
+        with open(init_file, "w") as f:
+            f.write("# Provider plugins directory\n")
+
+    # Add plugin directory to system path if not already there
+    if plugin_dir not in sys.path:
+        sys.path.append(os.path.dirname(plugin_dir))
+
+    try:
+        # Find all Python files in the plugin directory
+        for filename in os.listdir(plugin_dir):
+            if filename.endswith(".py") and filename != "__init__.py":
+                module_name = f"plugins.providers.{filename[:-3]}"
+
+                try:
+                    # Import the module
+                    spec = importlib.util.find_spec(module_name)
+                    if spec is None:
+                        logger.warning(f"Could not find spec for module {module_name}")
+                        continue
+
+                    module = importlib.util.module_from_spec(spec)
+                    sys.modules[module_name] = module
+                    spec.loader.exec_module(module)
+
+                    # Find provider classes (inheriting from BaseProvider)
+                    for attr_name in dir(module):
+                        attr = getattr(module, attr_name)
+                        if (
+                            isinstance(attr, type)
+                            and issubclass(attr, BaseProvider)
+                            and attr is not BaseProvider
+                        ):
+
+                            # Get provider name from class
+                            provider_name = getattr(attr, "provider_type", None)
+                            if not provider_name:
+                                # Default to lowercase class name without 'Provider' suffix
+                                class_name = attr.__name__
+                                if class_name.endswith("Provider"):
+                                    provider_name = class_name[:-8].lower()
+                                else:
+                                    provider_name = class_name.lower()
+
+                            logger.info(
+                                f"Discovered provider plugin: {provider_name} ({attr.__name__})"
+                            )
+                            _plugin_providers[provider_name] = attr
+
+                except Exception as e:
+                    logger.error(f"Error loading provider plugin {filename}: {e}")
+
+        _plugin_providers_loaded = True
+        if _plugin_providers:
+            logger.info(
+                f"Loaded {len(_plugin_providers)} provider plugins: {', '.join(_plugin_providers.keys())}"
+            )
+        else:
+            logger.info("No provider plugins found")
+
+    except Exception as e:
+        logger.error(f"Error discovering provider plugins: {e}")
+
+    return _plugin_providers
+
+
+def get_provider_plugin(provider_type: str) -> Optional[Type[BaseProvider]]:
+    """Gets a provider plugin class by type name.
+
+    Args:
+        provider_type: The type name of the provider
+
+    Returns:
+        The provider class if found, None otherwise
+    """
+    plugins = discover_provider_plugins()
+    return plugins.get(provider_type)
