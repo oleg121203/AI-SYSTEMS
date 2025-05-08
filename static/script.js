@@ -3729,6 +3729,9 @@ function updateFallbackPositions(aiComponent) {
 
 // Save provider configuration
 async function saveProviderConfig() {
+  // Show loading indicator
+  showNotification("Saving provider configuration...", "info");
+
   // Create configuration object
   const config = {
     ai1: {
@@ -3760,6 +3763,8 @@ async function saveProviderConfig() {
     },
   };
 
+  console.log("Saving provider configuration:", config);
+
   try {
     // Send configuration to server
     const response = await fetch("/update_providers", {
@@ -3774,11 +3779,18 @@ async function saveProviderConfig() {
 
     if (result.status === "success") {
       showNotification("Provider configuration saved successfully", "success");
+
+      // Update the global currentConfig
+      currentConfig = config;
+
+      // Refresh the provider config UI
+      initProviderConfig();
     } else {
       showNotification(
-        `Error saving provider configuration: ${result.message}`,
+        `Error: ${result.message || "Failed to save configuration"}`,
         "error"
       );
+      console.error("Error saving provider configuration:", result);
     }
   } catch (error) {
     console.error("Error saving provider configuration:", error);

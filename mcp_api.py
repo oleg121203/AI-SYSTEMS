@@ -3368,58 +3368,93 @@ async def update_providers(data: dict):
             provider_data = data["ai1"]
             # Ensure 'ai_config' and 'ai1' keys exist
             config_data.setdefault("ai_config", {}).setdefault("ai1", {})
-            config_data["ai_config"]["ai1"]["provider"] = provider_data.get(
-                "provider"
-            )  # Keep it simple, frontend sends full new provider list
+
+            # First, ensure we have the provider set correctly
+            config_data["ai_config"]["ai1"]["provider"] = provider_data.get("provider")
+
+            # Update model
             config_data["ai_config"]["ai1"]["model"] = provider_data.get("model")
-            config_data["ai_config"]["ai1"]["providers"] = provider_data.get(
-                "providers", []
-            )
+
+            # Update providers list (this is what displays the selected provider in the UI)
+            config_data["ai_config"]["ai1"]["providers"] = [
+                provider_data.get("provider")
+            ]
+
+            # Add fallbacks if provided
+            if "fallbacks" in provider_data and provider_data["fallbacks"]:
+                config_data["ai_config"]["ai1"]["fallbacks"] = provider_data[
+                    "fallbacks"
+                ]
 
         # Update AI2 providers if included
         if "ai2" in data:
             ai2_data = data["ai2"]
-            config_data.setdefault("ai_config", {}).setdefault(
-                "ai2", {}
-            )  # Ensures config_data["ai_config"]["ai2"] exists
+            config_data.setdefault("ai_config", {}).setdefault("ai2", {})
 
-            # Corrected logic for AI2:
-            # Get the ai2_config dict from the global config
-            ai2_actual_config = config_data["ai_config"]["ai2"]
-            # Ensure the "providers" key (which holds the dictionary of roles to provider lists) exists
-            ai2_actual_config.setdefault("providers", {})
+            # Ensure the providers key exists
+            config_data["ai_config"]["ai2"].setdefault("providers", {})
 
             for role in ["executor", "tester", "documenter"]:
-                if role in ai2_data:  # ai2_data is data["ai2"] from the request
-                    role_specific_data_from_request = ai2_data[
-                        role
-                    ]  # This is data for a specific role, e.g., data.ai2.executor
+                if role in ai2_data:
+                    role_data = ai2_data[role]
 
-                    # Ensure the role key exists under "ai_config.ai2.providers" and is a list
-                    ai2_actual_config["providers"].setdefault(role, [])
-                    # Update the list of providers for that role
-                    ai2_actual_config["providers"][role] = (
-                        role_specific_data_from_request.get("providers", [])
+                    # Ensure role dict exists
+                    config_data["ai_config"]["ai2"].setdefault(role, {})
+
+                    # Set the provider
+                    config_data["ai_config"]["ai2"][role]["provider"] = role_data.get(
+                        "provider"
                     )
+
+                    # Update model
+                    config_data["ai_config"]["ai2"][role]["model"] = role_data.get(
+                        "model"
+                    )
+
+                    # Update providers list for this role (this is what displays the selected provider in the UI)
+                    config_data["ai_config"]["ai2"]["providers"].setdefault(role, [])
+                    config_data["ai_config"]["ai2"]["providers"][role] = [
+                        role_data.get("provider")
+                    ]
+
+                    # Add fallbacks if provided
+                    if "fallbacks" in role_data and role_data["fallbacks"]:
+                        config_data["ai_config"]["ai2"][role]["fallbacks"] = role_data[
+                            "fallbacks"
+                        ]
 
         # Update AI3 provider if included
         if "ai3" in data:
             provider_data = data["ai3"]
             config_data.setdefault("ai_config", {}).setdefault("ai3", {})
-            config_data["ai_config"]["ai3"]["providers"] = provider_data.get(
-                "providers", []
-            )
-            config_data["ai_config"]["ai3"]["model"] = provider_data.get("model")
-            # structure_providers for AI3 is separate
-            if "structure_providers" in provider_data:
-                config_data["ai_config"]["ai3"]["structure_providers"] = (
-                    provider_data.get("structure_providers", [])
-                )
 
-        # Save the updated configuration asynchronously
+            # First, ensure we have the provider set correctly
+            config_data["ai_config"]["ai3"]["provider"] = provider_data.get("provider")
+
+            # Update model
+            config_data["ai_config"]["ai3"]["model"] = provider_data.get("model")
+
+            # Update providers list (this is what displays the selected provider in the UI)
+            config_data["ai_config"]["ai3"]["providers"] = [
+                provider_data.get("provider")
+            ]
+
+            # Add fallbacks if provided
+            if "fallbacks" in provider_data and provider_data["fallbacks"]:
+                config_data["ai_config"]["ai3"]["fallbacks"] = provider_data[
+                    "fallbacks"
+                ]
+
+            # Handle structure_providers if included
+            if "structure_providers" in provider_data:
+                config_data["ai_config"]["ai3"]["structure_providers"] = provider_data[
+                    "structure_providers"
+                ]
+
+        # Save the updated configuration
         try:
-            async with aiofiles.open(CONFIG_FILE, "w", encoding="utf-8") as f:
-                await f.write(json.dumps(config_data, indent=4, ensure_ascii=False))
+            with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+                json.dump(config_data, f, indent=4, ensure_ascii=False)
             logger.info("Provider configuration updated successfully")
         except Exception as e:
             logger.error(f"Failed to save configuration: {e}", exc_info=True)

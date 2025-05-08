@@ -33,18 +33,37 @@ class AI1:
             log_message(
                 "[AI1] Warning: 'ai_config.ai1' section not found in configuration. Using defaults."
             )
-            ai1_config = {"providers": ["openai"]}  # Default provider list
+            ai1_config = {
+                "provider": "openai"
+            }  # Default provider if section is missing
 
-        # Read the list of providers
-        provider_names = ai1_config.get("providers", ["openai"])
-        if not provider_names:
+        # Read the provider and model for AI1
+        # Prioritize the 'provider' field, then the 'providers' list (first element), then a hardcoded default.
+        provider_name = ai1_config.get("provider")
+        if not provider_name:
             log_message(
-                "[AI1] Warning: No providers specified for AI1 in config. Defaulting to ['openai']"
+                "[AI1] 'provider' field not found in ai1_config. Checking 'providers' list."
             )
-            provider_names = ["openai"]
-        provider_name = provider_names[
-            0
-        ]  # Use the first provider from the list for AI1
+            provider_names_list = ai1_config.get("providers", [])
+            if (
+                provider_names_list
+                and isinstance(provider_names_list, list)
+                and len(provider_names_list) > 0
+            ):
+                provider_name = provider_names_list[0]
+                log_message(
+                    f"[AI1] Using provider '{provider_name}' from the 'providers' list."
+                )
+            else:
+                provider_name = "openai"  # Hardcoded default if neither is found
+                log_message(
+                    f"[AI1] Warning: Neither 'provider' field nor 'providers' list found or valid in ai1_config. Defaulting to provider: '{provider_name}'."
+                )
+        else:
+            log_message(
+                f"[AI1] Using provider '{provider_name}' from the 'provider' field."
+            )
+
         log_message(f"[AI1] Attempting to initialize provider: {provider_name}")
 
         # Load system prompt for LLM from configuration
@@ -59,15 +78,21 @@ class AI1:
         # Create LLM instance
         try:
             # Pass provider name and configuration for it
-            provider_config = config.get("providers", {}).get(provider_name, {})
+            # Provider_config gets the global settings for the determined provider_name
+            provider_config_global = config.get("providers", {}).get(provider_name, {})
+            # full_ai1_config merges global provider settings with AI1-specific settings.
+            # AI1-specific settings (like model, temperature from ai1_config) should take precedence.
             full_ai1_config = {
-                **provider_config,
-                **ai1_config,
-            }  # Merge general and specific configuration
+                **provider_config_global,  # Global settings for the provider type
+                **ai1_config,  # AI1 specific settings (includes model, temp, and the 'provider' field itself)
+            }
             self.llm: BaseProvider = ProviderFactory.create_provider(
-                provider_name, full_ai1_config
+                provider_name,
+                full_ai1_config,  # provider_name is the selected one, e.g., "ollama"
             )
-            log_message(f"[AI1] Provider '{provider_name}' created successfully.")
+            log_message(
+                f"[AI1] Provider '{provider_name}' created successfully for AI1."
+            )
         except ValueError as e:
             log_message(
                 f"[AI1] CRITICAL ERROR: Failed to create provider '{provider_name}'. {e}. LLM features disabled."
@@ -166,8 +191,23 @@ class AI1:
 
         log_message("[AI1] Attempting to fetch project structure...")
         start_time = asyncio.get_event_loop().time()
+
+        # First check if API is available
         session = await self._get_api_session()
+
+        # Check API health first
+        try:
+            async with session.get(f"{MCP_API_URL}/health", timeout=15) as response:
+                if response.status != 200:
+                    log_message(
+                        f"[AI1] MCP API health check failed with status {response.status}. Will retry..."
+                    )
+        except Exception as e:
+            log_message(f"[AI1] MCP API health check failed: {e}. Will retry...")
+
         api_url = f"{MCP_API_URL}/structure"
+        retries = 0
+        max_retries = 20  # More retries with shorter intervals
 
         while asyncio.get_event_loop().time() - start_time < timeout:
             try:
@@ -180,38 +220,93 @@ class AI1:
                             and structure_data["structure"]
                         ):
                             self.project_structure = structure_data["structure"]
-                            log_message("[AI1] Structure received successfully.")
-                            # Call process_structure HERE, before fetching idea.md
+                            self.structure_fetch_attempted = True
+                            log_message(
+                                f"[AI1] Structure received successfully with {len(structure_data['structure'])} root keys."
+                            )
+                            # Process structure to extract files
                             self.process_structure(self.project_structure)
-                            return True  # Structure fetched, proceed to fetch idea.md
+                            return True
                         else:
                             log_message(
-                                f"[AI1] Received invalid or empty structure data: {structure_data}. Retrying..."
+                                f"[AI1] Received invalid or empty structure data: {structure_data}. Retrying... (Attempt {retries+1}/{max_retries})"
                             )
                     elif response.status == 404:
                         log_message(
-                            "[AI1] Structure not yet available from API (404). Retrying..."
+                            f"[AI1] Structure not yet available from API (404). Retrying... (Attempt {retries+1}/{max_retries})"
                         )
                     else:
                         log_message(
-                            f"[AI1] Failed to fetch structure. Status: {response.status}, Body: {await response.text()}. Retrying..."
+                            f"[AI1] Failed to fetch structure. Status: {response.status}, Body: {await response.text()}. Retrying... (Attempt {retries+1}/{max_retries})"
                         )
 
+                retries += 1
+                if retries >= max_retries:
+                    log_message(
+                        "[AI1] Maximum retries reached. Will continue checking but at longer intervals."
+                    )
+                    await asyncio.sleep(15)  # Longer interval after max retries
+                else:
+                    await asyncio.sleep(5)  # Shorter interval during initial retries
+
             except asyncio.TimeoutError:
-                log_message("[AI1] Timeout while fetching structure. Retrying...")
+                log_message(
+                    f"[AI1] Timeout while fetching structure. Retrying... (Attempt {retries+1}/{max_retries})"
+                )
+                await asyncio.sleep(5)
             except aiohttp.ClientError as e:
-                log_message(f"[AI1] Error fetching structure: {str(e)}. Retrying...")
+                log_message(
+                    f"[AI1] Error fetching structure: {str(e)}. Retrying... (Attempt {retries+1}/{max_retries})"
+                )
+                await asyncio.sleep(5)
             except Exception as e:
                 log_message(
-                    f"[AI1] Unexpected error fetching structure: {str(e)}. Retrying..."
+                    f"[AI1] Unexpected error fetching structure: {str(e)}. Retrying... (Attempt {retries+1}/{max_retries})"
                 )
+                await asyncio.sleep(5)
 
-            await asyncio.sleep(5)
-
+        self.structure_fetch_attempted = True
         log_message(
-            f"[AI1] Failed to obtain project structure after {timeout} seconds."
+            f"[AI1] Failed to obtain project structure after {timeout} seconds. Will create a base structure."
         )
-        return False
+
+        # If we can't get the structure, create a minimal one to allow processing to continue
+        if not self.project_structure:
+            log_message(
+                "[AI1] Creating minimal fallback structure to continue processing"
+            )
+            self.project_structure = {
+                "idea.md": "# Project Overview\n\nThis file will be updated with project details.",
+                "README.md": "# Project\n\nThis project is being generated by AI-SYSTEMS.",
+                "src/": {"index.js": "// Main entry point"},
+                "tests/": {"test_index.js": "// Tests for main functionality"},
+            }
+            self.process_structure(self.project_structure)
+
+            # Also notify API about this fallback structure if possible
+            try:
+                fallback_payload = {
+                    "structure": self.project_structure,
+                    "source": "ai1_fallback",
+                    "target": self.target,
+                }
+                async with session.post(
+                    f"{MCP_API_URL}/fallback_structure",
+                    json=fallback_payload,
+                    timeout=30,
+                ) as response:
+                    if response.status == 200:
+                        log_message(
+                            "[AI1] Fallback structure successfully reported to API"
+                        )
+                    else:
+                        log_message(
+                            f"[AI1] Error reporting fallback structure: {response.status}"
+                        )
+            except Exception as e:
+                log_message(f"[AI1] Failed to report fallback structure: {e}")
+
+        return self.project_structure is not None
 
     async def _fetch_and_process_idea_md(self):
         """Fetches the initial content of idea.md."""

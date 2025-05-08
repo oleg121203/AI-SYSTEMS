@@ -58,23 +58,45 @@
     ],
     "ai_config": {
         "ai1": {
-            "providers": [],
-            "model": "qwen2.5:latest",
+            "providers": [
+                "ollama"
+            ],
+            "model": "qwen3:latest",
             "max_tokens": 2048,
             "temperature": 0.7,
             "provider": "ollama"
         },
         "ai2": {
             "providers": {
-                "executor": [],
-                "tester": [],
-                "documenter": []
+                "executor": [
+                    "ollama"
+                ],
+                "tester": [
+                    "ollama"
+                ],
+                "documenter": [
+                    "ollama"
+                ]
             },
             "max_tokens": 2048,
-            "temperature": 0.4
+            "temperature": 0.4,
+            "executor": {
+                "provider": "ollama",
+                "model": "qwen3:latest"
+            },
+            "tester": {
+                "provider": "ollama",
+                "model": "qwen3:latest"
+            },
+            "documenter": {
+                "provider": "ollama",
+                "model": "qwen3:latest"
+            }
         },
         "ai3": {
-            "providers": [],
+            "providers": [
+                "ollama1"
+            ],
             "structure_providers": [
                 "structure_fallback",
                 "codestral2",
@@ -82,7 +104,8 @@
             ],
             "model": "llama3.2:latest",
             "max_tokens": 2048,
-            "temperature": 0.7
+            "temperature": 0.7,
+            "provider": "ollama1"
         }
     },
     "providers": {

@@ -1,11 +1,13 @@
 import argparse
+import ast  # Added import
 import asyncio
+import io  # Added import
 import json
 import logging
+import math  # Added import
 import os
 import re  # Import re
-import time
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional  # Removed unused import: Union
 
 import aiohttp
 import git
@@ -14,7 +16,7 @@ import git
 from config import load_config
 
 # Fix import statement - use ProviderFactory.create_provider instead of separate create_provider
-from providers import BaseProvider, ProviderFactory
+from providers import BaseProvider, ProviderFactory, get_available_providers  # MODIFIED
 
 # Fix import by importing apply_request_delay from utils module directly
 from utils import apply_request_delay  # Import apply_request_delay correctly
@@ -26,9 +28,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger("AI2")
 
-# Load configuration once
-config = load_config()
-MCP_API_URL = config.get("mcp_api", "http://localhost:7860")
+# Load configuration once using the config module's function
+# This will be the default config if the script is imported.
+# If run directly, __main__ will reload it with CLI arg.
+config_data = load_config()  # Renamed to avoid conflict
+MCP_API_URL = config_data.get("mcp_api", "http://localhost:7860")
+
+SUPPORTED_ROLES = ["executor", "tester", "documenter"]
 
 
 class AI2:
@@ -37,18 +43,25 @@ class AI2:
     Uses different providers for different tasks and supports fallback mechanism.
     """
 
-    def __init__(self, role: str):
+    def __init__(self, role: str, config_path: Optional[str] = None):  # Add config_path
         """
         Initialize AI2 module.
 
         Args:
             role: Role of this worker ('executor', 'tester', 'documenter')
+            config_path: Optional path to the configuration file.
         """
         self.role = role
-        global logger
+        global logger  # Use the module-level logger, but specify its name
         logger = logging.getLogger(f"AI2-{self.role.upper()}")
 
-        self.config = config
+        # If config_path is provided (e.g., when run as __main__), load that specific config
+        # Otherwise, use the globally loaded config_data (e.g., when imported)
+        if config_path:
+            self.config = load_config(config_path)
+        else:
+            self.config = config_data  # Use the globally loaded config
+
         ai_config_base = self.config.get("ai_config", {})
         self.ai_config = ai_config_base.get("ai2", {})
         if not self.ai_config:
@@ -100,65 +113,118 @@ class AI2:
         self.api_session = None
 
     async def _get_api_session(self) -> aiohttp.ClientSession:
-        """Gets or creates an aiohttp session."""
+        """Get or create an aiohttp.ClientSession."""
         if self.api_session is None or self.api_session.closed:
+            # You might want to configure the session further, e.g., with headers or timeouts
             self.api_session = aiohttp.ClientSession()
+            logger.debug("Created new aiohttp.ClientSession")
         return self.api_session
 
-    async def close_session(self):
-        """Closes the aiohttp session."""
-        if self.api_session or not self.api_session.closed:
+    async def close_api_session(self):
+        """Close the aiohttp.ClientSession if it exists and is open."""
+        if self.api_session and not self.api_session.closed:
             await self.api_session.close()
-            logger.info("API session closed.")
+            logger.debug("Closed aiohttp.ClientSession")
 
     def _setup_providers_config(self) -> Dict[str, Dict[str, Any]]:
         """
         Sets up provider configuration for each role from the overall configuration.
-        Uses self.role to determine the required provider.
+        Prioritizes:
+        1. Specific provider from role settings (e.g., config.ai_config.ai2.executor.provider)
+        2. First provider from the role's list in config.ai_config.ai2.providers.<role>
+        3. First provider from config.ai_config.ai2.fallback_providers
+        Configuration for the provider is merged from global, general AI2, and role-specific settings.
 
         Returns:
             Dict[str, Dict[str, Any]]: Dictionary with configuration for the current role
         """
-        # Use the first provider from the list of configured providers
-        provider_name = self.providers[0] if self.providers else None
+        provider_name: Optional[str] = None
+        # self.ai_config is config.get("ai_config", {}).get("ai2", {})
+        # self.providers is self.ai_config.get("providers", {}).get(self.role, [])
+        # self.fallback_providers is self.ai_config.get("fallback_providers", ["ollama"])
 
-        # If no provider found for the role, use fallback
-        if not provider_name:
+        role_settings = self.ai_config.get(
+            self.role, {}
+        )  # e.g., config.ai_config.ai2.executor
+
+        # Priority 1: Specific provider from role settings (e.g., ai_config.ai2.executor.provider)
+        if (
+            "provider" in role_settings
+            and isinstance(role_settings["provider"], str)
+            and role_settings["provider"]
+        ):
+            provider_name = role_settings["provider"]
+            logger.info(
+                f"Using provider '{provider_name}' from specific config for role '{self.role}'."
+            )
+
+        # Priority 2: First provider from the role's list in ai_config.ai2.providers.<role>
+        if not provider_name and self.providers:  # self.providers is from __init__
+            provider_name = self.providers[0]
+            logger.info(
+                f"Using provider '{provider_name}' from role's provider list for role '{self.role}'."
+            )
+
+        # Priority 3: First provider from ai_config.ai2.fallback_providers
+        if not provider_name and self.fallback_providers:
             provider_name = self.fallback_providers[0]
             logger.warning(
-                f"No provider found for role '{self.role}'. Using fallback: {provider_name}"
+                f"No primary provider found for role '{self.role}'. Using fallback provider: '{provider_name}'."
             )
 
-        # Get provider configuration
-        providers_list = self.config.get("providers", {})
-        if provider_name in providers_list:
-            common_config = providers_list[provider_name]
-        else:
+        # Last resort if no provider could be determined
+        if not provider_name:
+            provider_name = "openai"  # Hardcoded default as a very last resort
+            logger.error(
+                f"CRITICAL: No provider could be determined for role '{self.role}' through any configuration. "
+                f"Defaulting to '{provider_name}'. This may not be intended."
+            )
+
+        # Assemble the configuration for this chosen provider_name
+        # 1. Global settings for this provider type (e.g., API keys from config.providers.<provider_name>)
+        global_provider_config = self.config.get("providers", {}).get(provider_name, {})
+        if (
+            not global_provider_config
+            and provider_name not in get_available_providers()  # MODIFIED
+        ):
             logger.warning(
-                f"Provider '{provider_name}' not found in the list of providers. Using empty configuration."
+                f"No global configuration found for provider '{provider_name}' in 'config.providers'. This provider might rely on environment variables or internal defaults."
             )
-            common_config = {}
 
-        # Assemble the final configuration
-        role_config = {
-            "name": provider_name,
-            **common_config,
-            **{
-                k: v
-                for k, v in self.ai_config.items()
-                if k
-                not in [
-                    "executor",
-                    "tester",
-                    "documenter",
-                    "provider",
-                    "fallback_providers",
-                ]
-            },
+        # 2. General AI2 settings (e.g., default temperature, max_tokens for AI2 from config.ai_config.ai2)
+        #    Exclude role-specific keys, the main 'providers' list, 'fallback_providers', and the general 'provider' key for ai2 itself.
+        ai2_general_settings = {
+            k: v
+            for k, v in self.ai_config.items()
+            if k
+            not in [
+                "executor",
+                "tester",
+                "documenter",
+                "providers",
+                "fallback_providers",
+                "provider",
+            ]
         }
 
-        logger.info(f"Provider for role '{self.role}' configured: {provider_name}")
-        return {self.role: role_config}
+        # 3. Role-specific settings (e.g., model, temp from config.ai_config.ai2.executor)
+        #    role_settings is already fetched: self.ai_config.get(self.role, {})
+        #    These should override ai2_general_settings and global_provider_config.
+
+        final_config_for_role = {
+            **global_provider_config,  # Lowest precedence
+            **ai2_general_settings,  # Middle precedence
+            **role_settings,  # Highest precedence (includes role_settings.provider, model, temp etc.)
+            "name": provider_name,  # Ensure 'name' is the chosen provider_name for ProviderFactory
+        }
+        # If role_settings contained a 'provider' key, it's fine, 'name' is the canonical one for the factory.
+
+        logger.info(
+            f"Provider for role '{self.role}' finally configured as: {provider_name}."
+        )
+        logger.debug(f"Final config for role '{self.role}': {final_config_for_role}")
+
+        return {self.role: final_config_for_role}
 
     async def _get_provider_instance(self) -> BaseProvider:
         """Gets or creates an instance of the provider for the current worker role."""
@@ -195,37 +261,50 @@ class AI2:
         is_markdown: bool = False,  # Add flag for markdown output
     ) -> str:
         """Attempts to generate a response using the primary role provider and tries all available providers in a loop."""
-        provider_config = self.providers_config.get(self.role, {})
-        provider_name = provider_config.get("name", "N/A")
-        primary_provider = None
+        # Primary provider configuration is already determined by _setup_providers_config and stored in self.providers_config
+        primary_provider_role_config = self.providers_config.get(self.role, {})
+        primary_provider_name = primary_provider_role_config.get("name")
 
-        # Gather the full list of providers, starting with the primary and adding all fallback providers
-        all_providers = [provider_name]
-        # Add fallbacks that are not in the list
-        for fallback in self.fallback_providers:
-            if fallback not in all_providers:
-                all_providers.append(fallback)
+        if not primary_provider_name:
+            logger.error(
+                f"CRITICAL: No primary provider name configured for role {self.role}. Cannot generate."
+            )
+            return f"Generation error: No primary provider configured for role {self.role}."
+
+        # Gather the full list of providers to try: primary first, then fallbacks.
+        providers_to_try = [primary_provider_name]
+        for fallback_name in self.fallback_providers:
+            if fallback_name not in providers_to_try:
+                providers_to_try.append(fallback_name)
+
+        if not providers_to_try:  # Should not happen if primary_provider_name is set
+            logger.error(
+                f"CRITICAL: No providers (primary or fallback) to try for role {self.role}."
+            )
+            return f"Generation error: No providers available for role {self.role}."
 
         logger.info(
-            f"Attempting generation using providers (in order): {', '.join(all_providers)}"
+            f"Attempting generation for role '{self.role}' using providers (in order): {', '.join(providers_to_try)}"
         )
 
         all_errors = []
         # Iterate through all providers in sequence
-        for provider_idx, current_provider_name in enumerate(all_providers):
-            current_provider = None
+        for idx, current_provider_name in enumerate(providers_to_try):
+            current_provider_instance = None
             try:
                 logger.info(
-                    f"Attempting generation with provider [{provider_idx+1}/{len(all_providers)}] '{current_provider_name}'."
+                    f"Attempting generation with provider [{idx+1}/{len(providers_to_try)}] '{current_provider_name}' for role '{self.role}'."
                 )
 
-                # Get config for the current provider
-                current_config_base = self.config.get("providers", {}).get(
-                    current_provider_name, {}
-                )
-                current_config = {
-                    **current_config_base,
-                    **{
+                # Determine config for the current_provider_name
+                config_for_current_provider = {}
+                if current_provider_name == primary_provider_name:
+                    config_for_current_provider = primary_provider_role_config
+                else:  # It's a fallback provider
+                    global_fallback_config = self.config.get("providers", {}).get(
+                        current_provider_name, {}
+                    )
+                    ai2_general_settings = {
                         k: v
                         for k, v in self.ai_config.items()
                         if k
@@ -233,31 +312,45 @@ class AI2:
                             "executor",
                             "tester",
                             "documenter",
-                            "provider",
+                            "providers",
                             "fallback_providers",
+                            "provider",
                         ]
-                    },
-                }
+                    }
+                    # Fallbacks use global provider settings + general AI2 settings.
+                    # Role-specific settings from ai_config.ai2.<role> are not applied to fallbacks unless the fallback IS the role's provider.
+                    config_for_current_provider = {
+                        **global_fallback_config,
+                        **ai2_general_settings,
+                        "name": current_provider_name,  # Ensure name is set
+                    }
 
-                # Create an instance of the provider
-                current_provider = ProviderFactory.create_provider(
-                    current_provider_name, current_config
+                # Override model, max_tokens, temperature if explicitly passed to _generate_with_fallback
+                # These explicit parameters take highest precedence for the generation call.
+                final_model = model or config_for_current_provider.get("model")
+                final_max_tokens = max_tokens or config_for_current_provider.get(
+                    "max_tokens"
+                )
+                final_temperature = temperature or config_for_current_provider.get(
+                    "temperature"
                 )
 
-                # Add delay to avoid overloading the API (only for non-primary providers)
-                if provider_idx > 0:
-                    # FIXED: Use combined identifier instead of passing two arguments
-                    await apply_request_delay(f"ai2_{self.role}")
+                # Create an instance of the provider
+                current_provider_instance = ProviderFactory.create_provider(
+                    current_provider_name, config_arg=config_for_current_provider
+                )
+
+                # Add delay to avoid overloading the API (only for non-primary providers if primary was different)
+                if idx > 0:  # Simple delay for any retry/fallback attempt
+                    await apply_request_delay(f"ai2_{self.role}_fallback")
 
                 # Generate with the current provider
-                result = await current_provider.generate(
+                result = await current_provider_instance.generate(
                     prompt=user_prompt,
                     system_prompt=system_prompt,
-                    model=model
-                    or current_config.get("model")
-                    or self.ai_config.get("model"),
-                    max_tokens=max_tokens or self.ai_config.get("max_tokens"),
-                    temperature=temperature or self.ai_config.get("temperature"),
+                    model=final_model,
+                    max_tokens=final_max_tokens,
+                    temperature=final_temperature,
                 )
 
                 # Check for generation error
@@ -277,11 +370,11 @@ class AI2:
 
                 # Close session after successful use
                 if (
-                    current_provider
-                    and hasattr(current_provider, "close_session")
-                    and callable(current_provider.close_session)
+                    current_provider_instance
+                    and hasattr(current_provider_instance, "close_session")
+                    and callable(current_provider_instance.close_session)
                 ):
-                    await current_provider.close_session()
+                    await current_provider_instance.close_session()
 
                 # Return result from successful provider
                 logger.info(
@@ -300,11 +393,11 @@ class AI2:
 
                 # Close provider session on error
                 if (
-                    current_provider
-                    and hasattr(current_provider, "close_session")
-                    and callable(current_provider.close_session)
+                    current_provider_instance
+                    and hasattr(current_provider_instance, "close_session")
+                    and callable(current_provider_instance.close_session)
                 ):
-                    await current_provider.close_session()
+                    await current_provider_instance.close_session()
 
         # If all providers failed, return information about all errors
         error_msg = (
@@ -1105,9 +1198,29 @@ class AI2:
         """Commits generated tests to the Git repository."""
         try:
             # Convert file path to test path
-            test_filename = filename.replace(".py", "_test.py")
-            if not test_filename.startswith("tests/"):
-                test_filename = f"tests/{test_filename}"
+            # Ensure test_filename is constructed correctly based on the actual filename
+            # For example, if filename is "src/module/file.py", test_filename should be "tests/src/module/file_test.py"
+
+            # Determine the base name and extension of the original file
+            base_name, ext = os.path.splitext(filename)
+
+            # Construct the test filename based on the original file's extension and naming conventions
+            if ext == ".py":
+                test_filename_leaf = f"{os.path.basename(base_name)}_test.py"
+            elif ext == ".js":
+                test_filename_leaf = f"{os.path.basename(base_name)}.test.js"
+            elif ext == ".ts":
+                test_filename_leaf = f"{os.path.basename(base_name)}.spec.ts"
+            # Add more conditions for other file types as needed
+            else:
+                test_filename_leaf = f"{os.path.basename(base_name)}_test{ext}"  # Fallback for other types
+
+            # Preserve the directory structure of the original file within the 'tests' directory
+            original_dir = os.path.dirname(filename)
+            if original_dir:
+                test_filename = os.path.join("tests", original_dir, test_filename_leaf)
+            else:
+                test_filename = os.path.join("tests", test_filename_leaf)
 
             repo_path = os.path.join(os.getcwd(), "repo")
             test_filepath = os.path.join(repo_path, test_filename)
@@ -1188,7 +1301,7 @@ class AI2:
                         )
 
         if not subtask_id:
-            logger.error(f"Invalid task information: Missing ID in task.")
+            logger.error("Invalid task information: Missing ID in task.")
             return {
                 "type": "status_update",
                 "subtask_id": "unknown",
@@ -1286,7 +1399,7 @@ class AI2:
                         logger.error(f"Missing content for idea.md: {task_info}")
                     else:
                         # Handle idea.md documentation specifically
-                        logger.info(f"[AI2-DOCUMENTER] Generating/refining idea.md")
+                        logger.info("[AI2-DOCUMENTER] Generating/refining idea.md")
                         generated_content = await self._generate_idea_md(
                             code_content, ""
                         )
@@ -1575,7 +1688,7 @@ class AI2:
                     )
                 await asyncio.sleep(1)
             else:
-                sleep_time = config.get("ai2_idle_sleep", 5)
+                sleep_time = config_data.get("ai2_idle_sleep", 5)
                 logger.debug(f"No tasks for {self.role}. Waiting {sleep_time} sec.")
                 await asyncio.sleep(sleep_time)
 
@@ -1624,7 +1737,7 @@ Create tests for the HTML file using Jest and Testing Library or Cypress.
 Please verify the following aspects:
 1. HTML structure validity
 2. Presence of key elements (headers, forms, buttons, etc.)
-3. Accessibility attributes correctness 
+3. Accessibility attributes correctness
 4. Responsiveness (if there are styles for different screen sizes)
 
 HTML file ({filename}):
@@ -2059,7 +2172,6 @@ Use the testing package and, if needed, gomock or testify.
         log_message(f"[AI2-TESTER] Generating tests for Rust file: {filename}")
 
         # In Rust, tests are usually written in the same file in a tests module
-        test_filename = filename
 
         # Form prompt for test generator
         prompt = f"""
@@ -2702,39 +2814,60 @@ if __name__ == "__main__":
         type=str,
         required=True,
         choices=["executor", "tester", "documenter"],
-        help="Role of this AI2 worker",
+        help="Role of the AI2 worker",
+    )
+    parser.add_argument(
+        "--config", type=str, default="config.json", help="Path to configuration file"
     )
     args = parser.parse_args()
 
-    if args.role == "tester":
-        # Configuration
-        ai_config = config.get("ai_config", {}).get("ai2", {})
-        providers = ai_config.get("providers", {}).get(
-            "tester", ["codestral", "groq", "gemini"]
-        )
-        logger.info(
-            f"AI2-TESTER - Provider for role 'tester' configured: {providers[0]}"
-        )
-        logger.info(
-            f"AI2-TESTER - Configured providers for role 'tester': {', '.join(providers)}"
-        )
-        logger.info(f"AI2 worker (tester) started.")
+    # Initialize configuration by calling the load_config function from the config module
+    # This ensures that the config is loaded specifically for this execution context
+    # and will be passed to the AI2 instance.
+    loaded_config = load_config(args.config)
 
-        # Run tester
-        asyncio.run(run_ai2_tester(providers))
-    else:
-        # Run standard AI2 worker for executor or documenter
-        ai2_worker = AI2(role=args.role)
-        try:
-            asyncio.run(ai2_worker.run_worker())
-        except KeyboardInterrupt:
-            logger.info(f"AI2 worker ({args.role}) stopped manually.")
-        except Exception as e:
-            logger.exception(
-                f"Critical error in main loop of AI2 worker ({args.role}): {e}"
-            )
-        finally:
-            asyncio.run(ai2_worker.close_session())
+    # Configure logging
+    # Use the loaded_config to get logging level
+    log_level_str = (
+        loaded_config.get("logging", {})
+        .get("levels", {})
+        .get("ai2", {})
+        .get(args.role, "INFO")
+        .upper()
+    )
+    log_level = getattr(logging, log_level_str, logging.INFO)
+
+    # Setup basicConfig for the root logger if not already configured.
+    # Specific loggers (like AI2-EXECUTOR) will inherit this if not overridden.
+    logging.basicConfig(
+        level=log_level, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    )
+
+    # The AI2 class's __init__ will set its own logger, e.g., AI2-EXECUTOR
+    # We pass args.config so AI2 loads the correct config file.
+    ai2_worker = AI2(role=args.role, config_path=args.config)
+
+    try:
+        # Use ai2_worker.role as self is not defined in this context
+        logger.info(f"AI2 worker ({ai2_worker.role}) starting main loop.")
+        # Run the async worker function using asyncio.run()
+        asyncio.run(ai2_worker.run_worker())
+    except KeyboardInterrupt:
+        # Use ai2_worker.role
+        logger.info(
+            f"AI2 worker ({ai2_worker.role}) received KeyboardInterrupt. Shutting down."
+        )
+    except Exception as e:
+        # Use ai2_worker.role
+        logger.exception(f"AI2 worker ({ai2_worker.role}) crashed: {e}")
+    finally:
+        # Use ai2_worker.role
+        logger.info(
+            f"AI2 worker ({ai2_worker.role}) shutting down. Closing API session."
+        )
+        # close_api_session is async, so it needs to be run in an event loop.
+        # asyncio.run() can be called here to create a new loop for this cleanup task.
+        asyncio.run(ai2_worker.close_api_session())
 
 
 class CodeValidator:

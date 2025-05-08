@@ -226,240 +226,297 @@ async def generate_structure_llm_prompt(target_project_description: str) -> str:
     """
 
 
+async def generate_structure_refinement_prompt(
+    target_desc: str, current_structure: Dict[str, Any]
+) -> str:
+    """Generates the prompt for LLM to refine a project structure."""
+    return f"""
+    Project Target: {target_desc}
+    Current Project Structure (JSON):
+    ```json
+    {json.dumps(current_structure, indent=2)}
+    ```
+
+    Review the current project structure above. Refine it to better match the project target.
+    Consider adding missing files, removing unnecessary ones, or restructuring for clarity and best practices.
+    Output ONLY the refined JSON structure, enclosed in triple backticks (```json ... ```).
+    """
+
+
+async def generate_idea_md_llm_prompt(target_project_description: str) -> str:
+    """Generates the prompt for LLM to create an idea.md file."""
+    return f"""
+    Project Target: {target_project_description}
+
+    Based on the project target, generate a comprehensive `idea.md` document.
+    This document should outline the project's vision, key features, technical stack considerations,
+    potential challenges, and a high-level roadmap or development strategy.
+    The tone should be suitable for a technical lead or project manager.
+    Format the output as a Markdown document.
+
+    Output ONLY the Markdown content for `idea.md`.
+    """
+
+
 async def generate_structure(
-    target: str, config: Dict[str, Any], session: aiohttp.ClientSession
-) -> Optional[Dict[str, Any]]:
-    # ... (function body as before, but apply line wrapping and other fixes)
-    ai3_config = config.get("ai_config", {}).get("ai3", {})
-    structure_providers = ai3_config.get(
-        "structure_providers", ["codestral2"]
-    )  # Default provider
-    if not structure_providers:  # Ensure there's at least one
-        structure_providers = ["codestral2"]
-        logger.warning(
-            "[AI3] 'structure_providers' is empty in ai3 config. "
-            "Using default ['codestral2']."
+    target_desc: str,
+    provider_factory: ProviderFactory,
+    config_data: Dict[str, Any],
+    client_session: aiohttp.ClientSession,
+    selected_provider_name: Optional[str] = None,  # For testing a specific provider
+) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """
+    Generates the project structure using a sequence of LLM calls.
+    Cycle 1: Initial generation.
+    Cycle 2: Refinement of the generated structure.
+    Prioritizes providers from ai_config.ai3.structure_provider, then ai_config.ai3.structure_providers.
+    """
+    logger.info(
+        f"[AI3] Starting project structure generation for: {target_desc[:100]}..."
+    )
+    ai3_config = config_data.get("ai_config", {}).get("ai3", {})
+
+    # Determine providers for Cycle 1 (Initial Generation)
+    providers_to_try_cycle1: List[str] = []
+    specific_structure_provider = ai3_config.get("structure_provider")
+
+    if selected_provider_name:  # If a provider is passed for testing
+        providers_to_try_cycle1 = [selected_provider_name]
+        logger.info(
+            f"[AI3] Using specific provider for Cycle 1 (override): {selected_provider_name}"
+        )
+    elif specific_structure_provider and isinstance(specific_structure_provider, str):
+        providers_to_try_cycle1.append(specific_structure_provider)
+        logger.info(
+            f"[AI3] Cycle 1: Prioritizing specific structure_provider: {specific_structure_provider}"
         )
 
-    fallback_structure = {
-        "retro_nes_flash_game/": {
-            "README.md": (
-                "# Retro NES-Style Flash Game\\n\\nA simple yet addictive flash game "
-                "inspired by classic NES games."
-            ),
-            "backend/": {
-                "main.py": "# Main Python backend (e.g., Flask or FastAPI)",
-                "requirements.txt": "flask",
-            },
-            "frontend/": {
-                "index.html": "<!-- Main HTML file -->",
-                "js/": {"game.js": "// Main game logic"},
-                "css/": {"styles.css": "/* Basic styles */"},
-            },
-            "docs/": {"api.md": "# API Documentation"},
-            ".gitignore": "__pycache__/\\n*.pyc\\nnode_modules/",
-        }
-    }
-    # ... rest of the function, ensure line wrapping for long log messages and prompts
+    # Add providers from the list, ensuring no duplicates if specific_structure_provider was already added
+    structure_providers_list = ai3_config.get(
+        "structure_providers", ["codestral"]
+    )  # Default to codestral
+    if not isinstance(structure_providers_list, list) or not all(
+        isinstance(p, str) for p in structure_providers_list
+    ):
+        logger.warning(
+            f"[AI3] 'structure_providers' in ai_config.ai3 is not a list of strings. Using default: ['codestral']"
+        )
+        structure_providers_list = ["codestral"]
+
+    for p_name in structure_providers_list:
+        if p_name not in providers_to_try_cycle1:
+            providers_to_try_cycle1.append(p_name)
+
+    if not providers_to_try_cycle1:  # Should not happen if default is used
+        logger.error(
+            "[AI3] CRITICAL: No providers determined for Cycle 1 structure generation. Defaulting to 'codestral'."
+        )
+        providers_to_try_cycle1 = ["codestral"]
+
     logger.info(
-        "[AI3] Starting Cycle 1: Initial structure generation using providers: "
-        f"{structure_providers}"
+        f"[AI3] Cycle 1: Providers to try for initial generation: {providers_to_try_cycle1}"
     )
-    generated_structure_str: Optional[str] = None
-    selected_provider_name: Optional[str] = None
 
-    prompt = await generate_structure_llm_prompt(target)
+    initial_structure_json: Optional[Dict[str, Any]] = None
+    chosen_provider_cycle1: Optional[str] = None
+    prompt = await generate_structure_llm_prompt(target_desc)
 
-    for provider_name in structure_providers:
+    for provider_name in providers_to_try_cycle1:
         logger.info(
             f"[AI3] Cycle 1: Trying provider for initial generation: {provider_name}"
         )
-        try:
-            provider_instance: BaseProvider = ProviderFactory.create_provider(
-                provider_name, config_arg=config.get("providers", {}).get(provider_name)
-            )
-            # TODO: Implement or import apply_request_delay
-            # await apply_request_delay("ai3")
-            response_str = await provider_instance.generate_text(
-                prompt, max_tokens=4000, temperature=0.5  # Increased max_tokens
-            )
+        # ... existing code ...
+        # Correctly merge configurations for the provider
+        # 1. Global provider settings (e.g. API keys from config.providers.<provider_name>)
+        provider_global_config = config_data.get("providers", {}).get(provider_name, {})
+        # 2. General LLM params from ai_config.ai3 (e.g. temperature, but not provider-specific blocks)
+        ai3_llm_params = {
+            k: v
+            for k, v in ai3_config.items()
+            if k
+            not in [
+                "structure_provider",
+                "structure_providers",
+                "idea_md_provider",
+                "idea_md_providers",
+            ]
+            and not isinstance(v, (dict, list))
+        }
+        # 3. Provider-specific settings from ai_config.ai3 (e.g. ai_config.ai3.ollama.model)
+        ai3_provider_specific_overrides = (
+            ai3_config.get(provider_name, {})
+            if isinstance(ai3_config.get(provider_name), dict)
+            else {}
+        )
 
-            # Ensure proper cleanup of provider resources
-            if hasattr(provider_instance, "close_session") and callable(
-                getattr(provider_instance, "close_session")
-            ):
-                await provider_instance.close_session()
+        merged_config_for_provider = {
+            **provider_global_config,
+            **ai3_llm_params,
+            **ai3_provider_specific_overrides,
+            "name": provider_name,  # Ensure name is set for ProviderFactory
+        }
 
-            if response_str and response_str.strip():
-                logger.info(
-                    "[AI3] Cycle 1: Successfully generated initial structure with "
-                    f"provider: {provider_name}"
-                )
-                generated_structure_str = response_str
-                selected_provider_name = provider_name
-                break  # Success, exit loop
-            else:
-                logger.warning(
-                    f"[AI3] Cycle 1: Provider {provider_name} returned empty response "
-                    "for initial generation."
-                )
-        except Exception as e:
+        provider_instance = provider_factory.create_provider(
+            provider_name, config_arg=merged_config_for_provider, session=client_session
+        )
+        if not provider_instance:
             logger.error(
-                f"[AI3] Cycle 1: Failed initial generation with provider "
-                f"{provider_name}: {str(e)}",
-                exc_info=True,
+                f"[AI3] Cycle 1: Failed to create provider instance for {provider_name}. Skipping."
             )
-            # Ensure cleanup even in case of exception
-            if (
-                "provider_instance" in locals()
-                and hasattr(provider_instance, "close_session")
-                and callable(getattr(provider_instance, "close_session"))
-            ):
-                await provider_instance.close_session()
+            continue
 
-    # ... (similar fixes for refinement cycle)
+        initial_structure_str = await provider_instance.generate(
+            prompt=prompt,
+            model=merged_config_for_provider.get("model"),
+            temperature=merged_config_for_provider.get("temperature", 0.5),
+            max_tokens=merged_config_for_provider.get("max_tokens", 3000),
+        )
+        if initial_structure_str:
+            try:
+                parsed_structure = json.loads(initial_structure_str)
+                initial_structure_json = parsed_structure
+                chosen_provider_cycle1 = provider_name
+                logger.info(
+                    f"[AI3] Cycle 1: Successfully parsed structure from {provider_name}"
+                )
+                break
+            except json.JSONDecodeError:
+                logger.warning(
+                    f"[AI3] Invalid JSON response from provider {provider_name} in Cycle 1. Response: {initial_structure_str[:200]}..."
+                )
+                initial_structure_json = None  # Ensure it's reset
+                chosen_provider_cycle1 = None
+                continue
 
-    if not generated_structure_str:
-        logger.warning(
-            "[AI3] Cycle 1: Failed to generate initial structure with all "
-            "configured providers. Using fallback structure."
+    # Determine providers for Cycle 2 (Refinement)
+    # Option 1: Use a dedicated list for refinement if available
+    refinement_providers_list_config = ai3_config.get("refinement_providers")
+    # Option 2: Re-use providers from Cycle 1, prioritizing the one that succeeded in Cycle 1
+    # Option 3: Fallback to a default if neither is set
+
+    providers_to_try_cycle2: List[str] = []
+
+    if (
+        selected_provider_name
+    ):  # If a provider is passed for testing, use it for refinement too
+        providers_to_try_cycle2 = [selected_provider_name]
+        logger.info(
+            f"[AI3] Using specific provider for Cycle 2 (override): {selected_provider_name}"
+        )
+    elif (
+        refinement_providers_list_config
+        and isinstance(refinement_providers_list_config, list)
+        and all(isinstance(p, str) for p in refinement_providers_list_config)
+    ):
+        providers_to_try_cycle2 = refinement_providers_list_config
+        logger.info(
+            f"[AI3] Cycle 2: Using dedicated refinement_providers: {providers_to_try_cycle2}"
+        )
+    elif chosen_provider_cycle1:  # Prioritize the successful provider from Cycle 1
+        providers_to_try_cycle2.append(chosen_provider_cycle1)
+        for p_name in providers_to_try_cycle1:  # Add others from cycle 1 list
+            if p_name not in providers_to_try_cycle2:
+                providers_to_try_cycle2.append(p_name)
+        logger.info(
+            f"[AI3] Cycle 2: Re-using providers from Cycle 1, prioritizing '{chosen_provider_cycle1}': {providers_to_try_cycle2}"
+        )
+    else:  # Fallback if no specific refinement list and Cycle 1 didn't choose one (e.g., all failed or used fallback structure)
+        providers_to_try_cycle2 = (
+            providers_to_try_cycle1  # Default to trying Cycle 1's list again
         )
         logger.info(
-            "[AI3] Using pre-defined fallback structure for the NES-style game project"
+            f"[AI3] Cycle 2: Defaulting to Cycle 1 provider list for refinement: {providers_to_try_cycle2}"
         )
-        return fallback_structure  # Return fallback if all providers fail
 
-    # Attempt to parse the generated structure
-    try:
-        # Enhanced cleaning for various backtick styles
-        cleaned_str = generated_structure_str.strip()
-        if cleaned_str.startswith("```json"):
-            cleaned_str = cleaned_str[len("```json") :]
-        elif cleaned_str.startswith("```"):
-            cleaned_str = cleaned_str[len("```") :]
-        if cleaned_str.endswith("```"):
-            cleaned_str = cleaned_str[: -len("```")]
-        cleaned_str = cleaned_str.strip()
-
-        initial_structure = json.loads(cleaned_str)
-        logger.info("[AI3] Successfully parsed initial JSON structure.")
-    except json.JSONDecodeError as e:
+    if not providers_to_try_cycle2:
         logger.error(
-            f"[AI3] Failed to decode JSON structure: {e}. "
-            f"String: {cleaned_str[:200]}..."
+            "[AI3] CRITICAL: No providers determined for Cycle 2 structure refinement. Defaulting to 'codestral'."
         )
-        logger.warning(
-            "[AI3] Failed to parse the initial JSON structure. Using fallback structure."
-        )
-        return fallback_structure  # Use fallback if parsing fails
+        providers_to_try_cycle2 = ["codestral"]
 
-    # Cycle 2: Refinement
-    refinement_prompt_template = """
-    Target: {target_desc}
-    Initial Structure (JSON):
-    ```json
-    {initial_struct_json}
-    ```
-    Analyze the initial project structure above for the target: '{target_desc}'.
-    Consider its completeness, logical organization, and adherence to common
-    practices for such a project.
-    Think about typical files needed (e.g., config, tests, docs, main entry points,
-    utility modules, build scripts, Dockerfile, README.md, .gitignore).
-    If you identify areas for improvement (e.g., missing essential
-    files/directories, better organization, incorrect file types), provide an
-    updated and refined JSON structure.
-    If the structure looks good and complete, return the original JSON structure.
-    Output ONLY the JSON structure, enclosed in triple backticks (```json ... ```),
-    without any introductory text or explanations.
-    """
-    # ... (rest of generate_structure with fixes)
-    refinement_providers = (
-        [selected_provider_name] if selected_provider_name else structure_providers
-    )
-    refined_structure_json_str: Optional[str] = None
     logger.info(
-        f"[AI3] Starting Cycle 2: Structure refinement using providers: {refinement_providers}"
+        f"[AI3] Cycle 2: Providers to try for refinement: {providers_to_try_cycle2}"
     )
 
-    initial_structure_pretty_json = json.dumps(initial_structure, indent=2)
-    refinement_prompt = refinement_prompt_template.format(
-        target_desc=target, initial_struct_json=initial_structure_pretty_json
-    )
+    refined_structure_json: Optional[Dict[str, Any]] = None
 
-    for provider_name in refinement_providers:
-        logger.info(f"[AI3] Cycle 2: Trying provider for refinement: {provider_name}")
-        try:
-            provider_instance: BaseProvider = ProviderFactory.create_provider(
-                provider_name, config_arg=config.get("providers", {}).get(provider_name)
-            )
-            # TODO: Implement or import apply_request_delay
-            # await apply_request_delay("ai3")
-            response_str = await provider_instance.generate_text(
-                refinement_prompt,
-                max_tokens=4000,
-                temperature=0.3,  # Increased max_tokens
-            )
-
-            # Ensure proper cleanup of provider resources
-            if hasattr(provider_instance, "close_session") and callable(
-                getattr(provider_instance, "close_session")
-            ):
-                await provider_instance.close_session()
-
-            if response_str and response_str.strip():
-                logger.info(
-                    "[AI3] Cycle 2: Successfully received refinement response with "
-                    f"provider: {provider_name}"
-                )
-                refined_structure_json_str = response_str
-                break
-            else:
-                logger.warning(
-                    f"[AI3] Cycle 2: Provider {provider_name} returned empty response "
-                    "for refinement."
-                )
-        except Exception as e:
-            logger.error(
-                f"[AI3] Cycle 2: Failed refinement with provider {provider_name}: {str(e)}",
-                exc_info=True,
-            )
-            # Ensure cleanup even in case of exception
-            if (
-                "provider_instance" in locals()
-                and hasattr(provider_instance, "close_session")
-                and callable(getattr(provider_instance, "close_session"))
-            ):
-                await provider_instance.close_session()
-
-    if refined_structure_json_str:
-        try:
-            cleaned_refined_str = refined_structure_json_str.strip()
-            if cleaned_refined_str.startswith("```json"):
-                cleaned_refined_str = cleaned_refined_str[len("```json") :]
-            elif cleaned_refined_str.startswith("```"):
-                cleaned_refined_str = cleaned_refined_str[len("```") :]
-
-            if cleaned_refined_str.endswith("```"):
-                cleaned_refined_str = cleaned_refined_str[: -len("```")]
-            cleaned_refined_str = cleaned_refined_str.strip()
-
-            final_structure = json.loads(cleaned_refined_str)
-            logger.info(
-                "[AI3] Cycle 2: Structure refinement successful. Using refined structure."
-            )
-            return final_structure
-        except json.JSONDecodeError as e:
-            logger.error(
-                "[AI3] Cycle 2: Failed to parse refined JSON structure. "
-                f"Error: {e}. Falling back to initial structure."
-            )
-            return initial_structure
-    else:
-        logger.warning(
-            "[AI3] Cycle 2: Failed to get refinement response from providers. "
-            "Using initial structure."
+    if initial_structure_json:
+        refinement_prompt = await generate_structure_refinement_prompt(
+            target_desc, initial_structure_json
         )
-        return initial_structure
+        for provider_name in providers_to_try_cycle2:
+            logger.info(
+                f"[AI3] Cycle 2: Trying provider for refinement: {provider_name}"
+            )
+            # ... existing code ...
+            # Correctly merge configurations for the provider (similar to Cycle 1)
+            provider_global_config = config_data.get("providers", {}).get(
+                provider_name, {}
+            )
+            ai3_llm_params = {
+                k: v
+                for k, v in ai3_config.items()
+                if k
+                not in [
+                    "structure_provider",
+                    "structure_providers",
+                    "idea_md_provider",
+                    "idea_md_providers",
+                    "refinement_providers",
+                ]
+                and not isinstance(v, (dict, list))
+            }
+            ai3_provider_specific_overrides = (
+                ai3_config.get(provider_name, {})
+                if isinstance(ai3_config.get(provider_name), dict)
+                else {}
+            )
+
+            merged_config_for_provider = {
+                **provider_global_config,
+                **ai3_llm_params,
+                **ai3_provider_specific_overrides,
+                "name": provider_name,
+            }
+
+            provider_instance = provider_factory.create_provider(
+                provider_name,
+                config_arg=merged_config_for_provider,
+                session=client_session,
+            )
+            if not provider_instance:
+                logger.error(
+                    f"[AI3] Cycle 2: Failed to create provider instance for {provider_name}. Skipping."
+                )
+                continue
+
+            refined_structure_str = await provider_instance.generate(
+                prompt=refinement_prompt,
+                model=merged_config_for_provider.get("model"),
+                temperature=merged_config_for_provider.get("temperature", 0.3),
+                max_tokens=merged_config_for_provider.get("max_tokens", 4000),
+            )
+            if refined_structure_str:
+                try:
+                    parsed_refined_structure = json.loads(refined_structure_str)
+                    refined_structure_json = parsed_refined_structure
+                    logger.info(
+                        f"[AI3] Cycle 2: Successfully parsed refined structure from {provider_name}"
+                    )
+                    break
+                except json.JSONDecodeError:
+                    logger.warning(
+                        f"[AI3] Invalid JSON response from provider {provider_name} in Cycle 2. Response: {refined_structure_str[:200]}..."
+                    )
+                    refined_structure_json = None  # Ensure it's reset
+                    continue
+
+    if refined_structure_json:
+        return refined_structure_json, chosen_provider_cycle1
+    elif initial_structure_json:
+        return initial_structure_json, chosen_provider_cycle1
+
+    return None, None
 
 
 async def send_structure_to_mcp(
@@ -468,27 +525,78 @@ async def send_structure_to_mcp(
     mcp_api_url: str,
     client_session: aiohttp.ClientSession,
 ) -> bool:
+    """Sends the generated project structure to the MCP API."""
     api_url = f"{mcp_api_url}/structure"
     payload = {"structure": structure_obj, "target": target_desc}
     logger.debug(f"[AI3 -> API] Structure payload keys: {list(structure_obj.keys())}")
+
+    # Ensure structure includes idea.md
+    if "idea.md" not in structure_obj:
+        logger.warning(
+            "[AI3 -> API] idea.md not found in structure. Adding default entry."
+        )
+        structure_obj["idea.md"] = (
+            "# Project Overview\n\nThis file will contain project details."
+        )
+        payload["structure"] = structure_obj
+
     try:
-        async with client_session.post(api_url, json=payload, timeout=30) as resp:
-            response_text = await resp.text()
-            if resp.status == 200:
-                logger.info(
-                    "[AI3 -> API] Structure successfully sent. "
-                    f"Response: {response_text}"
-                )
-                return True
-            else:
+        # Retry logic for better reliability
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                async with client_session.post(
+                    api_url, json=payload, timeout=30
+                ) as resp:
+                    response_text = await resp.text()
+                    if resp.status == 200:
+                        logger.info(
+                            "[AI3 -> API] Structure successfully sent. "
+                            f"Response: {response_text}"
+                        )
+                        # After successful structure upload, trigger AI1 to start
+                        try:
+                            ai1_trigger_url = f"{mcp_api_url}/start_ai1"
+                            ai1_payload = {
+                                "reason": "Structure uploaded by AI3",
+                                "status": "ready",
+                            }
+                            async with client_session.post(
+                                ai1_trigger_url, json=ai1_payload, timeout=30
+                            ) as ai1_resp:
+                                if ai1_resp.status == 200:
+                                    logger.info(
+                                        "[AI3 -> API] Successfully triggered AI1 to start"
+                                    )
+                                else:
+                                    logger.warning(
+                                        f"[AI3 -> API] Failed to trigger AI1, status: {ai1_resp.status}"
+                                    )
+                        except Exception as ai1_e:
+                            logger.error(f"[AI3 -> API] Error triggering AI1: {ai1_e}")
+
+                        return True
+                    else:
+                        logger.error(
+                            "[AI3 -> API] Error sending structure. Status: "
+                            f"{resp.status}, Response: {response_text}"
+                        )
+                        if attempt < max_retries - 1:
+                            logger.info(
+                                f"[AI3 -> API] Retrying structure upload (attempt {attempt+2}/{max_retries})"
+                            )
+                            await asyncio.sleep(5)  # Wait before retrying
+                        else:
+                            return False
+            except asyncio.TimeoutError:
                 logger.error(
-                    "[AI3 -> API] Error sending structure. Status: "
-                    f"{resp.status}, Response: {response_text}"
+                    f"[AI3 -> API] Timeout sending structure to {api_url} (attempt {attempt+1}/{max_retries})"
                 )
-                return False
-    except asyncio.TimeoutError:
-        logger.error(f"[AI3 -> API] Timeout sending structure to {api_url}.")
-        return False
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(5)
+                else:
+                    return False
+
     except aiohttp.ClientConnectionError as e:
         logger.error(f"[AI3 -> API] Connection error sending structure: {str(e)}")
         return False
@@ -498,6 +606,8 @@ async def send_structure_to_mcp(
             exc_info=True,
         )
         return False
+
+    return False  # Default return if all attempts fail
 
 
 # ... (similar fixes for other functions like _report_status_to_mcp, _initiate_collaboration_via_mcp)
@@ -708,96 +818,115 @@ async def create_files_from_structure(
 async def generate_initial_idea_md(
     target: str,
     provider_factory: ProviderFactory,
-    config: Dict[str, Any],
-    session: aiohttp.ClientSession,
-) -> Optional[str]:
+    config_data: Dict[str, Any],
+    client_session: aiohttp.ClientSession,  # Added client_session
+    selected_provider_name: Optional[str] = None,  # For testing
+) -> str:
+    """Generates the initial idea.md content using LLM, with fallback."""
     logger.info(f"[AI3] Generating initial idea.md content for target: {target}")
-    prompt = (
-        f"Based on the project target: '{target}', write a concise project "
-        "description suitable for an idea.md file. This description should "
-        "outline the main goals, key features, and overall purpose of the project. "
-        "Focus on a high-level overview. Output only the markdown content."
-    )
-    system_prompt = (
-        "You are a helpful assistant tasked with creating project descriptions."
-    )
+    ai3_config = config_data.get("ai_config", {}).get("ai3", {})
 
-    ai3_config = config.get("ai_config", {}).get("ai3", {})
+    # Determine providers for idea.md generation
+    providers_to_try: List[str] = []
+    specific_idea_md_provider = ai3_config.get("idea_md_provider")
 
-    # Get list of providers to try in order for idea.md generation
-    idea_md_providers = ai3_config.get(
-        "idea_md_providers", ["codestral2", "anthropic", "gemini3"]
-    )
-    if not idea_md_providers:
-        idea_md_providers = [
-            "codestral2",
-            "anthropic",
-            "gemini3",
-        ]  # Default fallback providers
-        logger.warning(
-            "[AI3] 'idea_md_providers' not found in ai3 config. "
-            f"Using default providers: {idea_md_providers}"
+    if selected_provider_name:  # If a provider is passed for testing
+        providers_to_try = [selected_provider_name]
+        logger.info(
+            f"[AI3] Using specific provider for idea.md (override): {selected_provider_name}"
+        )
+    elif specific_idea_md_provider and isinstance(specific_idea_md_provider, str):
+        providers_to_try.append(specific_idea_md_provider)
+        logger.info(
+            f"[AI3] Prioritizing specific idea_md_provider: {specific_idea_md_provider}"
         )
 
-    # Try each provider in sequence until one succeeds
-    for provider_name in idea_md_providers:
-        try:
-            logger.info(
-                f"[AI3] Trying to generate idea.md content with provider: {provider_name}"
-            )
-            provider_config = config.get("providers", {}).get(provider_name, {})
+    idea_md_providers_list = ai3_config.get(
+        "idea_md_providers", ["codestral"]
+    )  # Default to codestral
+    if not isinstance(idea_md_providers_list, list) or not all(
+        isinstance(p, str) for p in idea_md_providers_list
+    ):
+        logger.warning(
+            f"[AI3] 'idea_md_providers' in ai_config.ai3 is not a list of strings. Using default: ['codestral']"
+        )
+        idea_md_providers_list = ["codestral"]
 
-            # Create the provider instance with explicit config
-            provider: BaseProvider = ProviderFactory.create_provider(
-                provider_name, config_arg=provider_config
-            )
+    for p_name in idea_md_providers_list:
+        if p_name not in providers_to_try:
+            providers_to_try.append(p_name)
 
-            # TODO: Implement or import apply_request_delay
-            # await apply_request_delay("ai3")
+    if not providers_to_try:
+        logger.error(
+            "[AI3] CRITICAL: No providers determined for idea.md generation. Defaulting to 'codestral'."
+        )
+        providers_to_try = ["codestral"]
 
-            content = await provider.generate_text(
-                prompt,
-                system_prompt=system_prompt,
-                max_tokens=800,  # Increased for better descriptions
-                temperature=0.7,
-            )
+    logger.info(f"[AI3] Providers to try for idea.md generation: {providers_to_try}")
 
-            # Ensure proper cleanup of provider resources
-            if hasattr(provider, "close_session") and callable(
-                getattr(provider, "close_session")
-            ):
-                await provider.close_session()
+    idea_md_content: str = ""
+    prompt = await generate_idea_md_llm_prompt(
+        target
+    )  # Assuming this prompt generation function exists
 
-            # Check if we got a valid response
-            if content and content.strip():
-                logger.info(
-                    f"[AI3] Successfully generated initial idea.md content with {provider_name}."
-                )
-                return content.strip()
-            else:
-                logger.warning(
-                    f"[AI3] Provider {provider_name} returned empty response for idea.md generation."
-                )
-        except Exception as e:
+    for provider_name in providers_to_try:
+        logger.info(f"[AI3] Trying provider for idea.md generation: {provider_name}")
+        provider_global_config = config_data.get("providers", {}).get(provider_name, {})
+        ai3_config = config_data.get("ai_config", {}).get("ai3", {})
+        ai3_llm_params = {
+            k: v
+            for k, v in ai3_config.items()
+            if k
+            not in [
+                "structure_provider",
+                "structure_providers",
+                "idea_md_provider",
+                "idea_md_providers",
+                "refinement_providers",
+            ]
+            and not isinstance(v, (dict, list))
+        }
+        ai3_provider_specific_overrides = (
+            ai3_config.get(provider_name, {})
+            if isinstance(ai3_config.get(provider_name), dict)
+            else {}
+        )
+        merged_config_for_provider = {
+            **provider_global_config,
+            **ai3_llm_params,
+            **ai3_provider_specific_overrides,
+            "name": provider_name,
+        }
+        model_to_use = merged_config_for_provider.get("model")
+        temperature = merged_config_for_provider.get("temperature", 0.7)
+        max_tokens = merged_config_for_provider.get("max_tokens", 1500)
+
+        provider_instance = provider_factory.create_provider(
+            provider_name, config_arg=merged_config_for_provider, session=client_session
+        )
+        if not provider_instance:
             logger.error(
-                f"[AI3] Failed to generate idea.md content with provider {provider_name}: {e}",
-                exc_info=True,
+                f"[AI3] Failed to create provider instance for {provider_name} in idea.md generation. Skipping."
             )
-            # Ensure cleanup even in case of exception
-            if (
-                "provider" in locals()
-                and hasattr(provider, "close_session")
-                and callable(getattr(provider, "close_session"))
-            ):
-                await provider.close_session()
-            # Continue to next provider on error
+            continue
 
-    # If all providers failed, return a simple template
-    default_content = f"# Project: {target}\n\nInitial project description for {target}. This project aims to create a functional application based on the specified requirements."
-    logger.warning(
-        "[AI3] All providers failed to generate idea.md content. Using default template."
-    )
-    return default_content
+        content_str = await provider_instance.generate(
+            prompt=prompt,
+            model=model_to_use,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+        if content_str:
+            idea_md_content = content_str
+            logger.info(
+                f"[AI3] Successfully generated idea.md content using {provider_name}"
+            )
+            break
+        else:
+            logger.warning(
+                f"[AI3] Provider {provider_name} returned empty content for idea.md."
+            )
+    return idea_md_content
 
 
 async def ensure_idea_md_exists(
@@ -863,15 +992,28 @@ async def ensure_idea_md_exists(
 
 
 class AI3:
-    # ... (AI3 class definition with fixes)
-    def __init__(self, target: str, config_path: Optional[str] = None):
+    """Main class for AI3 operations."""
+
+    def __init__(
+        self,
+        target: str,
+        provider_factory: ProviderFactory,
+        config_data: Dict[str, Any],  # Changed from config to config_data
+        client_session: aiohttp.ClientSession,
+        # loop: Optional[asyncio.AbstractEventLoop] = None, # loop is usually not passed directly
+    ):
         self.target = target
-        self.config = load_config(config_path)
+        self.config = config_data  # Store the full config
+        self.ai_config = config_data.get("ai_config", {}).get("ai3", {})
+        if not self.ai_config:
+            logger.warning(
+                "[AI3] Section 'ai_config.ai3' not found in configuration. Using default values or expecting them in provider-specific sections."
+            )
         self.repo_dir = os.path.abspath(
             self.config.get("output_dir", REPO_DIR)  # Use REPO_DIR from utils
         )
         self.repo: Optional[Repo] = None
-        self.client_session: Optional[aiohttp.ClientSession] = None
+        self.client_session: Optional[aiohttp.ClientSession] = client_session
         self.mcp_api_url = self.config.get(
             "mcp_api_url", DEFAULT_MCP_API_URL  # Use DEFAULT_MCP_API_URL from utils
         )
@@ -881,7 +1023,7 @@ class AI3:
         self.ollama_initialized = False
         self.ollama_endpoint: Optional[str] = None
         self.ollama_model: Optional[str] = None
-        self.provider_factory = ProviderFactory()  # Remove arguments here
+        self.provider_factory = provider_factory  # Remove arguments here
         self.current_project_structure: Optional[Dict[str, Any]] = None
 
         # Initialize Ollama configuration
@@ -1003,12 +1145,21 @@ class AI3:
 
     async def setup_structure(self):
         logger.info("[AI3] Starting project structure setup...")
-        # TODO: Implement or import wait_for_service
-        # if not await wait_for_service(self.mcp_api_url, self.client_session, timeout=60):
-        #     logger.critical(
-        #         "[AI3] MCP API did not become available. Aborting structure setup."
-        #     )
-        #     return
+        # Ensure MCP API is available
+        try:
+            async with self.client_session.get(
+                self.mcp_api_url + "/health", timeout=30
+            ) as resp:
+                if resp.status != 200:
+                    logger.critical(
+                        f"[AI3] MCP API health check failed with status {resp.status}. Waiting and retrying..."
+                    )
+                    await asyncio.sleep(10)  # Wait before retry
+        except Exception as e:
+            logger.critical(
+                f"[AI3] MCP API health check failed: {e}. Waiting and retrying..."
+            )
+            await asyncio.sleep(10)  # Wait before retry
 
         if not await self.clear_repository():
             logger.critical(
@@ -1084,6 +1235,7 @@ coverage.xml
         finally:
             os.chdir(original_cwd)  # Restore original CWD
 
+        # Report successful repository clearing
         await _report_status_to_mcp(
             "repo_cleared", None, self.mcp_api_url, self.client_session
         )
@@ -1101,14 +1253,39 @@ coverage.xml
             except Exception as e:
                 logger.error(f"[AI3-Git] Error removing {project_path}: {e}")
 
-        structure = await generate_structure(
-            self.target, self.config, self.client_session  # type: ignore
-        )
+        # Generate structure with retry mechanism
+        retries = 3
+        structure = None
+        chosen_provider = None
+
+        for attempt in range(retries):
+            try:
+                logger.info(f"[AI3] Structure generation attempt {attempt+1}/{retries}")
+                structure, chosen_provider = await generate_structure(
+                    self.target,
+                    self.provider_factory,
+                    self.config,  # Pass the full config_data here
+                    self.client_session,
+                )
+                if structure:
+                    break
+                logger.warning(
+                    f"[AI3] Structure generation attempt {attempt+1} failed. Retrying..."
+                )
+                await asyncio.sleep(5)  # Wait before retry
+            except Exception as e:
+                logger.error(
+                    f"[AI3] Error in structure generation attempt {attempt+1}: {e}"
+                )
+                await asyncio.sleep(5)  # Wait before retry
+
         if not structure:
-            logger.critical("[AI3] Structure generation failed. Cannot proceed.")
+            logger.critical(
+                "[AI3] All structure generation attempts failed. Cannot proceed."
+            )
             await _report_status_to_mcp(
                 "error_structure_generation_failed",
-                {"details": "LLM failed to generate structure"},
+                {"details": "All LLM structure generation attempts failed"},
                 self.mcp_api_url,
                 self.client_session,
             )
@@ -1152,31 +1329,72 @@ coverage.xml
                 "[AI3] Removed 'idea.md' from LLM structure, will generate fresh."
             )
 
-        created_count, skipped_count = await create_files_from_structure(
-            self.repo_dir, structure, self.repo, initial_commit=True
+        # Create files - with retry mechanism for robustness
+        retry_count = 0
+        max_retries = 3
+        created_files = []
+        skipped_files = []
+
+        while retry_count < max_retries:
+            try:
+                created_files, skipped_files = await create_files_from_structure(
+                    self.repo_dir, structure, self.repo, initial_commit=True
+                )
+                if (
+                    created_files
+                ):  # If we created at least one file, consider it a success
+                    break
+                logger.warning(
+                    f"[AI3] No files created, retrying ({retry_count+1}/{max_retries})"
+                )
+                retry_count += 1
+                await asyncio.sleep(3)  # Short wait before retry
+            except Exception as e:
+                logger.error(f"[AI3] Error creating files from structure: {e}")
+                retry_count += 1
+                await asyncio.sleep(3)  # Short wait before retry
+
+        if not created_files and retry_count >= max_retries:
+            logger.critical("[AI3] Failed to create any files after multiple attempts")
+            await _report_status_to_mcp(
+                "error_file_creation_failed",
+                {"details": "Failed to create project files after multiple attempts"},
+                self.mcp_api_url,
+                self.client_session,
+            )
+            # Continue anyway to try generating idea.md at least
+
+        logger.info(
+            f"[AI3] File creation completed: {len(created_files)} files created, "
+            f"{len(skipped_files)} skipped"
         )
-        if created_count == 0 and skipped_count == 0:
-            logger.warning(
-                "[AI3] No files were created or skipped. The structure might have "
-                "been empty or problematic."
-            )
-        else:
-            logger.info(
-                f"[AI3] File creation completed: {created_count} files created, "
-                f"{skipped_count} skipped"
-            )
 
         await _report_status_to_mcp(
             "structure_creation_completed",
-            {"created_count": created_count, "skipped_count": skipped_count},
+            {"created_count": len(created_files), "skipped_count": len(skipped_files)},
             self.mcp_api_url,
             self.client_session,  # type: ignore
         )
 
-        # Generate idea.md
-        idea_md_content = await generate_initial_idea_md(
-            self.target, self.provider_factory, self.config, self.client_session  # type: ignore
-        )
+        # Generate idea.md with retry mechanism
+        idea_md_content = None
+        for attempt in range(3):  # Try up to 3 times
+            try:
+                idea_md_content = await generate_initial_idea_md(
+                    self.target, self.provider_factory, self.config, self.client_session  # type: ignore
+                )
+                if idea_md_content:
+                    break
+                logger.warning(
+                    f"[AI3] idea.md generation attempt {attempt+1} failed. Retrying..."
+                )
+                await asyncio.sleep(3)
+            except Exception as e:
+                logger.error(
+                    f"[AI3] Error in idea.md generation attempt {attempt+1}: {e}"
+                )
+                await asyncio.sleep(3)
+
         idea_md_path = os.path.join(self.repo_dir, "idea.md")
 
         if idea_md_content:
@@ -1193,10 +1411,25 @@ coverage.xml
             except Exception as e:
                 logger.error(f"[AI3] Error writing idea.md: {e}", exc_info=True)
         else:
-            logger.warning(
-                "[AI3] Failed to generate initial idea.md content. "
-                "Proceeding without it."
-            )
+            # Create a basic idea.md as fallback if generation failed
+            try:
+                basic_content = f"# Project: {self.target}\n\nThis project aims to create a solution based on the provided target description.\n\n## Project Goals\n\n- Implement the core functionality\n- Ensure good user experience\n- Follow industry best practices\n\n## Technical Considerations\n\nMore details will be added as the project progresses."
+                async with aiofiles.open(idea_md_path, "w", encoding="utf-8") as f:
+                    await f.write(basic_content)
+                logger.info(
+                    f"[AI3] Created basic fallback idea.md due to generation failure"
+                )
+                if self.repo:
+                    _commit_changes(
+                        self.repo, [idea_md_path], "AI3: Add basic idea.md fallback"
+                    )
+                idea_md_content = (
+                    basic_content  # Set the content so we can use it later
+                )
+            except Exception as e:
+                logger.error(
+                    f"[AI3] Error writing fallback idea.md: {e}", exc_info=True
+                )
 
         # Explicitly remove any file named "idea" (without extension) if it exists
         # This is a final safety check after structure creation.
@@ -1226,25 +1459,45 @@ coverage.xml
                 )
 
         # Ensure idea.md exists before sending the final structure to MCP
-        await ensure_idea_md_exists(
-            self.repo_dir,
-            self.target,
-            self.provider_factory,
-            self.config,
-            self.client_session,
-        )
+        # Try up to 3 more times if the above attempts failed
+        if not os.path.exists(idea_md_path):
+            await ensure_idea_md_exists(
+                self.repo_dir,
+                self.target,
+                self.provider_factory,
+                self.config,
+                self.client_session,
+            )
 
-        if not await send_structure_to_mcp(
-            structure, self.target, self.mcp_api_url, self.client_session  # type: ignore
-        ):
-            logger.error("[AI3] Failed to send final structure to MCP.")
+        # Retry sending structure to MCP if it fails
+        mcp_send_success = False
+        for attempt in range(3):
+            try:
+                mcp_send_success = await send_structure_to_mcp(
+                    structure, self.target, self.mcp_api_url, self.client_session  # type: ignore
+                )
+                if mcp_send_success:
+                    break
+                logger.warning(
+                    f"[AI3] MCP structure send attempt {attempt+1} failed. Retrying..."
+                )
+                await asyncio.sleep(5)
+            except Exception as e:
+                logger.error(
+                    f"[AI3] Error in MCP structure send attempt {attempt+1}: {e}"
+                )
+                await asyncio.sleep(5)
+
+        if not mcp_send_success:
+            logger.error(
+                "[AI3] Failed to send final structure to MCP after multiple attempts."
+            )
             await _report_status_to_mcp(
                 "error_mcp_send_failed",
-                {"details": "Failed to send structure to MCP"},
+                {"details": "Failed to send structure to MCP after multiple attempts"},
                 self.mcp_api_url,
                 self.client_session,
             )
-            # Decide if this is critical enough to stop
         else:
             logger.info("[AI3] Final structure successfully sent to MCP.")
             await _report_status_to_mcp(
@@ -1253,6 +1506,25 @@ coverage.xml
                 self.mcp_api_url,
                 self.client_session,
             )
+
+        # Explicitly signal AI1 to start if structure was generated successfully
+        if structure and (created_files or os.path.exists(idea_md_path)):
+            try:
+                async with self.client_session.post(
+                    f"{self.mcp_api_url}/start_ai1",
+                    json={"reason": "Structure generation complete"},
+                    timeout=30,
+                ) as resp:
+                    if resp.status == 200:
+                        logger.info(
+                            "[AI3] Successfully signaled AI1 to start processing"
+                        )
+                    else:
+                        logger.warning(
+                            f"[AI3] Signal to start AI1 returned status {resp.status}"
+                        )
+            except Exception as e:
+                logger.error(f"[AI3] Error signaling AI1 to start: {e}")
 
         logger.info("[AI3] Structure setup phase completed.")
 
@@ -1902,29 +2174,6 @@ coverage.xml
         # )
         # ...
 
-    def _infer_code_file_from_test(
-        self, test_file: str, test_content: str
-    ) -> Optional[str]:
-        # ...existing code...
-        if base.startswith(TESTS_TEST_PREFIX):  # "tests/test_"
-            potential_name = base[len(TESTS_TEST_PREFIX) :]
-        elif base.endswith(DOT_TEST_SUFFIX):  # ".test"
-            potential_name = base[: -len(DOT_TEST_SUFFIX)]
-        # Search for import statements in test_content (basic example)
-        # Example: from project_name.module import ClassA -> project_name/module.py
-        # This regex is very basic and might need significant improvement
-        import_match = re.search(r"from\s+([\w.]+)\s+import", test_content)
-        if import_match:
-            module_path = import_match.group(1).replace(".", "/")
-            potential_code_file = f"{module_path}{ext}"
-            if os.path.exists(os.path.join(self.repo_dir, potential_code_file)):
-                logger.info(
-                    f"[AI3-InferCode] Inferred code file '{potential_code_file}' for "
-                    f"test '{test_file}' via import."
-                )
-                return potential_code_file
-        # ...
-
 
 async def call_ollama(  # Specific Ollama call
     session: aiohttp.ClientSession,
@@ -2067,8 +2316,9 @@ async def main(target: str, config_path: Optional[str] = None):
         client_session = aiohttp.ClientSession()
 
         # Create AI3 instance
-        ai3 = AI3(target, config_path)
-        ai3.client_session = client_session  # Set the client session explicitly
+        provider_factory = ProviderFactory()  # Initialize ProviderFactory
+        config_data = load_config(config_path)  # Load config data
+        ai3 = AI3(target, provider_factory, config_data, client_session)
 
         # Set up the project structure
         await ai3.setup_structure()
@@ -2106,7 +2356,7 @@ if __name__ == "__main__":
         "--target", type=str, help="Target project description", default=None
     )
     parser.add_argument("--config", type=str, help="Path to config.json", default=None)
-    args = parser.parse_args()
+    args = parser.parse_args()  # Changed from ArgumentParser() to parse_args()
 
     # Get target from config if not specified via argument
     if args.target is None:

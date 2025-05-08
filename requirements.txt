@@ -35,6 +35,7 @@ junitparser==3.1.2
 flake8
 black
 isort
+mypy
 
 # Logging & Config
 python-json-logger
