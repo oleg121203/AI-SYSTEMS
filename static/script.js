@@ -4481,31 +4481,69 @@ function getComponentConfig(componentId) {
   const modelSelect = document.querySelector(`#${componentId}-model`);
   const fallbacksList = document.querySelector(`#${componentId}-fallback-list`);
 
-  if (!providerSelect || !modelSelect) {
-    return { provider: "openai", model: "", fallbacks: [] };
+  // Default values if elements are not found
+  let provider = "openai"; // Default provider
+  let model = ""; // Default model
+  const fallbacks = [];
+
+  if (providerSelect) {
+    provider = providerSelect.value;
+  } else {
+    console.warn(`Provider select not found for ${componentId}`);
   }
 
-  const provider = providerSelect.value;
-  const model = modelSelect.value;
-  const fallbacks = [];
+  if (modelSelect) {
+    model = modelSelect.value;
+  } else {
+    console.warn(`Model select not found for ${componentId}`);
+  }
 
   // Collect fallbacks
   if (fallbacksList) {
     const fallbackItems = fallbacksList.querySelectorAll(".fallback-item");
     fallbackItems.forEach((item) => {
-      const providerSelect = item.querySelector(".provider-select");
-      const modelSelect = item.querySelector(".model-select");
+      const fbProviderSelect = item.querySelector(
+        "select[id$='-fallback-provider']"
+      );
+      const fbModelSelect = item.querySelector("select[id$='-fallback-model']");
 
-      if (providerSelect && modelSelect) {
+      if (fbProviderSelect && fbModelSelect) {
         fallbacks.push({
-          provider: providerSelect.value,
-          model: modelSelect.value,
+          provider: fbProviderSelect.value,
+          model: fbModelSelect.value,
         });
       }
     });
   }
 
-  return { provider, model, fallbacks };
+  const componentConfig = { provider, model, fallbacks };
+
+  // Specifically for AI3, add structure provider and model
+  if (componentId === "ai3") {
+    const structureProviderSelect = document.querySelector(
+      `#${componentId}-structure-provider`
+    );
+    const structureModelSelect = document.querySelector(
+      `#${componentId}-structure-model`
+    );
+
+    if (structureProviderSelect) {
+      componentConfig.structure_provider = structureProviderSelect.value;
+    } else {
+      console.warn(
+        `Structure provider select not found for ${componentId}-structure-provider`
+      );
+    }
+    if (structureModelSelect) {
+      componentConfig.structure_model = structureModelSelect.value;
+    } else {
+      console.warn(
+        `Structure model select not found for ${componentId}-structure-model`
+      );
+    }
+  }
+
+  return componentConfig;
 }
 
 // Show notification

@@ -98,14 +98,16 @@
                 "ollama1"
             ],
             "structure_providers": [
-                "structure_fallback",
                 "codestral2",
+                "structure_fallback",
                 "gemini"
             ],
-            "model": "qwen2.5:1.5b",
+            "model": "codestral-latest",
             "max_tokens": 2048,
             "temperature": 0.7,
-            "provider": "ollama1"
+            "provider": "codestral2",
+            "structure_provider": "codestral2",
+            "structure_model": "codestral-latest"
         }
     },
     "providers": {
