@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import json
 import logging
 import os
@@ -325,7 +326,6 @@ async def generate_structure(
         logger.info(
             f"[AI3] Cycle 1: Trying provider for initial generation: {provider_name}"
         )
-        # ... existing code ...
         # Correctly merge configurations for the provider
         # 1. Global provider settings (e.g. API keys from config.providers.<provider_name>)
         provider_global_config = config_data.get("providers", {}).get(provider_name, {})
@@ -384,28 +384,47 @@ async def generate_structure(
             # For other providers, use their configured model from the provider config
             model_to_use = provider_model
 
-        initial_structure_str = await provider_instance.generate(
-            prompt=prompt,
-            model=model_to_use,
-            temperature=merged_config_for_provider.get("temperature", 0.5),
-            max_tokens=merged_config_for_provider.get("max_tokens", 3000),
-        )
-        if initial_structure_str:
-            try:
-                parsed_structure = json.loads(initial_structure_str)
-                initial_structure_json = parsed_structure
-                chosen_provider_cycle1 = provider_name
-                logger.info(
-                    f"[AI3] Cycle 1: Successfully parsed structure from {provider_name}"
-                )
-                break
-            except json.JSONDecodeError:
-                logger.warning(
-                    f"[AI3] Invalid JSON response from provider {provider_name} in Cycle 1. Response: {initial_structure_str[:200]}..."
-                )
-                initial_structure_json = None  # Ensure it's reset
-                chosen_provider_cycle1 = None
-                continue
+        try:
+            initial_structure_str = await provider_instance.generate(
+                prompt=prompt,
+                model=model_to_use,
+                temperature=merged_config_for_provider.get("temperature", 0.5),
+                max_tokens=merged_config_for_provider.get("max_tokens", 3000),
+            )
+
+            # Ensure provider session is closed
+            await provider_instance.close_session()
+
+            if initial_structure_str:
+                try:
+                    # Try to extract JSON from the response if it's wrapped in triple backticks
+                    json_match = re.search(
+                        r"```(?:json)?\s*([\s\S]*?)\s*```", initial_structure_str
+                    )
+                    if json_match:
+                        initial_structure_str = json_match.group(1).strip()
+
+                    parsed_structure = json.loads(initial_structure_str)
+                    initial_structure_json = parsed_structure
+                    chosen_provider_cycle1 = provider_name
+                    logger.info(
+                        f"[AI3] Cycle 1: Successfully parsed structure from {provider_name}"
+                    )
+
+                    # Save the successful provider to config.json
+                    update_structure_provider_in_config(config_data, provider_name)
+
+                    break
+                except json.JSONDecodeError:
+                    logger.warning(
+                        f"[AI3] Invalid JSON response from provider {provider_name} in Cycle 1. Response: {initial_structure_str[:200]}..."
+                    )
+                    initial_structure_json = None  # Ensure it's reset
+                    chosen_provider_cycle1 = None
+                    continue
+        except Exception as e:
+            logger.error(f"[AI3] Error with provider {provider_name}: {e}")
+            continue
 
     # Determine providers for Cycle 2 (Refinement)
     # Option 1: Use a dedicated list for refinement if available
@@ -467,7 +486,6 @@ async def generate_structure(
             logger.info(
                 f"[AI3] Cycle 2: Trying provider for refinement: {provider_name}"
             )
-            # ... existing code ...
             # Correctly merge configurations for the provider (similar to Cycle 1)
             provider_global_config = config_data.get("providers", {}).get(
                 provider_name, {}
@@ -2396,3 +2414,71 @@ if __name__ == "__main__":
     except Exception:  # Catch all exceptions from main to ensure sys.exit(1)
         # Logging of this exception should happen inside main() or AI3 methods
         sys.exit(1)
+
+
+def update_structure_provider_in_config(
+    config_data: Dict[str, Any], provider_name: str
+) -> None:
+    """
+    Updates the config.json file to save the successful structure provider.
+
+    Args:
+        config_data: The current configuration data
+        provider_name: The name of the successful provider to save
+    """
+    try:
+        # Make a copy of the config to avoid modifying the original during runtime
+        updated_config = copy.deepcopy(config_data)
+
+        # Ensure ai_config and ai3 sections exist
+        if "ai_config" not in updated_config:
+            updated_config["ai_config"] = {}
+        if "ai3" not in updated_config["ai_config"]:
+            updated_config["ai_config"]["ai3"] = {}
+
+        # Update structure_provider to the successful provider
+        updated_config["ai_config"]["ai3"]["structure_provider"] = provider_name
+
+        # If structure_providers list exists, ensure this provider is first in the list
+        if "structure_providers" in updated_config["ai_config"]["ai3"]:
+            providers_list = updated_config["ai_config"]["ai3"]["structure_providers"]
+            # Remove provider if it's already in the list
+            if provider_name in providers_list:
+                providers_list.remove(provider_name)
+            # Add provider at the beginning
+            providers_list.insert(0, provider_name)
+        else:
+            # Create structure_providers list if it doesn't exist
+            updated_config["ai_config"]["ai3"]["structure_providers"] = [
+                provider_name,
+                "codestral",
+                "gemini",
+            ]
+
+        # Write the updated config back to file
+        with open("config.json", "w") as f:
+            json.dump(updated_config, f, indent=4)
+
+        logger.info(
+            f"[AI3] Successfully updated config.json with structure provider: {provider_name}"
+        )
+
+        # Also update the config_data in memory to reflect the change
+        if "ai_config" in config_data and "ai3" in config_data["ai_config"]:
+            config_data["ai_config"]["ai3"]["structure_provider"] = provider_name
+            if "structure_providers" in config_data["ai_config"]["ai3"]:
+                if (
+                    provider_name
+                    in config_data["ai_config"]["ai3"]["structure_providers"]
+                ):
+                    config_data["ai_config"]["ai3"]["structure_providers"].remove(
+                        provider_name
+                    )
+                config_data["ai_config"]["ai3"]["structure_providers"].insert(
+                    0, provider_name
+                )
+
+    except Exception as e:
+        logger.error(
+            f"[AI3] Error updating structure provider in config: {e}", exc_info=True
+        )

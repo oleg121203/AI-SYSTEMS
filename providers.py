@@ -1932,119 +1932,126 @@ class CodestralProvider(BaseProvider):
         # Implement retry logic with exponential backoff
         current_retry = 0
         delay = initial_delay
+        session = None
 
-        while current_retry <= retries:
-            try:
-                session = await self.get_client_session()
-                # Headers are managed by get_client_session
-                async with session.post(api_url, json=payload) as response:
-                    if response.status == 200:
-                        response_data = await response.json()
-                        if response_data.get("choices") and response_data["choices"][
-                            0
-                        ].get("message"):
-                            return response_data["choices"][0]["message"].get(
-                                "content", ""
+        try:
+            session = await self.get_client_session()
+
+            while current_retry <= retries:
+                try:
+                    # Headers are managed by get_client_session
+                    async with session.post(api_url, json=payload) as response:
+                        if response.status == 200:
+                            response_data = await response.json()
+                            if response_data.get("choices") and response_data[
+                                "choices"
+                            ][0].get("message"):
+                                return response_data["choices"][0]["message"].get(
+                                    "content", ""
+                                )
+                            else:
+                                logger.warning(
+                                    f"Ответ от Codestral API ({model_to_use}) не содержит ожидаемых данных: {response_data}"
+                                )
+                                return "Ошибка генерации: Не получен корректный ответ от Codestral API."
+                        elif response.status == 429 and current_retry < retries:
+                            # Handle rate limit error with retry
+                            error_text = await response.text()
+                            import random
+
+                            wait_time = delay * (2**current_retry) + random.uniform(
+                                0, 0.5
                             )
-                        else:
                             logger.warning(
-                                f"Ответ от Codestral API ({model_to_use}) не содержит ожидаемых данных: {response_data}"
+                                f"Codestral API рейт-лимит превышен ({response.status}). Повторная попытка через {wait_time:.2f} секунд. Попытка {current_retry + 1}/{retries}. Сообщение: {error_text[:200]}"
                             )
-                            return "Ошибка генерации: Не получен корректный ответ от Codestral API."
-                    elif response.status == 429 and current_retry < retries:
-                        # Handle rate limit error with retry
-                        error_text = await response.text()
+                            # Wait with exponential backoff before retrying
+                            await asyncio.sleep(wait_time)
+                            current_retry += 1
+                            continue
+                        else:
+                            # Attempt to get error message from response for other errors
+                            error_text = await response.text()
+                            error_message = error_text
+                            try:
+                                # Try to parse JSON error if possible
+                                error_data = json.loads(error_text)
+                                if error_data.get("error"):
+                                    error_message = error_data.get("error").get(
+                                        "message", error_text
+                                    )
+                            except:
+                                pass
+
+                            logger.error(
+                                f"Codestral API HTTP Error ({model_to_use}, {response.status}): {error_message[:200]}"
+                            )
+
+                            # For rate limit errors that have exceeded retries
+                            if response.status == 429:
+                                return f"Ошибка генерации: Превышен лимит запросов к Codestral API (429) после {retries} попыток."
+
+                            response.raise_for_status()  # Raise exception for other bad status
+
+                except aiohttp.ClientResponseError as e:
+                    # Error message already logged above if possible
+                    error_message = e.message
+                    try:
+                        # Try to parse JSON error again just in case
+                        response_data = await e.response.json()
+                        error_message = response_data.get("error", {}).get(
+                            "message", e.message
+                        )
+                    except Exception:
+                        pass  # Keep original message if JSON parsing fails
+
+                    if e.status == 429 and current_retry < retries:
+                        # Handle rate limit with exponential backoff
                         import random
 
                         wait_time = delay * (2**current_retry) + random.uniform(0, 0.5)
                         logger.warning(
-                            f"Codestral API рейт-лимит превышен ({response.status}). Повторная попытка через {wait_time:.2f} секунд. Попытка {current_retry + 1}/{retries}. Сообщение: {error_text[:200]}"
+                            f"Codestral API рейт-лимит превышен ({e.status}). Повторная попытка через {wait_time:.2f} секунд. Попытка {current_retry + 1}/{retries}."
                         )
-                        # Wait with exponential backoff before retrying
                         await asyncio.sleep(wait_time)
                         current_retry += 1
                         continue
+                    elif e.status == 429:
+                        # Rate limit exceeded after retries
+                        return f"Ошибка генерации: Превышен лимит запросов к Codestral API (429) после {retries} попыток."
                     else:
-                        # Attempt to get error message from response for other errors
-                        error_text = await response.text()
-                        error_message = error_text
-                        try:
-                            # Try to parse JSON error if possible
-                            error_data = json.loads(error_text)
-                            if error_data.get("error"):
-                                error_message = error_data.get("error").get(
-                                    "message", error_text
-                                )
-                        except:
-                            pass
+                        return f"Ошибка генерации (Codestral API {e.status}): {error_message}"
 
-                        logger.error(
-                            f"Codestral API HTTP Error ({model_to_use}, {response.status}): {error_message[:200]}"
+                except aiohttp.ClientError as e:
+                    logger.error(
+                        f"Ошибка соединения с Codestral API {self.endpoint}: {e}"
+                    )
+                    if current_retry < retries:
+                        # Also retry connection errors
+                        import random
+
+                        wait_time = delay * (2**current_retry) + random.uniform(0, 0.5)
+                        logger.warning(
+                            f"Ошибка соединения с Codestral API. Повторная попытка через {wait_time:.2f} секунд. Попытка {current_retry + 1}/{retries}."
                         )
+                        await asyncio.sleep(wait_time)
+                        current_retry += 1
+                        continue
+                    return f"Ошибка генерации: Не удалось подключиться к Codestral API ({e})"
 
-                        # For rate limit errors that have exceeded retries
-                        if response.status == 429:
-                            return f"Ошибка генерации: Превышен лимит запросов к Codestral API (429) после {retries} попыток."
-
-                        response.raise_for_status()  # Raise exception for other bad status
-
-            except aiohttp.ClientResponseError as e:
-                # Error message already logged above if possible
-                error_message = e.message
-                try:
-                    # Try to parse JSON error again just in case
-                    response_data = await e.response.json()
-                    error_message = response_data.get("error", {}).get(
-                        "message", e.message
+                except Exception as e:
+                    logger.error(
+                        f"Неожиданная ошибка при генерации ответа с Codestral ({model_to_use}): {e}",
+                        exc_info=True,
                     )
-                except Exception:
-                    pass  # Keep original message if JSON parsing fails
+                    return f"Ошибка генерации: {str(e)}"
 
-                if e.status == 429 and current_retry < retries:
-                    # Handle rate limit with exponential backoff
-                    import random
-
-                    wait_time = delay * (2**current_retry) + random.uniform(0, 0.5)
-                    logger.warning(
-                        f"Codestral API рейт-лимит превышен ({e.status}). Повторная попытка через {wait_time:.2f} секунд. Попытка {current_retry + 1}/{retries}."
-                    )
-                    await asyncio.sleep(wait_time)
-                    current_retry += 1
-                    continue
-                elif e.status == 429:
-                    # Rate limit exceeded after retries
-                    return f"Ошибка генерации: Превышен лимит запросов к Codestral API (429) после {retries} попыток."
-                else:
-                    return (
-                        f"Ошибка генерации (Codestral API {e.status}): {error_message}"
-                    )
-
-            except aiohttp.ClientError as e:
-                logger.error(f"Ошибка соединения с Codestral API {self.endpoint}: {e}")
-                if current_retry < retries:
-                    # Also retry connection errors
-                    import random
-
-                    wait_time = delay * (2**current_retry) + random.uniform(0, 0.5)
-                    logger.warning(
-                        f"Ошибка соединения с Codestral API. Повторная попытка через {wait_time:.2f} секунд. Попытка {current_retry + 1}/{retries}."
-                    )
-                    await asyncio.sleep(wait_time)
-                    current_retry += 1
-                    continue
-                return (
-                    f"Ошибка генерации: Не удалось подключиться к Codestral API ({e})"
-                )
-
-            except Exception as e:
-                logger.error(
-                    f"Неожиданная ошибка при генерации ответа с Codestral ({model_to_use}): {e}",
-                    exc_info=True,
-                )
-                return f"Ошибка генерации: {str(e)}"
-
-        # If we exhausted all retries
-        return f"Ошибка генерации: Не удалось получить ответ от Codestral API после {retries} попыток."
+            # If we exhausted all retries
+            return f"Ошибка генерации: Не удалось получить ответ от Codestral API после {retries} попыток."
+        finally:
+            # Ensure we close the session when we're done
+            if session:
+                await self.close_session()
 
     async def get_available_models(self) -> List[str]:
         # Return a default list or the configured model, as we can't query the API without SDK easily
@@ -2493,8 +2500,9 @@ class FallbackProvider(BaseProvider):
         provider_chain = ", ".join([p.name for p in self.providers])
         logger.info(f"Attempting generation with fallback chain: {provider_chain}")
 
-        # Create a list to track opened sessions that might need cleanup
-        sessions_to_close = []
+        # Track which provider succeeded to avoid closing its session prematurely
+        successful_provider = None
+        result = None
 
         try:
             for i, provider in enumerate(self.providers):
@@ -2510,7 +2518,7 @@ class FallbackProvider(BaseProvider):
                         if parts[0] == provider.name:
                             provider_model = parts[1]
 
-                    result = await provider.generate(
+                    current_result = await provider.generate(
                         prompt=prompt,
                         system_prompt=system_prompt,
                         model=provider_model or provider.get_default_model(),
@@ -2534,39 +2542,45 @@ class FallbackProvider(BaseProvider):
                     ]
 
                     if any(
-                        pattern.lower() in result.lower() for pattern in error_patterns
+                        pattern.lower() in current_result.lower()
+                        for pattern in error_patterns
                     ):
                         logger.warning(
-                            f"Provider {provider.name} returned error: {result}"
+                            f"Provider {provider.name} returned error: {current_result}"
                         )
-                        errors.append(f"{provider.name}: {result}")
-                        # Add provider to sessions that might need cleanup
-                        sessions_to_close.append(provider)
+                        errors.append(f"{provider.name}: {current_result}")
+
+                        # Close session immediately for failed providers
+                        await provider.close_session()
                         continue
 
                     # If we get here, the provider returned a valid result
                     logger.info(f"Provider {provider.name} succeeded")
-                    return result
+                    successful_provider = provider
+                    result = current_result
+                    return current_result
 
                 except Exception as e:
                     logger.error(f"Error with provider {provider.name}: {e}")
                     errors.append(f"{provider.name}: {str(e)}")
-                    # Add provider to sessions that might need cleanup
-                    sessions_to_close.append(provider)
+
+                    # Close session immediately for providers that raised exceptions
+                    await provider.close_session()
 
             # If we get here, all providers failed
             error_report = "\n".join(errors)
             logger.error(f"All fallback providers failed:\n{error_report}")
             return f"All providers failed. Please check the provider configuration or try again later.\nErrors:\n{error_report}"
         finally:
-            # Ensure we clean up any sessions created by providers
-            for provider in sessions_to_close:
-                try:
-                    await provider.close_session()
-                except Exception as e:
-                    logger.error(
-                        f"Error closing session for provider {provider.name}: {e}"
-                    )
+            # In the finally block, close sessions for all providers except the successful one
+            for provider in self.providers:
+                if provider != successful_provider:
+                    try:
+                        await provider.close_session()
+                    except Exception as e:
+                        logger.error(
+                            f"Error closing session for provider {provider.name}: {e}"
+                        )
 
     async def get_available_models(self) -> List[str]:
         """Get a list of available models from all providers."""

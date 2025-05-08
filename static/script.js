@@ -3760,6 +3760,10 @@ async function saveProviderConfig() {
       provider: document.getElementById("ai3-provider").value,
       model: document.getElementById("ai3-model").value,
       fallbacks: getFallbacksConfig("ai3"),
+      structure_provider: document.getElementById("ai3-structure-provider")
+        .value,
+      structure_model: document.getElementById("ai3-structure-model").value,
+      structure_fallbacks: getFallbacksConfig("ai3-structure"),
     },
   };
 
@@ -3779,18 +3783,8 @@ async function saveProviderConfig() {
 
     if (result.status === "success") {
       showNotification("Provider configuration saved successfully", "success");
-
-      // Update the global currentConfig
-      currentConfig = config;
-
-      // Refresh the provider config UI
-      initProviderConfig();
     } else {
-      showNotification(
-        `Error: ${result.message || "Failed to save configuration"}`,
-        "error"
-      );
-      console.error("Error saving provider configuration:", result);
+      showNotification(`Error: ${result.message || "Unknown error"}`, "error");
     }
   } catch (error) {
     console.error("Error saving provider configuration:", error);
@@ -3831,9 +3825,13 @@ document.addEventListener("DOMContentLoaded", function () {
   updateModelOptions("ai2-tester");
   updateModelOptions("ai2-documenter");
   updateModelOptions("ai3");
+  // Initialize structure provider model select
+  updateModelOptions("ai3-structure");
 
   // Initialize fallbacks
   initializeFallbacks();
+  // Initialize structure provider fallbacks
+  initializeComponentFallbacks("ai3-structure");
 });
 
 // Add notification function if not already defined

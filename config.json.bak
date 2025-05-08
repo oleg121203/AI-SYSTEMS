@@ -61,7 +61,7 @@
             "providers": [
                 "ollama"
             ],
-            "model": "mistral:latest",
+            "model": "qwen2.5-coder:14b",
             "max_tokens": 2048,
             "temperature": 0.7,
             "provider": "ollama"
@@ -69,10 +69,10 @@
         "ai2": {
             "providers": {
                 "executor": [
-                    "ollama"
+                    "codestral"
                 ],
                 "tester": [
-                    "ollama"
+                    "codestral2"
                 ],
                 "documenter": [
                     "ollama"
@@ -81,16 +81,16 @@
             "max_tokens": 2048,
             "temperature": 0.4,
             "executor": {
-                "provider": "ollama",
-                "model": "mistral:latest"
+                "provider": "codestral",
+                "model": "codestral-latest"
             },
             "tester": {
-                "provider": "ollama",
-                "model": "mistral:latest"
+                "provider": "codestral2",
+                "model": "codestral-latest"
             },
             "documenter": {
                 "provider": "ollama",
-                "model": "mistral:latest"
+                "model": "qwen2.5:1.5b"
             }
         },
         "ai3": {
@@ -102,7 +102,7 @@
                 "codestral2",
                 "gemini"
             ],
-            "model": "llama3.2:latest",
+            "model": "qwen2.5:1.5b",
             "max_tokens": 2048,
             "temperature": 0.7,
             "provider": "ollama1"

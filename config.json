@@ -75,7 +75,7 @@
                     "codestral2"
                 ],
                 "documenter": [
-                    "gemini"
+                    "ollama"
                 ]
             },
             "max_tokens": 2048,
@@ -89,8 +89,8 @@
                 "model": "codestral-latest"
             },
             "documenter": {
-                "provider": "gemini",
-                "model": "gemini-1.5-pro-latest"
+                "provider": "ollama",
+                "model": "qwen2.5:1.5b"
             }
         },
         "ai3": {
@@ -102,7 +102,7 @@
                 "codestral2",
                 "gemini"
             ],
-            "model": "llama3.2:latest",
+            "model": "qwen2.5:1.5b",
             "max_tokens": 2048,
             "temperature": 0.7,
             "provider": "ollama1"
