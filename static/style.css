@@ -1875,95 +1875,144 @@ body {
 }
 
 /* Provider Configuration Styles */
+/* General styling for the provider configuration block */
 .provider-config {
-  margin-bottom: 20px;
-  background-color: var(--panel-bg);
-  border-radius: 6px;
-  padding: 15px;
+  margin-bottom: 15px; /* Reduced */
+  /* background-color: var(--container-bg); */ /* Let it blend with parent panel */
+  padding: 10px 5px; /* Reduced padding */
+}
+
+.provider-config > h3 {
+  /* Target the main title of the section */
+  font-size: 1.1em; /* Slightly smaller */
+  margin-bottom: 10px; /* Reduced */
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border-color);
+  color: var(--heading-color);
+  display: flex;
+  align-items: center;
+}
+
+.provider-config > h3 i {
+  margin-right: 8px;
 }
 
 .provider-section {
-  margin-bottom: 20px;
+  margin-bottom: 15px; /* Reduced */
   border: 1px solid var(--border-color);
   border-radius: 6px;
-  padding: 12px;
-  background-color: var(--panel-sub-bg);
+  padding: 10px; /* Reduced */
+  background-color: var(
+    --container-bg
+  ); /* Use container-bg to stand out from panel's bg-color if different */
+}
+
+.provider-section > h4 {
+  font-size: 1em; /* Slightly smaller */
+  margin-top: 0;
+  margin-bottom: 8px; /* Reduced */
+  padding-bottom: 6px;
+  border-bottom: 1px dashed var(--border-color); /* Softer border for section titles */
+  color: var(--heading-color);
 }
 
 .provider-subsection {
-  margin-bottom: 15px;
-  padding: 10px;
-  background-color: var(--panel-content-bg);
+  margin-bottom: 10px; /* Reduced */
+  padding: 8px; /* Reduced */
+  background-color: var(
+    --bg-color
+  ); /* Slightly different from section for nesting */
   border-radius: 4px;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  /* box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05); */ /* Softer shadow or remove */
+  border: 1px solid var(--border-color);
+}
+
+.provider-subsection > h5 {
+  font-size: 0.9em; /* Smaller */
+  margin-top: 0;
+  margin-bottom: 8px; /* Reduced */
+  color: var(--text-color);
+  font-weight: 600;
 }
 
 .provider-row {
   display: flex;
-  gap: 10px;
-  margin-bottom: 10px;
+  gap: 8px; /* Reduced */
+  margin-bottom: 8px; /* Reduced */
   align-items: center;
 }
 
 .provider-select,
 .model-select {
   flex: 1;
-  padding: 8px 12px;
+  padding: 6px 10px; /* Reduced */
   border-radius: 4px;
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--input-border); /* Use input-border */
   background-color: var(--input-bg);
-  color: var(--text-color);
+  color: var(--input-text); /* Use input-text */
+  font-size: 0.85em; /* Smaller */
+  min-width: 120px; /* Ensure they don't get too small */
 }
 
 .fallback-container {
-  border-top: 1px solid var(--border-color);
-  margin-top: 10px;
-  padding-top: 10px;
+  border-top: 1px dashed var(--border-color); /* Softer border */
+  margin-top: 8px; /* Reduced */
+  padding-top: 8px; /* Reduced */
 }
 
-.fallback-container h5 {
+.fallback-container > h5 {
+  /* Target h5 directly inside fallback-container */
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 8px;
-  font-weight: 500;
-  color: var(--text-muted);
+  margin-top: 0;
+  margin-bottom: 8px; /* Reduced */
+  font-weight: 600; /* Bolder than subsection h5 */
+  font-size: 0.9em; /* Consistent with subsection h5 */
+  color: var(--secondary-color); /* Use secondary color for "Fallbacks" text */
 }
 
 .add-fallback-btn {
   border: none;
-  background: var(--accent-color);
-  color: white;
-  width: 24px;
-  height: 24px;
+  background: var(--primary-color);
+  color: var(--button-text);
+  width: 22px; /* Smaller */
+  height: 22px; /* Smaller */
   border-radius: 50%;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
   transition: all 0.2s;
+  font-size: 0.8em; /* For icon inside if any */
 }
 
 .add-fallback-btn:hover {
-  background: var(--accent-hover);
+  background: var(--button-hover-bg); /* Use standard button hover */
   transform: scale(1.05);
 }
 
 .fallback-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px; /* Reduced */
   margin-top: 5px;
 }
 
 .fallback-item {
   display: flex;
-  gap: 8px;
+  gap: 6px; /* Reduced */
   align-items: center;
-  background-color: var(--panel-content-bg);
+  background-color: var(--bg-color); /* Match subsection bg */
   border-radius: 4px;
-  padding: 8px;
+  padding: 6px 8px; /* Reduced */
   border: 1px solid var(--border-color);
+}
+
+.fallback-item .provider-select,
+.fallback-item .model-select {
+  font-size: 0.8em; /* Even smaller for fallback items */
+  padding: 4px 8px;
 }
 
 .fallback-controls {
@@ -1974,46 +2023,64 @@ body {
 .fallback-move-btn,
 .fallback-remove-btn {
   border: none;
-  background: var(--panel-bg);
+  background: var(--container-bg); /* Slightly different from item bg */
   color: var(--text-color);
-  width: 24px;
-  height: 24px;
+  width: 22px; /* Smaller */
+  height: 22px; /* Smaller */
   border-radius: 4px;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
   transition: all 0.2s;
+  font-size: 0.8em; /* For icon */
+  border: 1px solid var(--border-color);
 }
 
 .fallback-move-btn:hover {
-  background: var(--button-bg);
+  background: var(--button-hover-bg);
+  color: var(--button-text);
 }
 
 .fallback-remove-btn {
-  color: var(--danger-color);
+  color: var(--error-color); /* Use error color */
 }
 
 .fallback-remove-btn:hover {
-  background: var(--danger-color);
-  color: white;
+  background: var(--error-color); /* Use error color */
+  color: var(--button-text); /* Ensure contrast */
 }
 
 #save-providers-btn {
-  margin-top: 15px;
-  padding: 10px 15px;
-  background-color: var(--accent-color);
-  color: white;
+  margin-top: 15px; /* Keep some space before save */
+  padding: 8px 15px; /* Reduced */
+  background-color: var(--success-color); /* Use success color for save */
+  color: var(--button-text);
   border: none;
-  border-radius: 4px;
+  border-radius: 5px;
   cursor: pointer;
   font-weight: 500;
   transition: background-color 0.2s;
   width: 100%;
+  font-size: 0.9em; /* Reduced */
+  box-shadow: var(--button-shadow), var(--button-inset-shadow);
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.2);
 }
 
 #save-providers-btn:hover {
-  background-color: var(--accent-hover);
+  background-color: color-mix(
+    in srgb,
+    var(--success-color) 90%,
+    #000 10%
+  ); /* Darken success */
+  box-shadow: var(--button-hover-shadow), var(--button-inset-shadow);
+  transform: translateY(-1px);
+}
+
+#save-providers-btn:active {
+  background-color: color-mix(in srgb, var(--success-color) 80%, #000 20%);
+  box-shadow: var(--button-active-shadow);
+  transform: translateY(1px);
 }
 
 /* Notification styles */
