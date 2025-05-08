@@ -1,313 +1,336 @@
 {
-  "mcp_api": "http://localhost:7860",
-  "web_port": 7860,
-  "log_file": "logs/mcp.log",
-  "ai1_max_concurrent_tasks": 30,
-  "target": "Create a modern web-based Tetris game using a contemporary JavaScript framework (React/Vue/Svelte) with the following features:  \n\n1. **Visual Design:**  \n   - Neon/cyberpunk style with gradients  \n   - Particle effects when clearing lines  \n   - Smooth rotation animations with a \"slicing\" effect  \n   - WebGL shader effects for dynamic backgrounds  \n   - Fluid transitions between game states  \n\n2. **Gameplay Mechanics:**  \n   - Classic Tetris rules with modern enhancements:  \n     * Hold piece functionality  \n     * Ghost piece preview  \n     * Next-piece display (3 upcoming pieces)  \n   - Realistic falling physics  \n   - 5 difficulty levels with progressive speed increase  \n\n3. **Technical Requirements:**  \n   - Use Three.js or PixiJS for advanced graphics  \n   - Implement animations with GSAP  \n   - Integrate Howler.js for immersive 3D sound  \n   - Optimize for all screen sizes (responsive design)  \n   - Offload heavy computations to Web Workers  \n\n4. **Extra Features:**  \n   - Combo system (bonus points for consecutive line clears)  \n   - Screen shake effects for big combos  \n   - Optional multiplayer via WebSockets  \n   - Leaderboard with cloud sync  \n\n5. **Expected Deliverables:**  \n   - Fully commented source code  \n   - Visually appealing UI/UX  \n   - Responsive & performant (60fps)  \n   - Unique creative elements while preserving classic gameplay  \n\nAdd creative touches to make this Tetris version stand out, such as:  \n- 3D block effects (using react-three-fiber if React is chosen)  \n- Tailwind CSS + SASS for styling  \n- Subtle block deformation on landing  \n- CRT-style scanline effects  \n- Multiple themes (light/dark/neon)  \n\nEnsure the game feels modern, fast, and visually impressive while keeping the core Tetris experience intact. Use cutting-edge web technologies to maximize the \"wow\" factor.",
-  "confidence_threshold": {
-    "tests_passed": 0.5,
-    "syntax_score": 0.3,
-    "readability": 0.2,
-    "coverage": 0.3
-  },
-  "metrics_by_role": {
-    "executor": [
-      "syntax_score",
-      "readability"
+    "mcp_api": "http://localhost:7860",
+    "web_port": 7860,
+    "log_file": "logs/mcp.log",
+    "ai1_max_concurrent_tasks": 30,
+    "target": "Create a modern web-based Tetris game using a contemporary JavaScript framework (React/Vue/Svelte) with the following features:  \n\n1. **Visual Design:**  \n   - Neon/cyberpunk style with gradients  \n   - Particle effects when clearing lines  \n   - Smooth rotation animations with a \"slicing\" effect  \n   - WebGL shader effects for dynamic backgrounds  \n   - Fluid transitions between game states  \n\n2. **Gameplay Mechanics:**  \n   - Classic Tetris rules with modern enhancements:  \n     * Hold piece functionality  \n     * Ghost piece preview  \n     * Next-piece display (3 upcoming pieces)  \n   - Realistic falling physics  \n   - 5 difficulty levels with progressive speed increase  \n\n3. **Technical Requirements:**  \n   - Use Three.js or PixiJS for advanced graphics  \n   - Implement animations with GSAP  \n   - Integrate Howler.js for immersive 3D sound  \n   - Optimize for all screen sizes (responsive design)  \n   - Offload heavy computations to Web Workers  \n\n4. **Extra Features:**  \n   - Combo system (bonus points for consecutive line clears)  \n   - Screen shake effects for big combos  \n   - Optional multiplayer via WebSockets  \n   - Leaderboard with cloud sync  \n\n5. **Expected Deliverables:**  \n   - Fully commented source code  \n   - Visually appealing UI/UX  \n   - Responsive & performant (60fps)  \n   - Unique creative elements while preserving classic gameplay  \n\nAdd creative touches to make this Tetris version stand out, such as:  \n- 3D block effects (using react-three-fiber if React is chosen)  \n- Tailwind CSS + SASS for styling  \n- Subtle block deformation on landing  \n- CRT-style scanline effects  \n- Multiple themes (light/dark/neon)  \n\nEnsure the game feels modern, fast, and visually impressive while keeping the core Tetris experience intact. Use cutting-edge web technologies to maximize the \"wow\" factor.",
+    "confidence_threshold": {
+        "tests_passed": 0.5,
+        "syntax_score": 0.3,
+        "readability": 0.2,
+        "coverage": 0.3
+    },
+    "metrics_by_role": {
+        "executor": [
+            "syntax_score",
+            "readability"
+        ],
+        "tester": [
+            "tests_passed",
+            "coverage"
+        ],
+        "documenter": [
+            "readability"
+        ]
+    },
+    "ai1_prompt": "Your goal is {target}. You are the main curator (AI1), the only one who makes all key decisions to create a working product. The development process is divided into three stages and must run in a continuous loop until completed. NEVER STOP AFTER RECEIVING THE STRUCTURE. ALWAYS CONTINUE TO THE NEXT STEP.\\n\\n**Stage 1**: First, you must align the project structure with AI3 through debates and discussions to determine the best file structure. Once the structure is agreed upon, it is put into action, and only then are the files created once. Changes to the structure are possible only in critical moments at your discretion.\\n\\n**Stage 2**: After the files are created, you MUST IMMEDIATELY create subtasks for EACH FILE in the structure and distribute these subtasks to AI2 to generate code, tests, or documentation. First, create executor subtasks for all files. After receiving implementation for a file, create tester and documenter subtasks for the same file.\\n\\n**Stage 3**: Analyze reports from AI2 and ensure AI3 updates the files with the latest content. Assign testing subtasks to AI2, analyze test results (including recommendations from AI3), and make adjustments until the product is complete. **You will also receive monitoring reports (about errors, worker status, queue load) and detailed test analysis from AI3 via collaboration; use this information proactively to prioritize tasks, request fixes, and manage the development flow.** The final decision is always yours.\\n\\nWhen generating subtasks, specify the role as one of: executor, tester, or documenter. For example:\\nSubtask text: Implement the main logic\\nRole: executor\\nFile: main.py\\nOnly these roles are allowed.\\n\\nCONTINUOUSLY MONITOR status and create new subtasks until ALL FILES are implemented, tested and documented.",
+    "ai2_prompts": [
+        "You are an expert programmer. Create the content for the file {filename} based on the following task description. If you're working with HTML, CSS, JS, or other web technologies, ensure you follow modern best practices and create responsive, well-structured code optimized for performance.",
+        "You are a testing expert. Generate unit tests for the code in file {filename}. For web technologies (HTML, CSS, JS, JSX, TSX, Vue), use appropriate testing frameworks like Jest, Testing Library, Cypress, or Playwright. For style files, create visual regression and responsive design tests. For markup, validate structure and accessibility.",
+        "You are a technical writer. Generate documentation (e.g., docstrings, comments) for the code in file {filename}. For web components and frontend code, include usage examples, prop descriptions, styling information, and responsive design considerations."
     ],
-    "tester": [
-      "tests_passed",
-      "coverage"
+    "ai3_prompt": "Your primary role is to establish the foundational structure for the project based on the target: \\\"{target}\\\". Generate a comprehensive and accurate JSON structure, including all necessary directories and files with appropriate extensions (e.g., .py, .js, .html, .css, .ts, .tsx, .md, Dockerfile, requirements.txt, etc.). Consider common project layouts and best practices for the specified technologies. This initial structure is critical, as you will later monitor the development process based on it, analyze test results, check logs, and report issues related to these files back to AI1. Ensure the structure is logical and complete.",
+    "supported_file_extensions": [
+        ".py",
+        ".js",
+        ".ts",
+        ".java",
+        ".cpp",
+        ".hpp",
+        ".go",
+        ".rs",
+        ".php",
+        ".html",
+        ".htm",
+        ".css",
+        ".scss",
+        ".sass",
+        ".less",
+        ".jsx",
+        ".tsx",
+        ".vue",
+        ".svelte",
+        ".json",
+        ".yaml",
+        ".yml",
+        ".md",
+        ".txt"
     ],
-    "documenter": [
-      "readability"
-    ]
-  },
-  "ai1_prompt": "Your goal is {target}. You are the main curator (AI1), the only one who makes all key decisions to create a working product. The development process is divided into three stages and must run in a continuous loop until completed. NEVER STOP AFTER RECEIVING THE STRUCTURE. ALWAYS CONTINUE TO THE NEXT STEP.\\n\\n**Stage 1**: First, you must align the project structure with AI3 through debates and discussions to determine the best file structure. Once the structure is agreed upon, it is put into action, and only then are the files created once. Changes to the structure are possible only in critical moments at your discretion.\\n\\n**Stage 2**: After the files are created, you MUST IMMEDIATELY create subtasks for EACH FILE in the structure and distribute these subtasks to AI2 to generate code, tests, or documentation. First, create executor subtasks for all files. After receiving implementation for a file, create tester and documenter subtasks for the same file.\\n\\n**Stage 3**: Analyze reports from AI2 and ensure AI3 updates the files with the latest content. Assign testing subtasks to AI2, analyze test results (including recommendations from AI3), and make adjustments until the product is complete. **You will also receive monitoring reports (about errors, worker status, queue load) and detailed test analysis from AI3 via collaboration; use this information proactively to prioritize tasks, request fixes, and manage the development flow.** The final decision is always yours.\\n\\nWhen generating subtasks, specify the role as one of: executor, tester, or documenter. For example:\\nSubtask text: Implement the main logic\\nRole: executor\\nFile: main.py\\nOnly these roles are allowed.\\n\\nCONTINUOUSLY MONITOR status and create new subtasks until ALL FILES are implemented, tested and documented.",
-  "ai2_prompts": [
-    "You are an expert programmer. Create the content for the file {filename} based on the following task description. If you're working with HTML, CSS, JS, or other web technologies, ensure you follow modern best practices and create responsive, well-structured code optimized for performance.",
-    "You are a testing expert. Generate unit tests for the code in file {filename}. For web technologies (HTML, CSS, JS, JSX, TSX, Vue), use appropriate testing frameworks like Jest, Testing Library, Cypress, or Playwright. For style files, create visual regression and responsive design tests. For markup, validate structure and accessibility.",
-    "You are a technical writer. Generate documentation (e.g., docstrings, comments) for the code in file {filename}. For web components and frontend code, include usage examples, prop descriptions, styling information, and responsive design considerations."
-  ],
-  "ai3_prompt": "Your primary role is to establish the foundational structure for the project based on the target: \\\"{target}\\\". Generate a comprehensive and accurate JSON structure, including all necessary directories and files with appropriate extensions (e.g., .py, .js, .html, .css, .ts, .tsx, .md, Dockerfile, requirements.txt, etc.). Consider common project layouts and best practices for the specified technologies. This initial structure is critical, as you will later monitor the development process based on it, analyze test results, check logs, and report issues related to these files back to AI1. Ensure the structure is logical and complete.",
-  "supported_file_extensions": [
-    ".py",
-    ".js",
-    ".ts",
-    ".java",
-    ".cpp",
-    ".hpp",
-    ".go",
-    ".rs",
-    ".php",
-    ".html",
-    ".htm",
-    ".css",
-    ".scss",
-    ".sass",
-    ".less",
-    ".jsx",
-    ".tsx",
-    ".vue",
-    ".svelte",
-    ".json",
-    ".yaml",
-    ".yml",
-    ".md",
-    ".txt"
-  ],
-  "ai_config": {
-    "ai1": {
-      "providers": [],
-      "model": "mistral:latest",
-      "max_tokens": 2048,
-      "temperature": 0.7,
-      "provider": "ollama"
-    },
-    "ai2": {
-      "providers": {
-        "executor": [],
-        "tester": [],
-        "documenter": []
-      },
-      "max_tokens": 2048,
-      "temperature": 0.4
-    },
-    "ai3": {
-      "providers": [],
-      "structure_providers": [
-        "structure_fallback",
-        "codestral2",
-        "gemini"
-      ],
-      "model": "mistral:latest",
-      "max_tokens": 2048,
-      "temperature": 0.7
-    }
-  },
-  "providers": {
-    "ollama": {
-      "type": "ollama",
-      "endpoint": "http://host.docker.internal:11434",
-      "model": "qwen2.5:1.5b"
-    },
-    "ollama1": {
-      "type": "ollama",
-      "endpoint": "http://46.219.108.236:11434",
-      "model": "llama3.2:latest"
-    },
-    "codestral": {
-      "type": "codestral",
-      "endpoint": "https://codestral.mistral.ai/v1",
-      "model": "codestral-latest"
-    },
-    "codestral2": {
-      "type": "codestral",
-      "endpoint": "https://codestral.mistral.ai/v1",
-      "model": "codestral-latest"
-    },
-    "gemini": {
-      "type": "gemini",
-      "model": "gemini-1.5-flash"
-    },
-    "gemini-pro2.5": {
-      "type": "gemini",
-      "model": "gemini-2.5-pro-preview-03-25"
-    },
-    "gemini3": {
-      "type": "gemini3",
-      "model": "gemini-2.0-flash"
-    },
-    "gemini4": {
-      "type": "gemini4",
-      "model": "gemini-2.0-pro"
-    },
-    "cohere": {
-      "type": "cohere",
-      "endpoint": null,
-      "model": "command-r"
-    },
-    "groq": {
-      "type": "groq",
-      "endpoint": null,
-      "model": "llama3-70b-8192"
-    },
-    "together": {
-      "type": "together",
-      "endpoint": null,
-      "model": "mistralai/Mixtral-8x7B-Instruct-v0.1"
-    },
-    "together-maverick": {
-      "type": "together",
-      "endpoint": null,
-      "model": "meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8"
-    },
-    "openrouter": {
-      "type": "openrouter",
-      "endpoint": "https://openrouter.ai/api/v1",
-      "model": "anthropic/claude-3-opus",
-      "max_tokens": 1024
-    },
-    "openrouter-qwen": {
-      "type": "openrouter",
-      "endpoint": "https://openrouter.ai/api/v1",
-      "model": "qwen/qwen-2.5-coder-32b-instruct",
-      "max_tokens": 1024
-    },
-    "openrouter-qwen-2": {
-      "type": "openrouter",
-      "endpoint": "https://openrouter.ai/api/v1",
-      "model": "anthropic/claude-3-sonnet",
-      "max_tokens": 1024
-    },
-    "openrouter-gemini": {
-      "type": "openrouter",
-      "endpoint": "https://openrouter.ai/api/v1",
-      "model": "google/gemini-pro-1.5",
-      "max_tokens": 1024
-    },
-    "executor_fallback": {
-      "type": "fallback",
-      "providers": [
-        {
-          "type": "codestral",
-          "model": "codestral-latest"
+    "ai_config": {
+        "ai1": {
+            "providers": [
+                "ollama"
+            ],
+            "model": "mistral:latest",
+            "max_tokens": 2048,
+            "temperature": 0.7,
+            "provider": "ollama"
         },
-        {
-          "type": "groq",
-          "model": "llama3-70b-8192"
+        "ai2": {
+            "providers": {
+                "executor": [
+                    "ollama"
+                ],
+                "tester": [
+                    "ollama"
+                ],
+                "documenter": [
+                    "ollama"
+                ]
+            },
+            "max_tokens": 2048,
+            "temperature": 0.4,
+            "executor": {
+                "provider": "ollama",
+                "model": "mistral:latest"
+            },
+            "tester": {
+                "provider": "ollama",
+                "model": "mistral:latest"
+            },
+            "documenter": {
+                "provider": "ollama",
+                "model": "mistral:latest"
+            }
         },
-        {
-          "type": "gemini3",
-          "model": "gemini-2.0-flash"
-        },
-        {
-          "type": "ollama",
-          "model": "qwen3:latest"
+        "ai3": {
+            "providers": [
+                "ollama1"
+            ],
+            "structure_providers": [
+                "structure_fallback",
+                "codestral2",
+                "gemini"
+            ],
+            "model": "llama3.2:latest",
+            "max_tokens": 2048,
+            "temperature": 0.7,
+            "provider": "ollama1"
         }
-      ]
     },
-    "tester_fallback": {
-      "type": "fallback",
-      "providers": [
-        {
-          "type": "codestral",
-          "model": "codestral-latest"
+    "providers": {
+        "ollama": {
+            "type": "ollama",
+            "endpoint": "http://host.docker.internal:11434",
+            "model": "qwen2.5:1.5b"
         },
-        {
-          "type": "groq",
-          "model": "llama3-70b-8192"
+        "ollama1": {
+            "type": "ollama",
+            "endpoint": "http://46.219.108.236:11434",
+            "model": "llama3.2:latest"
         },
-        {
-          "type": "gemini",
-          "model": "gemini-1.5-flash"
+        "codestral": {
+            "type": "codestral",
+            "endpoint": "https://codestral.mistral.ai/v1",
+            "model": "codestral-latest"
+        },
+        "codestral2": {
+            "type": "codestral",
+            "endpoint": "https://codestral.mistral.ai/v1",
+            "model": "codestral-latest"
+        },
+        "gemini": {
+            "type": "gemini",
+            "model": "gemini-1.5-flash"
+        },
+        "gemini-pro2.5": {
+            "type": "gemini",
+            "model": "gemini-2.5-pro-preview-03-25"
+        },
+        "gemini3": {
+            "type": "gemini3",
+            "model": "gemini-2.0-flash"
+        },
+        "gemini4": {
+            "type": "gemini4",
+            "model": "gemini-2.0-pro"
+        },
+        "cohere": {
+            "type": "cohere",
+            "endpoint": null,
+            "model": "command-r"
+        },
+        "groq": {
+            "type": "groq",
+            "endpoint": null,
+            "model": "llama3-70b-8192"
+        },
+        "together": {
+            "type": "together",
+            "endpoint": null,
+            "model": "mistralai/Mixtral-8x7B-Instruct-v0.1"
+        },
+        "together-maverick": {
+            "type": "together",
+            "endpoint": null,
+            "model": "meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8"
+        },
+        "openrouter": {
+            "type": "openrouter",
+            "endpoint": "https://openrouter.ai/api/v1",
+            "model": "anthropic/claude-3-opus",
+            "max_tokens": 1024
+        },
+        "openrouter-qwen": {
+            "type": "openrouter",
+            "endpoint": "https://openrouter.ai/api/v1",
+            "model": "qwen/qwen-2.5-coder-32b-instruct",
+            "max_tokens": 1024
+        },
+        "openrouter-qwen-2": {
+            "type": "openrouter",
+            "endpoint": "https://openrouter.ai/api/v1",
+            "model": "anthropic/claude-3-sonnet",
+            "max_tokens": 1024
+        },
+        "openrouter-gemini": {
+            "type": "openrouter",
+            "endpoint": "https://openrouter.ai/api/v1",
+            "model": "google/gemini-pro-1.5",
+            "max_tokens": 1024
+        },
+        "executor_fallback": {
+            "type": "fallback",
+            "providers": [
+                {
+                    "type": "codestral",
+                    "model": "codestral-latest"
+                },
+                {
+                    "type": "groq",
+                    "model": "llama3-70b-8192"
+                },
+                {
+                    "type": "gemini3",
+                    "model": "gemini-2.0-flash"
+                },
+                {
+                    "type": "ollama",
+                    "model": "qwen3:latest"
+                }
+            ]
+        },
+        "tester_fallback": {
+            "type": "fallback",
+            "providers": [
+                {
+                    "type": "codestral",
+                    "model": "codestral-latest"
+                },
+                {
+                    "type": "groq",
+                    "model": "llama3-70b-8192"
+                },
+                {
+                    "type": "gemini",
+                    "model": "gemini-1.5-flash"
+                }
+            ]
+        },
+        "documenter_fallback": {
+            "type": "fallback",
+            "providers": [
+                {
+                    "type": "codestral2",
+                    "model": "codestral-latest"
+                },
+                {
+                    "type": "gemini4",
+                    "model": "gemini-2.0-pro"
+                },
+                {
+                    "type": "cohere",
+                    "model": "command-r"
+                }
+            ]
+        },
+        "ai1_fallback": {
+            "type": "fallback",
+            "providers": [
+                {
+                    "type": "ollama",
+                    "model": "qwen3:latest"
+                },
+                {
+                    "type": "openrouter-qwen",
+                    "model": "qwen/qwen-2.5-coder-32b-instruct"
+                },
+                {
+                    "type": "gemini3",
+                    "model": "gemini-2.0-flash"
+                }
+            ]
+        },
+        "ai3_fallback": {
+            "type": "fallback",
+            "providers": [
+                {
+                    "type": "ollama1",
+                    "model": "llama3.2:latest"
+                },
+                {
+                    "type": "openrouter-qwen",
+                    "model": "qwen/qwen-2.5-coder-32b-instruct"
+                },
+                {
+                    "type": "together",
+                    "model": "mistralai/Mixtral-8x7B-Instruct-v0.1"
+                }
+            ]
+        },
+        "structure_fallback": {
+            "type": "fallback",
+            "providers": [
+                {
+                    "type": "codestral2",
+                    "model": "codestral-latest"
+                },
+                {
+                    "type": "gemini",
+                    "model": "gemini-1.5-flash"
+                },
+                {
+                    "type": "ollama1",
+                    "model": "llama3.2:latest"
+                }
+            ]
         }
-      ]
     },
-    "documenter_fallback": {
-      "type": "fallback",
-      "providers": [
-        {
-          "type": "codestral2",
-          "model": "codestral-latest"
+    "request_delays": {
+        "ai1": {
+            "min": 1.0,
+            "max": 2.0
         },
-        {
-          "type": "gemini4",
-          "model": "gemini-2.0-pro"
+        "ai2": {
+            "executor": {
+                "min": 1.5,
+                "max": 3.0
+            },
+            "tester": {
+                "min": 1.5,
+                "max": 3.0
+            },
+            "documenter": {
+                "min": 1.5,
+                "max": 3.0
+            }
         },
-        {
-          "type": "cohere",
-          "model": "command-r"
+        "ai3": {
+            "min": 1.5,
+            "max": 3.0
         }
-      ]
     },
-    "ai1_fallback": {
-      "type": "fallback",
-      "providers": [
-        {
-          "type": "ollama",
-          "model": "qwen3:latest"
-        },
-        {
-          "type": "openrouter-qwen",
-          "model": "qwen/qwen-2.5-coder-32b-instruct"
-        },
-        {
-          "type": "gemini3",
-          "model": "gemini-2.0-flash"
-        }
-      ]
+    "error_handling": {
+        "quota_exceeded_retry_delay": 60,
+        "max_provider_retries": 3,
+        "fallback_enabled": true
     },
-    "ai3_fallback": {
-      "type": "fallback",
-      "providers": [
-        {
-          "type": "ollama1",
-          "model": "llama3.2:latest"
-        },
-        {
-          "type": "openrouter-qwen",
-          "model": "qwen/qwen-2.5-coder-32b-instruct"
-        },
-        {
-          "type": "together",
-          "model": "mistralai/Mixtral-8x7B-Instruct-v0.1"
-        }
-      ]
-    },
-    "structure_fallback": {
-      "type": "fallback",
-      "providers": [
-        {
-          "type": "codestral2",
-          "model": "codestral-latest"
-        },
-        {
-          "type": "gemini",
-          "model": "gemini-1.5-flash"
-        },
-        {
-          "type": "ollama1",
-          "model": "llama3.2:latest"
-        }
-      ]
-    }
-  },
-  "request_delays": {
-    "ai1": {
-      "min": 1.0,
-      "max": 2.0
-    },
-    "ai2": {
-      "executor": {
-        "min": 1.5,
-        "max": 3.0
-      },
-      "tester": {
-        "min": 1.5,
-        "max": 3.0
-      },
-      "documenter": {
-        "min": 1.5,
-        "max": 3.0
-      }
-    },
-    "ai3": {
-      "min": 1.5,
-      "max": 3.0
-    }
-  },
-  "error_handling": {
-    "quota_exceeded_retry_delay": 60,
-    "max_provider_retries": 3,
-    "fallback_enabled": true
-  },
-  "desired_active_buffer": 20,
-  "ai1_desired_active_buffer": 10,
-  "ai1_active_sleep_interval": 3,
-  "ai1_pending_sleep_interval": 5,
-  "ai1_idle_sleep_interval": 10,
-  "github_repo": "oleg121203/AI-SYSTEMS-REPO",
-  "github_actions_check_interval": 60,
-  "system_load_level": 2
+    "desired_active_buffer": 20,
+    "ai1_desired_active_buffer": 10,
+    "ai1_active_sleep_interval": 3,
+    "ai1_pending_sleep_interval": 5,
+    "ai1_idle_sleep_interval": 10,
+    "github_repo": "oleg121203/AI-SYSTEMS-REPO",
+    "github_actions_check_interval": 60,
+    "system_load_level": 2
 }

@@ -208,7 +208,9 @@ class ProviderFactory:
 
     @staticmethod
     def create_provider(
-        provider_name: str, config_arg: Optional[Dict[str, Any]] = None
+        provider_name: str,
+        config_arg: Optional[Dict[str, Any]] = None,
+        session: Optional[Any] = None,
     ) -> "BaseProvider":
         """
         Создает экземпляр провайдера AI по имени.
@@ -218,6 +220,7 @@ class ProviderFactory:
                            или прямое название типа провайдера
             config_arg: Дополнительная конфигурация для провайдера (необязательно),
                         будет объединена с конфигурацией из файла.
+            session: Optional session object (ignored, for backward compatibility)
 
         Returns:
             BaseProvider: Экземпляр провайдера
@@ -1608,7 +1611,6 @@ class GeminiProvider(BaseProvider):
 
             model_instance = self.genai.GenerativeModel(
                 model_name=model_name,
-                safety_settings=safety_settings,
                 generation_config=generation_config,  # Pass base config here
             )
             return model_instance
@@ -1634,7 +1636,7 @@ class GeminiProvider(BaseProvider):
             return "Ошибка генерации: провайдер Gemini не настроен."
 
         # Default to gemini-1.5-flash-latest if no model specified
-        model_to_use = model or self.get_default_model() or "gemini-1.5-flash-latest"
+        model_to_use = model or self.get_default_model() or "gemini-1.5-flash"
 
         try:
             model_instance = self.get_model(model_to_use)
@@ -1646,63 +1648,62 @@ class GeminiProvider(BaseProvider):
             if max_tokens is not None:
                 gen_config_overrides["max_output_tokens"] = max_tokens
 
-            # Combine system prompt and user prompt
-            # Gemini SDK can take system instruction directly in generate_content
-            current_contents = []
+            # Set up the generation config if needed
+            generation_config = None
+            if gen_config_overrides:
+                generation_config = self.genai.GenerationConfig(**gen_config_overrides)
+
+            # Prepare messages
+            messages = []
+
+            # Add system prompt if provided (as user message with special prefix)
             if system_prompt:
-                # Create a Content object for the system prompt.
-                # Using role="system" as was intended by system_instruction_param.
-                # If Gemini API strictly requires "user" or "model" for all `contents` items
-                # (except for a specific `system_instruction` on the Model object itself),
-                # this might need adjustment to role="user" or by setting it on the model.
-                # For now, this directly replaces the problematic kwarg.
-                current_contents.append(
-                    self.genai.types.Content(
-                        parts=[self.genai.types.Part(text=system_prompt)], role="system"
-                    )
+                messages.append(
+                    {
+                        "role": "user",
+                        "parts": [
+                            {"text": f"<<SYSTEM>>\n{system_prompt}\n<</SYSTEM>>"}
+                        ],
+                    }
                 )
 
-            # Add the main user prompt as a Content object
-            current_contents.append(
-                self.genai.types.Content(
-                    parts=[self.genai.types.Part(text=prompt)], role="user"
-                )
-            )
+            # Add user prompt
+            messages.append({"role": "user", "parts": [{"text": prompt}]})
 
+            # Generate content
             response = await model_instance.generate_content_async(
-                contents=current_contents,
-                generation_config=(
-                    self.genai.types.GenerationConfig(**gen_config_overrides)
-                    if gen_config_overrides
-                    else None
-                ),
-                # system_instruction keyword argument removed as it caused TypeError
+                messages, generation_config=generation_config
             )
 
-            # Extract text, handling potential blocks or errors
-            if response and hasattr(response, "text"):
+            # Extract text from response
+            if hasattr(response, "text"):
                 return response.text
-            elif response and hasattr(response, "parts"):
-                # If response has parts, concatenate their text
-                return "".join(
-                    part.text for part in response.parts if hasattr(part, "text")
-                )
-            elif (
-                response
-                and response.prompt_feedback
-                and response.prompt_feedback.block_reason
-            ):
-                # Handle blocked prompts
-                reason = response.prompt_feedback.block_reason
-                logger.warning(
-                    f"Запрос к Gemini ({model_to_use}) был заблокирован: {reason}"
-                )
-                return f"Ошибка генерации: Запрос заблокирован ({reason})."
-            else:
-                logger.warning(
-                    f"Ответ от Gemini ({model_to_use}) не содержит ожидаемого текста: {response}"
-                )
-                return "Ошибка генерации: Не получен корректный текстовый ответ от Gemini API."
+
+            # Alternative way to extract text
+            if hasattr(response, "candidates") and response.candidates:
+                for candidate in response.candidates:
+                    if hasattr(candidate, "content") and candidate.content:
+                        if hasattr(candidate.content, "parts"):
+                            return "".join(
+                                part.text
+                                for part in candidate.content.parts
+                                if hasattr(part, "text")
+                            )
+
+            # Fallback for structure extraction
+            if isinstance(response, dict):
+                if "candidates" in response and len(response["candidates"]) > 0:
+                    candidate = response["candidates"][0]
+                    if "content" in candidate and "parts" in candidate["content"]:
+                        return "".join(
+                            part.get("text", "")
+                            for part in candidate["content"]["parts"]
+                        )
+
+            logger.warning(f"Ответ от Gemini не содержит ожидаемого текста: {response}")
+            return (
+                "Ошибка генерации: Не получен корректный текстовый ответ от Gemini API."
+            )
 
         except Exception as e:
             # Catch potential API errors or other issues
@@ -2492,59 +2493,80 @@ class FallbackProvider(BaseProvider):
         provider_chain = ", ".join([p.name for p in self.providers])
         logger.info(f"Attempting generation with fallback chain: {provider_chain}")
 
-        for i, provider in enumerate(self.providers):
-            try:
-                logger.info(
-                    f"Trying provider {i+1}/{len(self.providers)}: {provider.name}"
-                )
+        # Create a list to track opened sessions that might need cleanup
+        sessions_to_close = []
 
-                # Get provider-specific model if needed
-                provider_model = model
-                if not provider_model and ":" in (model or ""):
-                    parts = model.split(":", 1)
-                    if parts[0] == provider.name:
-                        provider_model = parts[1]
+        try:
+            for i, provider in enumerate(self.providers):
+                try:
+                    logger.info(
+                        f"Trying provider {i+1}/{len(self.providers)}: {provider.name}"
+                    )
 
-                result = await provider.generate(
-                    prompt=prompt,
-                    system_prompt=system_prompt,
-                    model=provider_model or provider.get_default_model(),
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                )
+                    # Get provider-specific model if needed
+                    provider_model = model
+                    if not provider_model and ":" in (model or ""):
+                        parts = model.split(":", 1)
+                        if parts[0] == provider.name:
+                            provider_model = parts[1]
 
-                # Check for specific error patterns that indicate we should try fallback
-                error_patterns = [
-                    "Generation error: Codestral API request limit exceeded (429)",
-                    "Error (Groq API 429)",
-                    "Request timed out",
-                    "rate limit",
-                    "capacity",
-                    "overloaded",
-                    "API Error",
-                    "Ошибка генерации:",
-                    "Error generating",
-                    "failed after",
-                    "Too Many Requests",
-                ]
+                    result = await provider.generate(
+                        prompt=prompt,
+                        system_prompt=system_prompt,
+                        model=provider_model or provider.get_default_model(),
+                        max_tokens=max_tokens,
+                        temperature=temperature,
+                    )
 
-                if any(pattern.lower() in result.lower() for pattern in error_patterns):
-                    logger.warning(f"Provider {provider.name} returned error: {result}")
-                    errors.append(f"{provider.name}: {result}")
-                    continue
+                    # Check for specific error patterns that indicate we should try fallback
+                    error_patterns = [
+                        "Generation error: Codestral API request limit exceeded (429)",
+                        "Error (Groq API 429)",
+                        "Request timed out",
+                        "rate limit",
+                        "capacity",
+                        "overloaded",
+                        "API Error",
+                        "Ошибка генерации:",
+                        "Error generating",
+                        "failed after",
+                        "Too Many Requests",
+                    ]
 
-                # If we get here, the provider returned a valid result
-                logger.info(f"Provider {provider.name} succeeded")
-                return result
+                    if any(
+                        pattern.lower() in result.lower() for pattern in error_patterns
+                    ):
+                        logger.warning(
+                            f"Provider {provider.name} returned error: {result}"
+                        )
+                        errors.append(f"{provider.name}: {result}")
+                        # Add provider to sessions that might need cleanup
+                        sessions_to_close.append(provider)
+                        continue
 
-            except Exception as e:
-                logger.error(f"Error with provider {provider.name}: {e}")
-                errors.append(f"{provider.name}: {str(e)}")
+                    # If we get here, the provider returned a valid result
+                    logger.info(f"Provider {provider.name} succeeded")
+                    return result
 
-        # If we get here, all providers failed
-        error_report = "\n".join(errors)
-        logger.error(f"All fallback providers failed:\n{error_report}")
-        return f"All providers failed. Please check the provider configuration or try again later.\nErrors:\n{error_report}"
+                except Exception as e:
+                    logger.error(f"Error with provider {provider.name}: {e}")
+                    errors.append(f"{provider.name}: {str(e)}")
+                    # Add provider to sessions that might need cleanup
+                    sessions_to_close.append(provider)
+
+            # If we get here, all providers failed
+            error_report = "\n".join(errors)
+            logger.error(f"All fallback providers failed:\n{error_report}")
+            return f"All providers failed. Please check the provider configuration or try again later.\nErrors:\n{error_report}"
+        finally:
+            # Ensure we clean up any sessions created by providers
+            for provider in sessions_to_close:
+                try:
+                    await provider.close_session()
+                except Exception as e:
+                    logger.error(
+                        f"Error closing session for provider {provider.name}: {e}"
+                    )
 
     async def get_available_models(self) -> List[str]:
         """Get a list of available models from all providers."""
@@ -2575,6 +2597,11 @@ class FallbackProvider(BaseProvider):
                 await provider.close_session()
             except Exception as e:
                 logger.error(f"Error closing session for provider {provider.name}: {e}")
+
+    async def __aexit__(self, exc_type, exc, tb):
+        """Ensure all provider sessions are closed when using async with."""
+        await self.close_session()
+        await super().__aexit__(exc_type, exc, tb)
 
 
 def get_component_fallbacks(ai: str, role: Optional[str] = None) -> List[Dict]:

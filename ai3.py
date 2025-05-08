@@ -365,9 +365,28 @@ async def generate_structure(
             )
             continue
 
+        provider_model = merged_config_for_provider.get("model")
+
+        # Handle specific models for each provider
+        if provider_name == "structure_fallback":
+            # For fallback provider, don't specify a model so each sub-provider uses its own
+            model_to_use = None
+        elif provider_name == "codestral2":
+            # Explicitly use codestral-latest for codestral provider
+            model_to_use = "codestral-latest"
+        elif provider_name == "gemini":
+            # Explicitly use gemini-1.5-flash for gemini provider
+            model_to_use = "gemini-1.5-flash"
+        elif provider_name == "ollama1":
+            # Use the configured llama model for ollama provider
+            model_to_use = "llama3.2:latest"
+        else:
+            # For other providers, use their configured model from the provider config
+            model_to_use = provider_model
+
         initial_structure_str = await provider_instance.generate(
             prompt=prompt,
-            model=merged_config_for_provider.get("model"),
+            model=model_to_use,
             temperature=merged_config_for_provider.get("temperature", 0.5),
             max_tokens=merged_config_for_provider.get("max_tokens", 3000),
         )
