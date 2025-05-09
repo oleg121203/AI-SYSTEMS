@@ -3825,6 +3825,7 @@ async function saveProviderConfig() {
       structure_provider: document.getElementById("ai3-structure-provider")
         .value,
       structure_model: document.getElementById("ai3-structure-model").value,
+      structure_fallbacks: getFallbacksConfig("ai3-structure"), // Added this line
     },
   };
 

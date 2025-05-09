@@ -69,28 +69,28 @@
         "ai2": {
             "providers": {
                 "executor": [
-                    "codestral"
+                    "ollama"
                 ],
                 "tester": [
                     "codestral2"
                 ],
                 "documenter": [
-                    "ollama1"
+                    "groq"
                 ]
             },
             "max_tokens": 2048,
             "temperature": 0.4,
             "executor": {
-                "provider": "codestral",
-                "model": "codestral-latest"
+                "provider": "ollama",
+                "model": "qwen2.5:latest"
             },
             "tester": {
                 "provider": "codestral2",
                 "model": "codestral-latest"
             },
             "documenter": {
-                "provider": "ollama1",
-                "model": "llama3.2:latest"
+                "provider": "groq",
+                "model": "llama3-70b-8192"
             }
         },
         "ai3": {
@@ -102,12 +102,12 @@
                 "codestral2",
                 "gemini"
             ],
-            "model": "gemini-1.5-pro-latest",
+            "model": "qwen2.5:latest",
             "max_tokens": 2048,
             "temperature": 0.7,
-            "provider": "gemini-pro2.5",
-            "structure_provider": "openrouter",
-            "structure_model": "mistralai/mistral-medium-3"
+            "provider": "gemini",
+            "structure_provider": "gemini",
+            "structure_model": "codestral:codestral-latest"
         }
     },
     "providers": {

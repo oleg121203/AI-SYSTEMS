@@ -3898,10 +3898,9 @@ async def update_providers(data: dict):
                 provider_data.get("provider")
             ]
             # Add fallbacks if provided
-            if "fallbacks" in provider_data and provider_data["fallbacks"]:
-                config_data["ai_config"]["ai1"]["fallbacks"] = provider_data[
-                    "fallbacks"
-                ]
+            ai1_fallbacks = provider_data.get("fallbacks")
+            if ai1_fallbacks is not None:  # Changed condition
+                config_data["ai_config"]["ai1"]["fallbacks"] = ai1_fallbacks
 
         # Update AI2 providers if included
         if "ai2" in data:
@@ -3935,62 +3934,59 @@ async def update_providers(data: dict):
                     ]
 
                     # Add fallbacks if provided
-                    if "fallbacks" in role_data and role_data["fallbacks"]:
-                        config_data["ai_config"]["ai2"][role]["fallbacks"] = role_data[
+                    role_fallbacks = role_data.get("fallbacks")
+                    if role_fallbacks is not None:  # Changed condition
+                        config_data["ai_config"]["ai2"][role][
                             "fallbacks"
-                        ]
+                        ] = role_fallbacks
 
         # Update AI3 provider if included
         if "ai3" in data:
             provider_data = data["ai3"]
             config_data.setdefault("ai_config", {}).setdefault("ai3", {})
 
-            # First, ensure we have the provider set correctly (general AI3 provider)
+            # General AI3 provider and model
             if provider_data.get("provider") is not None:
                 config_data["ai_config"]["ai3"]["provider"] = provider_data.get(
                     "provider"
                 )
-
-            # Update model (general AI3 model)
             if provider_data.get("model") is not None:
                 config_data["ai_config"]["ai3"]["model"] = provider_data.get("model")
 
-            # Update general AI3 providers list (if used by UI for a general dropdown)
-            # config_data["ai_config"]["ai3"]["providers"] = [
-            #     provider_data.get("provider")
-            # ]
-
-            # Add fallbacks if provided (general AI3 fallbacks)
-            if "fallbacks" in provider_data and provider_data["fallbacks"]:
-                config_data["ai_config"]["ai3"]["fallbacks"] = provider_data[
-                    "fallbacks"
+            # Update general AI3 providers list for UI selection
+            if provider_data.get("provider") is not None:
+                config_data["ai_config"]["ai3"]["providers"] = [
+                    provider_data.get("provider")
                 ]
 
-            # Handle specific structure generation provider and model
-            ai3_structure_provider = provider_data.get("structure_provider")
-            ai3_structure_model = provider_data.get("structure_model")
+            # General AI3 fallbacks
+            ai3_general_fallbacks = provider_data.get("fallbacks")
+            if ai3_general_fallbacks is not None:  # Changed condition
+                config_data["ai_config"]["ai3"]["fallbacks"] = ai3_general_fallbacks
 
-            if ai3_structure_provider is not None:
-                config_data["ai_config"]["ai3"][
-                    "structure_provider"
-                ] = ai3_structure_provider
-            # else:
-            # If you want to remove the key if it's not provided or explicitly set to null by frontend:
-            # config_data["ai_config"]["ai3"].pop("structure_provider", None)
+            # AI3 Structure provider, model, and fallbacks
+            if provider_data.get("structure_provider") is not None:
+                config_data["ai_config"]["ai3"]["structure_provider"] = (
+                    provider_data.get("structure_provider")
+                )
+            if provider_data.get("structure_model") is not None:
+                config_data["ai_config"]["ai3"]["structure_model"] = provider_data.get(
+                    "structure_model"
+                )
 
-            if ai3_structure_model is not None:
-                config_data["ai_config"]["ai3"]["structure_model"] = ai3_structure_model
-            # else:
-            # config_data["ai_config"]["ai3"].pop("structure_model", None)
+            # Update AI3 structure_providers list for UI selection
+            if provider_data.get("structure_provider") is not None:
+                config_data["ai_config"]["ai3"]["structure_providers"] = [
+                    provider_data.get("structure_provider")
+                ]
 
-            # Handle structure_providers list (list of available providers for structure generation, if managed this way)
-            # This key "structure_providers" (plural) is distinct from "structure_provider" (singular, selected)
+            ai3_structure_fallbacks = provider_data.get("structure_fallbacks")
             if (
-                "structure_providers" in provider_data
-            ):  # This is if the frontend sends a list to update available options
-                config_data["ai_config"]["ai3"]["structure_providers"] = provider_data[
-                    "structure_providers"
-                ]
+                ai3_structure_fallbacks is not None
+            ):  # New section for structure_fallbacks
+                config_data["ai_config"]["ai3"][
+                    "structure_fallbacks"
+                ] = ai3_structure_fallbacks
 
         # Save the updated configuration
         try:
@@ -4120,12 +4116,11 @@ def update_ai_provider_config(config, ai, provider_data, role=None):
 
         # Add fallback providers
         for fallback in fallbacks:
-            fallback_type = fallback.get("provider")
-            fallback_model = fallback.get("model", "")
-
-            if fallback_type:
+            fallback_provider = fallback.get("provider")
+            fallback_model = fallback.get("model")
+            if fallback_provider and fallback_model:
                 provider_config["providers"].append(
-                    {"type": fallback_type, "model": fallback_model}
+                    {"type": fallback_provider, "model": fallback_model}
                 )
     else:
         # Use a single provider
