@@ -102,12 +102,12 @@
                 "codestral2",
                 "gemini"
             ],
-            "model": "codestral-latest",
+            "model": "gemini-1.5-pro-latest",
             "max_tokens": 2048,
             "temperature": 0.7,
-            "provider": "codestral",
-            "structure_provider": "structure_fallback",
-            "structure_model": "codestral-latest"
+            "provider": "gemini-pro2.5",
+            "structure_provider": "openrouter",
+            "structure_model": "mistralai/mistral-medium-3"
         }
     },
     "providers": {

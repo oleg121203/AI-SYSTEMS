@@ -52,62 +52,109 @@ DEFAULT_CODE_FIX_MODEL = "codestral-latest"  # Default model for code fixing
 
 
 def update_structure_provider_in_config(
-    config_data: Dict[str, Any], provider_name: str
+    config_data: Dict[str, Any], provider_name: str, model_name: Optional[str] = None
 ) -> None:
     """
     Updates the config.json file to save the successful structure provider.
     Also updates the in-memory config_data.
+
+    Args:
+        config_data: The current configuration data
+        provider_name: The name of the provider to set as the structure provider
+        model_name: Optional model name to use, if None will use default based on provider
     """
     try:
-        updated_config = copy.deepcopy(config_data)
-        ai_config = updated_config.setdefault("ai_config", {})
-        ai3_config = ai_config.setdefault("ai3", {})
-        ai3_config["structure_provider"] = provider_name
+        # Important: Only update the config file if we're not using a UI-selected provider
+        # Check if there's already a structure_provider in the config that was set via UI
+        ai_config = config_data.get("ai_config", {})
+        ai3_config = ai_config.get("ai3", {})
+        existing_provider = ai3_config.get("structure_provider")
 
-        model = None
-        # Simplified model selection logic, assuming provider names map to models
-        # This should ideally be more robust or data-driven from config
-        if provider_name == "codestral":  # Example, adjust as per your provider setup
-            model = "codestral-latest"
-        elif provider_name == "gemini":
-            model = "gemini-1.5-flash"  # Or other appropriate model
-        elif (
-            provider_name == "ollama"
-        ):  # Generic ollama, specific model might be needed
-            model = ai3_config.get("model", "llama3")  # Keep existing or default
-        # Add other provider-model mappings as needed
-
-        if model:
-            ai3_config["model"] = model
-
-        providers_list = ai3_config.setdefault(
-            "structure_providers", ["codestral", "gemini"]  # Default list
-        )
-        if not isinstance(providers_list, list):  # Ensure it's a list
-            providers_list = ["codestral", "gemini"]
-            ai3_config["structure_providers"] = providers_list
-
-        if provider_name in providers_list:
-            providers_list.remove(provider_name)
-        providers_list.insert(0, provider_name)
-
-        with open("config.json", "w", encoding="utf-8") as f:
-            json.dump(updated_config, f, indent=4)
-        logger.info(
-            f"[AI3] Updated config.json: provider='{provider_name}', model='{model}'"
+        # If we're in the startup process (no UI selections yet) or if provider_name
+        # matches the existing UI-selected provider, proceed with the update
+        should_update = (
+            not existing_provider
+            or provider_name == existing_provider
+            or provider_name.startswith(
+                "ollama"
+            )  # Always update Ollama providers to handle model changes
         )
 
-        # Update in-memory config_data
+        if should_update:
+            updated_config = copy.deepcopy(config_data)
+            ai_config = updated_config.setdefault("ai_config", {})
+            ai3_config = ai_config.setdefault("ai3", {})
+
+            # Save provider and model to the config
+            ai3_config["structure_provider"] = provider_name
+
+            # Determine model based on provider or use provided model_name
+            if model_name:
+                # If a specific model was provided, use it
+                ai3_config["structure_model"] = model_name
+                model = model_name
+            else:
+                # Default model selection based on provider
+                if provider_name == "codestral" or provider_name == "codestral2":
+                    model = "codestral-latest"
+                elif provider_name == "gemini" or provider_name == "gemini-pro2.5":
+                    model = "gemini-1.5-pro-latest"
+                elif provider_name.startswith("ollama"):
+                    # For Ollama, keep existing model or use default
+                    model = (
+                        ai3_config.get("saved_model")
+                        or ai3_config.get("structure_model")
+                        or ai3_config.get("model", "llama3")
+                    )
+                else:
+                    # For other providers, keep existing model if any
+                    model = ai3_config.get("structure_model") or ai3_config.get("model")
+
+            # Set the model for general use if not already set
+            if "model" not in ai3_config and model:
+                ai3_config["model"] = model
+
+            # Make sure structure_model is set
+            if "structure_model" not in ai3_config and model:
+                ai3_config["structure_model"] = model
+
+            # Update the providers list - keep the current provider at the front
+            providers_list = ai3_config.setdefault(
+                "structure_providers", ["codestral2", "structure_fallback", "gemini"]
+            )
+            if not isinstance(providers_list, list):
+                providers_list = ["codestral2", "structure_fallback", "gemini"]
+                ai3_config["structure_providers"] = providers_list
+
+            # Remove the provider if it's already in the list and add it to the front
+            if provider_name in providers_list:
+                providers_list.remove(provider_name)
+            providers_list.insert(0, provider_name)
+
+            # Write changes to disk
+            with open("config.json", "w", encoding="utf-8") as f:
+                json.dump(updated_config, f, indent=4)
+            logger.info(
+                f"[AI3] Updated config.json: provider='{provider_name}', model='{model}'"
+            )
+
+        # Always update in-memory config_data regardless of file update
         mem_ai_config = config_data.setdefault("ai_config", {})
         mem_ai3_config = mem_ai_config.setdefault("ai3", {})
         mem_ai3_config["structure_provider"] = provider_name
-        if model:
-            mem_ai3_config["model"] = model
+
+        if model_name:
+            mem_ai3_config["structure_model"] = model_name
+            # For compatibility with UI, also update the standard model field
+            if "model" not in mem_ai3_config:
+                mem_ai3_config["model"] = model_name
+
+        # Also update the providers list in memory
         mem_providers_list = mem_ai3_config.setdefault(
-            "structure_providers", ["codestral", "gemini"]
+            "structure_providers", ["codestral2", "structure_fallback", "gemini"]
         )
         if not isinstance(mem_providers_list, list):
-            mem_providers_list = ["codestral", "gemini"]
+            mem_providers_list = ["codestral2", "structure_fallback", "gemini"]
             mem_ai3_config["structure_providers"] = mem_providers_list
         if provider_name in mem_providers_list:
             mem_providers_list.remove(provider_name)
@@ -323,6 +370,7 @@ async def _get_provider_instance(
             "idea_md_provider",
             "idea_md_providers",
             "refinement_providers",
+            "saved_model",
         ]
         and not isinstance(v, (dict, list))
     }
@@ -338,41 +386,72 @@ async def _get_provider_instance(
         "name": provider_name,
     }
 
-    # First check if UI selected this provider and model - this takes priority
+    # Priority order for model selection:
+    # 1. UI selected provider and model (from web interface)
+    # 2. Special case handling (Ollama, structure_fallback, etc.)
+    # 3. Config values (from config.json)
+
+    # Check if this is the selected provider from UI and use its model
     if provider_name == ui_selected_provider and ui_selected_model:
         model_to_use = ui_selected_model
         logger.info(
             f"[AI3] Using UI selected model for {provider_name}: {model_to_use}"
         )
-    # Then check if it's an Ollama provider - always use qwen2.5:latest
-    elif provider_name == "ollama" or provider_name == "ollama1":
-        # Save the original model in the config first (if any)
-        original_model = merged_config.get("model")
-        if original_model:
-            ai3_config["saved_model"] = original_model
+
+        # Always update structure_model when we get a UI selection
+        ai3_config["structure_model"] = model_to_use
+
+        # For Ollama providers specifically, we should also update the provider's model
+        if provider_name.startswith("ollama"):
+            ai3_config["saved_model"] = model_to_use
             logger.info(
-                f"[AI3] Saved original model '{original_model}' for {provider_name}"
+                f"[AI3] Saved UI-selected model '{model_to_use}' for {provider_name}"
             )
 
-        # Then set to qwen2.5:latest
-        model_to_use = "qwen2.5:latest"
-        logger.info(
-            f"[AI3] Using qwen2.5:latest for {provider_name} provider regardless of saved configuration"
-        )
-    # Then handle special cases
+    # Special case: For Ollama, always use the selected model directly instead of overriding with qwen2.5
+    elif provider_name.startswith("ollama"):
+        # First check if we have a saved model for this provider or if structure_model is set
+        saved_model = ai3_config.get("saved_model")
+        structure_model = ai3_config.get("structure_model")
+
+        # Priority: saved_model > structure_model > default model
+        if saved_model:
+            model_to_use = saved_model
+            logger.info(f"[AI3] Using saved model '{saved_model}' for {provider_name}")
+        elif structure_model:
+            model_to_use = structure_model
+            logger.info(
+                f"[AI3] Using structure_model '{structure_model}' for {provider_name}"
+            )
+        else:
+            # If no models found, use the provider's configured model or default to qwen2.5
+            model_to_use = merged_config.get("model", "qwen2.5:latest")
+            logger.info(
+                f"[AI3] Using provider's configured model '{model_to_use}' for {provider_name}"
+            )
+
+        # Ensure structure_model is also set for consistency
+        if model_to_use != ai3_config.get("structure_model"):
+            ai3_config["structure_model"] = model_to_use
+            logger.info(f"[AI3] Updated structure_model to '{model_to_use}'")
+
+    # Special case: structure_fallback doesn't need model
     elif provider_name == "structure_fallback":
         model_to_use = None
+
+    # Special cases for other providers
     elif provider_name == "codestral2":
         model_to_use = "codestral-latest"
     elif provider_name == "gemini":
         model_to_use = "gemini-1.5-flash"
-    # Finally, fallback to the config
+
+    # Fallback to the model in merged_config or structure_model
     else:
-        model_to_use = merged_config.get("model")
+        model_to_use = merged_config.get("model") or ai3_config.get("structure_model")
 
     merged_config["model"] = model_to_use  # Update merged_config with final model
-
     logger.info(f"[AI3] Final model for provider {provider_name}: {model_to_use}")
+
     return provider_factory.create_provider(
         provider_name, config_arg=merged_config, session=client_session
     )
@@ -1895,7 +1974,7 @@ class AI3:
             f"Logs (first 15k chars):\\n```\\n{logs[:15000]}```\\n\\n"
             "Analyze GitHub Actions logs: test/lint errors? Failed files? "
             "Recommend 'rework' for failed tests, 'accept' for passed/minor lint. "
-            "If unsure, 'accept' with note. "
+            'If unsure, "accept" with note. '
             'JSON: {"recommendation": "accept"|"rework", '
             '"failed_files": list[str], "summary": "str", '
             '"confidence": float (0.0-1.0)}'
