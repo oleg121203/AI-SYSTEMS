@@ -113,10 +113,6 @@
             "fallbacks": [],
             "structure_fallbacks": [
                 {
-                    "provider": "openrouter",
-                    "model": "mistralai/mistral-medium-3"
-                },
-                {
                     "provider": "openai",
                     "model": "gpt-4"
                 }

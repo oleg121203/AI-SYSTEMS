@@ -4004,11 +4004,7 @@ async def get_component_fallbacks(
             # Use new array-based structure_fallbacks
             structure_fallbacks = ai3_cfg.get("structure_fallbacks", [])
             return JSONResponse(content={"fallbacks": structure_fallbacks})
-        
-        # Don't process regular fallbacks for other components for now
-        # We want to keep the structure_fallbacks special and not have regular fallbacks
-        # for other components
-        
+
         # Parse component name for regular components
         ai_name, role = parse_component_name(component)
 
