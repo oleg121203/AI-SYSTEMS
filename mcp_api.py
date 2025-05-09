@@ -1008,7 +1008,7 @@ def get_progress_chart_data():
 
     # Формуємо підсумкову точку даних з повною міткою часу
     return {
-        "timestamp": datetime.now().strftime("%Y-%м-%d %H:%M:%S"),
+        "timestamp": datetime.now().strftime("%Y-%м-%d %H:%М:%С"),
         "completed_tasks": completed_tasks_count,
         "successful_tests": successful_tests_count,
         "git_actions": current_git_actions,
@@ -3942,51 +3942,38 @@ async def update_providers(data: dict):
 
         # Update AI3 provider if included
         if "ai3" in data:
-            provider_data = data["ai3"]
-            config_data.setdefault("ai_config", {}).setdefault("ai3", {})
+            ai3_data = data["ai3"]
+            ai3_config_entry = config_data.setdefault("ai_config", {}).setdefault(
+                "ai3", {}
+            )
 
             # General AI3 provider and model
-            if provider_data.get("provider") is not None:
-                config_data["ai_config"]["ai3"]["provider"] = provider_data.get(
-                    "provider"
-                )
-            if provider_data.get("model") is not None:
-                config_data["ai_config"]["ai3"]["model"] = provider_data.get("model")
-
-            # Update general AI3 providers list for UI selection
-            if provider_data.get("provider") is not None:
-                config_data["ai_config"]["ai3"]["providers"] = [
-                    provider_data.get("provider")
-                ]
+            if ai3_data.get("provider") is not None:
+                ai3_config_entry["provider"] = ai3_data["provider"]
+                ai3_config_entry["providers"] = [ai3_data["provider"]]  # For UI
+            if ai3_data.get("model") is not None:
+                ai3_config_entry["model"] = ai3_data["model"]
 
             # General AI3 fallbacks
-            ai3_general_fallbacks = provider_data.get("fallbacks")
-            if ai3_general_fallbacks is not None:  # Changed condition
-                config_data["ai_config"]["ai3"]["fallbacks"] = ai3_general_fallbacks
+            ai3_general_fallbacks = ai3_data.get("fallbacks")
+            if ai3_general_fallbacks is not None:
+                ai3_config_entry["fallbacks"] = ai3_general_fallbacks
 
             # AI3 Structure provider, model, and fallbacks
-            if provider_data.get("structure_provider") is not None:
-                config_data["ai_config"]["ai3"]["structure_provider"] = (
-                    provider_data.get("structure_provider")
+            if ai3_data.get("structure_provider") is not None:
+                ai3_config_entry["structure_provider"] = ai3_data["structure_provider"]
+                # Update structure_providers list for UI selection
+                current_structure_providers = ai3_config_entry.setdefault(
+                    "structure_providers", []
                 )
-            if provider_data.get("structure_model") is not None:
-                config_data["ai_config"]["ai3"]["structure_model"] = provider_data.get(
-                    "structure_model"
-                )
+                current_structure_providers.clear()
+                current_structure_providers.append(ai3_data["structure_provider"])
+            if ai3_data.get("structure_model") is not None:
+                ai3_config_entry["structure_model"] = ai3_data["structure_model"]
 
-            # Update AI3 structure_providers list for UI selection
-            if provider_data.get("structure_provider") is not None:
-                config_data["ai_config"]["ai3"]["structure_providers"] = [
-                    provider_data.get("structure_provider")
-                ]
-
-            ai3_structure_fallbacks = provider_data.get("structure_fallbacks")
-            if (
-                ai3_structure_fallbacks is not None
-            ):  # New section for structure_fallbacks
-                config_data["ai_config"]["ai3"][
-                    "structure_fallbacks"
-                ] = ai3_structure_fallbacks
+            ai3_structure_fallbacks = ai3_data.get("structure_fallbacks")
+            if ai3_structure_fallbacks is not None:
+                ai3_config_entry["structure_fallbacks"] = ai3_structure_fallbacks
 
         # Save the updated configuration
         try:
