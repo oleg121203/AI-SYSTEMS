@@ -61,10 +61,10 @@
             "providers": [
                 "codestral"
             ],
-            "model": "claude-3-opus-20240229",
+            "model": "llama3-70b-8192",
             "max_tokens": 2048,
             "temperature": 0.7,
-            "provider": "anthropic",
+            "provider": "groq",
             "fallbacks": []
         },
         "ai2": {
@@ -82,18 +82,18 @@
             "max_tokens": 2048,
             "temperature": 0.4,
             "executor": {
-                "provider": "anthropic",
-                "model": "claude-3-opus-20240229",
+                "provider": "openai",
+                "model": "gpt-4",
                 "fallbacks": []
             },
             "tester": {
-                "provider": "anthropic",
-                "model": "claude-3-opus-20240229",
+                "provider": "openai",
+                "model": "gpt-4",
                 "fallbacks": []
             },
             "documenter": {
-                "provider": "anthropic",
-                "model": "claude-3-opus-20240229",
+                "provider": "openai",
+                "model": "gpt-4",
                 "fallbacks": []
             }
         },
@@ -102,16 +102,21 @@
                 "gemini"
             ],
             "structure_providers": [
+                "groq",
                 "ollama1"
             ],
-            "model": "claude-3-opus-20240229",
+            "model": "llama3-70b-8192",
             "max_tokens": 2048,
             "temperature": 0.7,
-            "provider": "anthropic",
-            "structure_provider": "anthropic",
-            "structure_model": "claude-3-opus-20240229",
+            "provider": "groq",
+            "structure_provider": "openai",
+            "structure_model": "gpt-4",
             "fallbacks": [],
             "structure_fallbacks": [
+                {
+                    "provider": "openai",
+                    "model": "gpt-4"
+                },
                 {
                     "provider": "openai",
                     "model": "gpt-4"

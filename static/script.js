@@ -4443,8 +4443,8 @@ function updateFallbackLists() {
   // Add fallbacks for AI1
   if (currentConfig.ai1.fallbacks && currentConfig.ai1.fallbacks.length > 0) {
     const list = document.querySelector("#ai1-fallback-list");
-    currentConfig.ai1.fallbacks.forEach(async (fallback) => {
-      await addConfiguredFallback("ai1", list, fallback);
+    currentConfig.ai1.fallbacks.forEach(async (fallback, idx) => {
+      await addConfiguredFallback("ai1", list, fallback, idx);
     });
   }
 
@@ -4454,8 +4454,8 @@ function updateFallbackLists() {
     currentConfig.ai2.executor.fallbacks.length > 0
   ) {
     const list = document.querySelector("#ai2-executor-fallback-list");
-    currentConfig.ai2.executor.fallbacks.forEach(async (fallback) => {
-      await addConfiguredFallback("ai2-executor", list, fallback);
+    currentConfig.ai2.executor.fallbacks.forEach(async (fallback, idx) => {
+      await addConfiguredFallback("ai2-executor", list, fallback, idx);
     });
   }
 
@@ -4465,8 +4465,8 @@ function updateFallbackLists() {
     currentConfig.ai2.tester.fallbacks.length > 0
   ) {
     const list = document.querySelector("#ai2-tester-fallback-list");
-    currentConfig.ai2.tester.fallbacks.forEach(async (fallback) => {
-      await addConfiguredFallback("ai2-tester", list, fallback);
+    currentConfig.ai2.tester.fallbacks.forEach(async (fallback, idx) => {
+      await addConfiguredFallback("ai2-tester", list, fallback, idx);
     });
   }
 
@@ -4476,16 +4476,16 @@ function updateFallbackLists() {
     currentConfig.ai2.documenter.fallbacks.length > 0
   ) {
     const list = document.querySelector("#ai2-documenter-fallback-list");
-    currentConfig.ai2.documenter.fallbacks.forEach(async (fallback) => {
-      await addConfiguredFallback("ai2-documenter", list, fallback);
+    currentConfig.ai2.documenter.fallbacks.forEach(async (fallback, idx) => {
+      await addConfiguredFallback("ai2-documenter", list, fallback, idx);
     });
   }
 
   // Add fallbacks for AI3
   if (currentConfig.ai3.fallbacks && currentConfig.ai3.fallbacks.length > 0) {
     const list = document.querySelector("#ai3-fallback-list");
-    currentConfig.ai3.fallbacks.forEach(async (fallback) => {
-      await addConfiguredFallback("ai3", list, fallback);
+    currentConfig.ai3.fallbacks.forEach(async (fallback, idx) => {
+      await addConfiguredFallback("ai3", list, fallback, idx);
     });
   }
 
@@ -4495,23 +4495,34 @@ function updateFallbackLists() {
     currentConfig.ai3.structure_fallbacks.length > 0
   ) {
     const list = document.querySelector("#ai3-structure-fallback-list");
-    currentConfig.ai3.structure_fallbacks.forEach(async (fallback) => {
-      await addConfiguredFallback("ai3-structure", list, fallback);
+    currentConfig.ai3.structure_fallbacks.forEach(async (fallback, idx) => {
+      await addConfiguredFallback("ai3-structure", list, fallback, idx);
     });
   }
 }
 
 // Add a configured fallback to a list
-async function addConfiguredFallback(componentId, fallbacksList, fallback) {
+async function addConfiguredFallback(
+  componentId,
+  fallbacksList,
+  fallback,
+  index
+) {
   if (!fallbacksList) return;
 
   // Create the fallback item
   const fallbackItem = document.createElement("div");
   fallbackItem.className = "fallback-item";
 
+  // Assign a unique index if not provided (fallback for old calls)
+  if (typeof index !== "number") {
+    index = fallbacksList.children.length;
+  }
+
   // Create provider select
   const providerSelect = document.createElement("select");
   providerSelect.className = "provider-select";
+  providerSelect.id = `${componentId}-fallback-${index}-provider`;
   availableProviders.forEach((provider) => {
     const option = document.createElement("option");
     option.value = provider;
@@ -4530,6 +4541,7 @@ async function addConfiguredFallback(componentId, fallbacksList, fallback) {
   // Create model select
   const modelSelect = document.createElement("select");
   modelSelect.className = "model-select";
+  modelSelect.id = `${componentId}-fallback-${index}-model`;
 
   // Create control buttons
   const controlsDiv = document.createElement("div");
@@ -4649,10 +4661,8 @@ function getComponentConfig(componentId) {
   if (fallbacksList) {
     const fallbackItems = fallbacksList.querySelectorAll(".fallback-item");
     fallbackItems.forEach((item) => {
-      const fbProviderSelect = item.querySelector(
-        "select[id$='-fallback-provider']"
-      );
-      const fbModelSelect = item.querySelector("select[id$='-fallback-model']");
+      const fbProviderSelect = item.querySelector(".provider-select");
+      const fbModelSelect = item.querySelector(".model-select");
 
       if (fbProviderSelect && fbModelSelect) {
         fallbacks.push({
@@ -4742,48 +4752,172 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 
 // ...existing code...
-function getFallbacksForPrefix(prefix) {
+function getFallbacksConfig(componentIdPrefix) {
   const fallbacks = [];
-  const fallbackContainer = document.getElementById(
-    `${prefix}_fallbacks_container`
-  );
-  if (!fallbackContainer) {
-    console.warn(
-      `Fallback container not found for prefix: ${prefix}_fallbacks_container`
-    );
-    return [];
-  }
+  const fallbackListId = `${componentIdPrefix}-fallback-list`;
+  const fallbackList = document.getElementById(fallbackListId);
 
-  const fallbackItems = fallbackContainer.querySelectorAll(".fallback-item");
+  console.log(
+    `[GetFallbacks] Processing component: ${componentIdPrefix}. List ID: ${fallbackListId}`
+  ); // Log entry
 
-  fallbackItems.forEach((item, index) => {
-    // Original selectors:
-    // const providerInput = item.querySelector(`[id^='${prefix}_fallback_provider_']`);
-    // const modelInput = item.querySelector(`[id^='${prefix}_fallback_model_']`);
+  if (fallbackList) {
+    const fallbackItems = fallbackList.querySelectorAll(".fallback-item");
+    console.log(
+      `[GetFallbacks] Found ${fallbackItems.length} fallback items for ${componentIdPrefix}.`
+    ); // Log item count
 
-    // Changed to class-based selectors for potentially more robustness:
-    const providerInput = item.querySelector("input.fallback-provider-input");
-    const modelInput = item.querySelector("input.fallback-model-input");
+    fallbackItems.forEach((item, index) => {
+      const providerSelect = item.querySelector("select.provider-select"); // More specific selector
+      const modelSelect = item.querySelector("select.model-select"); // More specific selector
 
-    if (
-      providerInput &&
-      providerInput.value &&
-      modelInput &&
-      modelInput.value
-    ) {
-      fallbacks.push({
-        provider: providerInput.value,
-        model: modelInput.value,
-      });
-    } else {
-      console.warn(
-        `Skipping fallback item for prefix ${prefix} at index ${index} due to missing provider/model value. Provider found: ${!!providerInput}, Model found: ${!!modelInput}`
+      // Log the raw values obtained from the DOM elements
+      const rawProviderId = providerSelect
+        ? providerSelect.value
+        : "PROVIDER_SELECT_NOT_FOUND";
+      const rawModelId = modelSelect
+        ? modelSelect.value
+        : "MODEL_SELECT_NOT_FOUND";
+      console.log(
+        `[GetFallbacks] Item ${index} for ${componentIdPrefix}: Raw Provider Select Value: '${rawProviderId}', Raw Model Select Value: '${rawModelId}'`
       );
-      // Add more detailed logging if needed:
-      // if (providerInput) console.log(`Provider value for ${prefix}[${index}]: '${providerInput.value}'`);
-      // if (modelInput) console.log(`Model value for ${prefix}[${index}]: '${modelInput.value}'`);
-    }
-  });
+
+      if (!providerSelect)
+        console.warn(
+          `[GetFallbacks] Item ${index} for ${componentIdPrefix}: providerSelect element was NOT FOUND.`
+        );
+      if (!modelSelect)
+        console.warn(
+          `[GetFallbacks] Item ${index} for ${componentIdPrefix}: modelSelect element was NOT FOUND.`
+        );
+
+      // Actual values for logic (can be null if element not found or .value is nullish)
+      const actualProviderId = providerSelect ? providerSelect.value : null;
+      const actualModelId = modelSelect ? modelSelect.value : null;
+
+      if (actualProviderId && actualModelId && actualModelId.trim() !== "") {
+        // Added trim check for modelId
+        console.log(
+          `[GetFallbacks] Adding fallback for ${componentIdPrefix} (Item ${index}): Provider='${actualProviderId}', Model='${actualModelId}'`
+        );
+        fallbacks.push({
+          provider: actualProviderId,
+          model: actualModelId,
+        });
+      } else {
+        console.warn(
+          `[GetFallbacks] SKIPPING fallback for ${componentIdPrefix} (Item ${index}) due to missing or empty provider/model. Provider Value: '${actualProviderId}', Model Value: '${actualModelId}'`
+        );
+      }
+    });
+  } else {
+    console.warn(
+      `[GetFallbacks] Fallback list with ID '${fallbackListId}' NOT FOUND for ${componentIdPrefix}.`
+    );
+  }
+  console.log(
+    `[GetFallbacks] Returning ${fallbacks.length} fallbacks for ${componentIdPrefix}:`,
+    JSON.stringify(fallbacks)
+  );
   return fallbacks;
 }
+
+// ...existing code...
+// Helper function to populate model options for a selected provider in fallbacks
+function populateFallbackModelOptions(
+  providerSelectElement,
+  modelSelectElement,
+  selectedModelId
+) {
+  const selectedProviderId = providerSelectElement.value;
+  modelSelectElement.innerHTML = ""; // Clear existing models
+
+  const provider = availableProviders.find((p) => p.id === selectedProviderId);
+  let successfullySelectedModel = false;
+  let hasValidModels = false;
+
+  if (
+    provider &&
+    Array.isArray(provider.models) &&
+    provider.models.length > 0
+  ) {
+    provider.models.forEach((model) => {
+      if (
+        model &&
+        typeof model.id === "string" &&
+        model.id.trim() !== "" &&
+        typeof model.name === "string"
+      ) {
+        const option = document.createElement("option");
+        option.value = model.id;
+        option.textContent = model.name;
+        if (model.id === selectedModelId) {
+          option.selected = true;
+          successfullySelectedModel = true;
+        }
+        modelSelectElement.appendChild(option);
+        hasValidModels = true;
+      } else {
+        console.warn(
+          "[PopulateFallbackModels] Skipping malformed or invalid model data for provider:",
+          selectedProviderId,
+          model
+        );
+      }
+    });
+
+    if (hasValidModels && !successfullySelectedModel) {
+      // Try to select the first *valid* option if no specific model was matched or intended
+      let foundValidDefault = false;
+      for (let i = 0; i < modelSelectElement.options.length; i++) {
+        if (
+          modelSelectElement.options[i].value &&
+          modelSelectElement.options[i].value.trim() !== ""
+        ) {
+          modelSelectElement.selectedIndex = i;
+          foundValidDefault = true;
+          console.log(
+            `[PopulateFallbackModels] For provider '${selectedProviderId}', auto-selected first valid model: '${modelSelectElement.options[i].value}'`
+          );
+          break;
+        }
+      }
+      if (!foundValidDefault) {
+        console.warn(
+          `[PopulateFallbackModels] For provider '${selectedProviderId}', valid models were reportedly added, but no option with a non-empty value could be found to set as default. Model select value might be empty.`
+        );
+      }
+    }
+  }
+
+  if (!hasValidModels) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent =
+      provider && provider.models && provider.models.length === 0
+        ? "No models for provider"
+        : provider && provider.models
+        ? "No valid models"
+        : "No models listed";
+    modelSelectElement.appendChild(option);
+    console.log(
+      `[PopulateFallbackModels] For provider '${selectedProviderId}', no valid models found or provider has no models listed. Added empty option.`
+    );
+  }
+
+  // Final check on the modelSelect value
+  if (
+    modelSelectElement.options.length > 0 &&
+    (!modelSelectElement.value || modelSelectElement.value.trim() === "")
+  ) {
+    console.warn(
+      `[PopulateFallbackModels] After population for provider '${selectedProviderId}', modelSelect.value is still empty or blank. This fallback item may not save correctly. Number of options: ${modelSelectElement.options.length}. First option value: '${modelSelectElement.options[0]?.value}'`
+    );
+  } else if (modelSelectElement.options.length === 0) {
+    console.warn(
+      `[PopulateFallbackModels] After population for provider '${selectedProviderId}', modelSelect has no options. This fallback item will not save correctly.`
+    );
+  }
+}
+
 // ...existing code...
