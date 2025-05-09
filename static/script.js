@@ -4740,3 +4740,50 @@ document.addEventListener("DOMContentLoaded", () => {
   // Then initialize provider configuration
   initProviderConfig();
 });
+
+// ...existing code...
+function getFallbacksForPrefix(prefix) {
+  const fallbacks = [];
+  const fallbackContainer = document.getElementById(
+    `${prefix}_fallbacks_container`
+  );
+  if (!fallbackContainer) {
+    console.warn(
+      `Fallback container not found for prefix: ${prefix}_fallbacks_container`
+    );
+    return [];
+  }
+
+  const fallbackItems = fallbackContainer.querySelectorAll(".fallback-item");
+
+  fallbackItems.forEach((item, index) => {
+    // Original selectors:
+    // const providerInput = item.querySelector(`[id^='${prefix}_fallback_provider_']`);
+    // const modelInput = item.querySelector(`[id^='${prefix}_fallback_model_']`);
+
+    // Changed to class-based selectors for potentially more robustness:
+    const providerInput = item.querySelector("input.fallback-provider-input");
+    const modelInput = item.querySelector("input.fallback-model-input");
+
+    if (
+      providerInput &&
+      providerInput.value &&
+      modelInput &&
+      modelInput.value
+    ) {
+      fallbacks.push({
+        provider: providerInput.value,
+        model: modelInput.value,
+      });
+    } else {
+      console.warn(
+        `Skipping fallback item for prefix ${prefix} at index ${index} due to missing provider/model value. Provider found: ${!!providerInput}, Model found: ${!!modelInput}`
+      );
+      // Add more detailed logging if needed:
+      // if (providerInput) console.log(`Provider value for ${prefix}[${index}]: '${providerInput.value}'`);
+      // if (modelInput) console.log(`Model value for ${prefix}[${index}]: '${modelInput.value}'`);
+    }
+  });
+  return fallbacks;
+}
+// ...existing code...
