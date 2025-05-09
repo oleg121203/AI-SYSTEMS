@@ -584,6 +584,21 @@ function updateQueues(queuesData) {
     }
 
     const incomingTasks = queuesData?.[role] || [];
+    // Check if incomingTasks is an array before calling map
+    if (!Array.isArray(incomingTasks)) {
+      console.error(
+        `[Queue Update] Expected array for ${role} queue but got:`,
+        typeof incomingTasks,
+        incomingTasks
+      );
+      // Update count
+      countSpan.textContent = 0;
+      console.log(
+        `[Queue Update] Role '${role}': Count set to 0 (invalid data type)`
+      );
+      return; // Skip further processing for this role
+    }
+
     const incomingTaskIds = new Set(incomingTasks.map((task) => task.id));
     const currentListItems = ul.querySelectorAll("li[data-task-id]");
     const currentTaskIds = new Set();
@@ -678,9 +693,9 @@ function updateQueues(queuesData) {
       queuesData
     );
     taskChart.data.datasets[0].data = [
-      (queuesData.executor || []).length,
-      (queuesData.tester || []).length,
-      (queuesData.documenter || []).length,
+      Array.isArray(queuesData.executor) ? queuesData.executor.length : 0,
+      Array.isArray(queuesData.tester) ? queuesData.tester.length : 0,
+      Array.isArray(queuesData.documenter) ? queuesData.documenter.length : 0,
     ];
     // Ensure colors are correct for the current theme
     taskChart.options.scales.y.ticks.color = getChartFontColor();

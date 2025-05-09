@@ -199,12 +199,7 @@ def _commit_changes(repo: Repo, file_paths: List[str], message: str):
             logger.info(
                 f"[AI3-Git] No actual changes staged for commit: {message}. Files: {paths_to_add}"
             )
-            # If files were added but no diff, they might be unchanged or gitignored effectively
-            # Check if files are truly gitignored
-            actually_ignored = [p for p in paths_to_add if repo.is_ignored(p)]
-            if actually_ignored:
-                logger.info(f"[AI3-Git] Files are gitignored: {actually_ignored}")
-            return
+            return  # Skip the check for gitignored files as it's causing errors
 
         repo.index.commit(message)
         logger.info(
@@ -343,20 +338,37 @@ async def _get_provider_instance(
         "name": provider_name,
     }
 
-    model_to_use = merged_config.get("model")
+    # First check if UI selected this provider and model - this takes priority
     if provider_name == ui_selected_provider and ui_selected_model:
         model_to_use = ui_selected_model
         logger.info(
             f"[AI3] Using UI selected model for {provider_name}: {model_to_use}"
         )
+    # Then check if it's an Ollama provider - always use qwen2.5:latest
+    elif provider_name == "ollama" or provider_name == "ollama1":
+        # Save the original model in the config first (if any)
+        original_model = merged_config.get("model")
+        if original_model:
+            ai3_config["saved_model"] = original_model
+            logger.info(
+                f"[AI3] Saved original model '{original_model}' for {provider_name}"
+            )
+
+        # Then set to qwen2.5:latest
+        model_to_use = "qwen2.5:latest"
+        logger.info(
+            f"[AI3] Using qwen2.5:latest for {provider_name} provider regardless of saved configuration"
+        )
+    # Then handle special cases
     elif provider_name == "structure_fallback":
         model_to_use = None
     elif provider_name == "codestral2":
         model_to_use = "codestral-latest"
     elif provider_name == "gemini":
         model_to_use = "gemini-1.5-flash"
-    elif provider_name == "ollama1":
-        model_to_use = "llama3.2:latest"
+    # Finally, fallback to the config
+    else:
+        model_to_use = merged_config.get("model")
 
     merged_config["model"] = model_to_use  # Update merged_config with final model
 
@@ -387,22 +399,40 @@ async def _generate_with_provider_cycle(
         await provider_instance.close_session()
 
         if generated_str:
+            # Fix JSON extraction regex to properly handle backslash escaping
             json_match = re.search(
-                r"```(?:json)?\\s*([\\s\\S]*?)\\s*```", generated_str
+                r"```(?:json)?\s*([^`].*?)\s*```", generated_str, re.DOTALL
             )
             if json_match:
-                generated_str = json_match.group(1).strip()
-            try:
-                parsed_json = json.loads(generated_str)
-                logger.info(
-                    f"[AI3] {cycle_name}: Parsed structure from {provider_name}"
+                json_str = json_match.group(1).strip()
+                # Log the extracted JSON for debugging
+                logger.debug(
+                    f"[AI3] {cycle_name}: Extracted JSON from {provider_name}, length: {len(json_str)}"
                 )
-                return parsed_json
-            except json.JSONDecodeError:
-                logger.warning(
-                    f"[AI3] Invalid JSON from {provider_name} in {cycle_name}. "
-                    f"Response: {generated_str[:200]}..."
-                )
+                try:
+                    parsed_json = json.loads(json_str)
+                    logger.info(
+                        f"[AI3] {cycle_name}: Parsed structure from {provider_name}"
+                    )
+                    return parsed_json
+                except json.JSONDecodeError as e:
+                    logger.warning(
+                        f"[AI3] Invalid JSON from {provider_name} in {cycle_name}: {e}. "
+                        f"Response: {json_str[:200]}..."
+                    )
+            else:
+                # Try direct JSON parsing if no code block is found
+                try:
+                    parsed_json = json.loads(generated_str)
+                    logger.info(
+                        f"[AI3] {cycle_name}: Direct JSON parsed from {provider_name}"
+                    )
+                    return parsed_json
+                except json.JSONDecodeError:
+                    logger.warning(
+                        f"[AI3] No JSON code block found and direct parsing failed from {provider_name} in {cycle_name}. "
+                        f"Response: {generated_str[:200]}..."
+                    )
     except Exception as e:
         logger.error(f"[AI3] Error with provider {provider_name} in {cycle_name}: {e}")
     return None

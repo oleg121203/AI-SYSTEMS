@@ -75,7 +75,7 @@
                     "codestral2"
                 ],
                 "documenter": [
-                    "gemini"
+                    "ollama1"
                 ]
             },
             "max_tokens": 2048,
@@ -89,8 +89,8 @@
                 "model": "codestral-latest"
             },
             "documenter": {
-                "provider": "gemini",
-                "model": "gemini-1.5-pro-latest"
+                "provider": "ollama1",
+                "model": "llama3.2:latest"
             }
         },
         "ai3": {
@@ -98,15 +98,15 @@
                 "ollama1"
             ],
             "structure_providers": [
-                "codestral2",
                 "structure_fallback",
+                "codestral2",
                 "gemini"
             ],
             "model": "codestral-latest",
             "max_tokens": 2048,
             "temperature": 0.7,
-            "provider": "codestral2",
-            "structure_provider": "codestral2",
+            "provider": "codestral",
+            "structure_provider": "structure_fallback",
             "structure_model": "codestral-latest"
         }
     },
@@ -300,26 +300,26 @@
     },
     "request_delays": {
         "ai1": {
-            "min": 4.0,
-            "max": 7.0
+            "min": 1.5,
+            "max": 3.0
         },
         "ai2": {
             "executor": {
-                "min": 6.0,
-                "max": 10.0
+                "min": 2.5,
+                "max": 5.0
             },
             "tester": {
-                "min": 5.0,
-                "max": 9.0
+                "min": 2.5,
+                "max": 5.0
             },
             "documenter": {
-                "min": 5.0,
-                "max": 8.0
+                "min": 2.5,
+                "max": 5.0
             }
         },
         "ai3": {
-            "min": 7.0,
-            "max": 9.0
+            "min": 2.5,
+            "max": 5.0
         }
     },
     "error_handling": {
