@@ -3472,16 +3472,23 @@ document.addEventListener("DOMContentLoaded", function () {
 // Provider Management Logic
 let providerModels = {}; // Object to store available models for each provider
 
-// ADDED: Initialize availableProviders and currentConfig globally with defaults
+// Initialize availableProviders and currentConfig globally with empty defaults
 let availableProviders = [];
 let currentConfig = {
-  ai1: { provider: "openai", model: "gpt-3.5-turbo", fallbacks: [] },
+  ai1: { provider: "", model: "", fallbacks: [] },
   ai2: {
-    executor: { provider: "openai", model: "gpt-3.5-turbo", fallbacks: [] },
-    tester: { provider: "openai", model: "gpt-3.5-turbo", fallbacks: [] },
-    documenter: { provider: "openai", model: "gpt-3.5-turbo", fallbacks: [] },
+    executor: { provider: "", model: "", fallbacks: [] },
+    tester: { provider: "", model: "", fallbacks: [] },
+    documenter: { provider: "", model: "", fallbacks: [] },
   },
-  ai3: { provider: "openai", model: "gpt-3.5-turbo", fallbacks: [] },
+  ai3: {
+    provider: "",
+    model: "",
+    fallbacks: [],
+    structure_provider: "",
+    structure_model: "",
+    structure_fallbacks: [],
+  },
 };
 
 // Fetch available models for a provider
@@ -3575,6 +3582,8 @@ function initializeFallbacks() {
   initializeComponentFallbacks("ai2-tester");
   initializeComponentFallbacks("ai2-documenter");
   initializeComponentFallbacks("ai3");
+  // Initialize structure provider fallbacks
+  initializeComponentFallbacks("ai3-structure");
 }
 
 // Initialize fallbacks for a specific AI component
@@ -3945,8 +3954,12 @@ document.addEventListener("DOMContentLoaded", function () {
 
   // Initialize fallbacks
   initializeFallbacks();
-  // Initialize structure provider fallbacks
-  initializeComponentFallbacks("ai3-structure");
+
+  // Add save provider button event listener if it exists
+  const saveButton = document.getElementById("save-provider-settings");
+  if (saveButton) {
+    saveButton.addEventListener("click", saveProviderConfig);
+  }
 });
 
 // Add notification function if not already defined
@@ -4045,30 +4058,33 @@ async function initProviderConfig() {
 
   // Ensure the basic structure of currentConfig and its nested properties
   currentConfig.ai1 = currentConfig.ai1 || {
-    provider: "openai",
-    model: "gpt-3.5-turbo",
+    provider: "",
+    model: "",
     fallbacks: [],
   };
   currentConfig.ai2 = currentConfig.ai2 || {};
   currentConfig.ai2.executor = currentConfig.ai2.executor || {
-    provider: "openai",
-    model: "gpt-3.5-turbo",
+    provider: "",
+    model: "",
     fallbacks: [],
   };
   currentConfig.ai2.tester = currentConfig.ai2.tester || {
-    provider: "openai",
-    model: "gpt-3.5-turbo",
+    provider: "",
+    model: "",
     fallbacks: [],
   };
   currentConfig.ai2.documenter = currentConfig.ai2.documenter || {
-    provider: "openai",
-    model: "gpt-3.5-turbo",
+    provider: "",
+    model: "",
     fallbacks: [],
   };
   currentConfig.ai3 = currentConfig.ai3 || {
-    provider: "openai",
-    model: "gpt-3.5-turbo",
+    provider: "",
+    model: "",
     fallbacks: [],
+    structure_provider: "",
+    structure_model: "",
+    structure_fallbacks: [],
   };
 
   // Populate provider dropdowns
@@ -4415,6 +4431,7 @@ function updateFallbackLists() {
     document.querySelector("#ai2-tester-fallback-list"),
     document.querySelector("#ai2-documenter-fallback-list"),
     document.querySelector("#ai3-fallback-list"),
+    document.querySelector("#ai3-structure-fallback-list"), // Added for ai3 structure fallbacks
   ];
 
   fallbackLists.forEach((list) => {
@@ -4469,6 +4486,17 @@ function updateFallbackLists() {
     const list = document.querySelector("#ai3-fallback-list");
     currentConfig.ai3.fallbacks.forEach(async (fallback) => {
       await addConfiguredFallback("ai3", list, fallback);
+    });
+  }
+
+  // Add structure fallbacks for AI3
+  if (
+    currentConfig.ai3.structure_fallbacks &&
+    currentConfig.ai3.structure_fallbacks.length > 0
+  ) {
+    const list = document.querySelector("#ai3-structure-fallback-list");
+    currentConfig.ai3.structure_fallbacks.forEach(async (fallback) => {
+      await addConfiguredFallback("ai3-structure", list, fallback);
     });
   }
 }
@@ -4599,9 +4627,10 @@ function getComponentConfig(componentId) {
   const modelSelect = document.querySelector(`#${componentId}-model`);
   const fallbacksList = document.querySelector(`#${componentId}-fallback-list`);
 
-  // Default values if elements are not found
-  let provider = "openai"; // Default provider
-  let model = ""; // Default model
+  // Default values if elements are not found - using empty strings instead of hardcoded defaults
+  // The backend will handle defaults based on the config.json structure
+  let provider = ""; // Empty default provider
+  let model = ""; // Empty default model
   const fallbacks = [];
 
   if (providerSelect) {
@@ -4644,6 +4673,9 @@ function getComponentConfig(componentId) {
     const structureModelSelect = document.querySelector(
       `#${componentId}-structure-model`
     );
+    const structureFallbacksList = document.querySelector(
+      `#${componentId}-structure-fallback-list`
+    );
 
     if (structureProviderSelect) {
       componentConfig.structure_provider = structureProviderSelect.value;
@@ -4658,6 +4690,23 @@ function getComponentConfig(componentId) {
       console.warn(
         `Structure model select not found for ${componentId}-structure-model`
       );
+    }
+    // Get structure fallbacks
+    if (structureFallbacksList) {
+      componentConfig.structure_fallbacks = [];
+      const structureFallbackItems =
+        structureFallbacksList.querySelectorAll(".fallback-item");
+      structureFallbackItems.forEach((item) => {
+        const fbProviderSelect = item.querySelector(".provider-select");
+        const fbModelSelect = item.querySelector(".model-select");
+
+        if (fbProviderSelect && fbModelSelect) {
+          componentConfig.structure_fallbacks.push({
+            provider: fbProviderSelect.value,
+            model: fbModelSelect.value,
+          });
+        }
+      });
     }
   }
 

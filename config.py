@@ -397,35 +397,36 @@ def create_default_config(save_path: Optional[str] = None) -> Dict[str, Any]:
         },
         "ai_config": {
             "ai1": {
-                "provider": "openai",
-                "model": "gpt-4",
-                "fallback_provider": "groq",
-                "fallback_model": "llama3-8b-8192",
+                "provider": "",
+                "model": "",
+                "fallbacks": [],
                 "max_tokens": 2000,
                 "temperature": 0.7,
             },
             "ai2": {
                 "provider": {
-                    "executor": "openai",
-                    "executor_model": DEFAULT_AI2_MODEL,  # Used constant
-                    "tester": "openai",
-                    "tester_model": DEFAULT_AI2_MODEL,  # Used constant
-                    "documenter": "openai",
-                    "documenter_model": DEFAULT_AI2_MODEL,  # Used constant
+                    "executor": "",
+                    "executor_model": "",
+                    "tester": "",
+                    "tester_model": "",
+                    "documenter": "",
+                    "documenter_model": "",
                 },
                 "fallback_config": {  # New structure for AI2 fallbacks
-                    "executor": {"provider": "groq", "model": "llama3-8b-8192"},
-                    "tester": {"provider": "anthropic", "model": "claude-3-haiku"},
-                    "documenter": {"provider": "gemini", "model": "gemini-1.0-pro"},
+                    "executor": {"provider": "", "model": ""},
+                    "tester": {"provider": "", "model": ""},
+                    "documenter": {"provider": "", "model": ""},
                 },
                 "max_tokens": 2000,
                 "temperature": 0.7,
             },
             "ai3": {
-                "provider": "openai",
-                "model": "gpt-4",
-                "fallback_provider": "groq",
-                "fallback_model": "llama3-8b-8192",
+                "provider": "",
+                "model": "",
+                "structure_provider": "",
+                "structure_model": "",
+                "fallbacks": [],
+                "structure_fallbacks": [],
                 "max_tokens": 2000,
                 "temperature": 0.7,
             },

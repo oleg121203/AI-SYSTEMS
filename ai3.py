@@ -45,10 +45,12 @@ GITIGNORE_FILENAME = ".gitignore"
 IDEA_MD_FILENAME = "idea.md"
 NES_FLASH_GAME_DIR = "nes_flash_game/"
 RETRO_NES_FLASH_GAME_DIR = "retro_nes_flash_game/"
-DEFAULT_LOG_ANALYSIS_PROVIDER = "ollama"  # Default provider for log analysis
-DEFAULT_LOG_ANALYSIS_MODEL = "llama3"  # Default model for log analysis
-DEFAULT_CODE_FIX_PROVIDER = "codestral"  # Default provider for code fixing
-DEFAULT_CODE_FIX_MODEL = "codestral-latest"  # Default model for code fixing
+DEFAULT_LOG_ANALYSIS_PROVIDER = (
+    ""  # No default provider, will be handled by provider factory
+)
+DEFAULT_LOG_ANALYSIS_MODEL = ""  # No default model
+DEFAULT_CODE_FIX_PROVIDER = ""  # No default provider for code fixing
+DEFAULT_CODE_FIX_MODEL = ""  # No default model for code fixing
 
 
 def update_structure_provider_in_config(
@@ -119,11 +121,9 @@ def update_structure_provider_in_config(
                 ai3_config["structure_model"] = model
 
             # Update the providers list - keep the current provider at the front
-            providers_list = ai3_config.setdefault(
-                "structure_providers", ["codestral2", "structure_fallback", "gemini"]
-            )
+            providers_list = ai3_config.setdefault("structure_providers", [""])
             if not isinstance(providers_list, list):
-                providers_list = ["codestral2", "structure_fallback", "gemini"]
+                providers_list = [""]
                 ai3_config["structure_providers"] = providers_list
 
             # Remove the provider if it's already in the list and add it to the front
@@ -150,11 +150,9 @@ def update_structure_provider_in_config(
                 mem_ai3_config["model"] = model_name
 
         # Also update the providers list in memory
-        mem_providers_list = mem_ai3_config.setdefault(
-            "structure_providers", ["codestral2", "structure_fallback", "gemini"]
-        )
+        mem_providers_list = mem_ai3_config.setdefault("structure_providers", [""])
         if not isinstance(mem_providers_list, list):
-            mem_providers_list = ["codestral2", "structure_fallback", "gemini"]
+            mem_providers_list = [""]
             mem_ai3_config["structure_providers"] = mem_providers_list
         if provider_name in mem_providers_list:
             mem_providers_list.remove(provider_name)
@@ -539,13 +537,13 @@ async def generate_structure(
     elif ui_structure_provider and isinstance(ui_structure_provider, str):
         providers_c1.append(ui_structure_provider)
 
-    default_providers = ["codestral"]
+    default_providers = [""]
     structure_providers_list = ai3_config.get("structure_providers", default_providers)
     if not (
         isinstance(structure_providers_list, list)
         and all(isinstance(p, str) for p in structure_providers_list)
     ):
-        logger.warning("[AI3] 'structure_providers' invalid. Using default.")
+        logger.warning("[AI3] 'structure_providers' invalid. Using empty default.")
         structure_providers_list = default_providers
 
     for p_name in structure_providers_list:
@@ -553,7 +551,7 @@ async def generate_structure(
             providers_c1.append(p_name)
     if not providers_c1:
         providers_c1 = default_providers
-        logger.error("[AI3] No providers for Cycle 1. Defaulting.")
+        logger.error("[AI3] No providers for Cycle 1. Using empty default.")
 
     logger.info(f"[AI3] Cycle 1 Providers: {providers_c1}")
 
@@ -958,7 +956,7 @@ async def generate_initial_idea_md(
     elif specific_provider and isinstance(specific_provider, str):
         providers_to_try.append(specific_provider)
 
-    default_idea_providers = ["codestral"]
+    default_idea_providers = [""]
     idea_providers_list = ai3_config.get("idea_md_providers", default_idea_providers)
     if not (
         isinstance(idea_providers_list, list)
@@ -2078,7 +2076,7 @@ class AI3:
                 "summary_message": "Repository not initialized.",
             }
 
-        provider_name_for_fix = self.ai_config.get("code_fix_provider", "codestral")
+        provider_name_for_fix = self.ai_config.get("code_fix_provider", "")
         # Model for fix provider can be specified in config or defaults in _get_provider_instance
 
         for rel_file_path in failed_files_from_analysis:

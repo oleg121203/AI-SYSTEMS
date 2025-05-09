@@ -1304,7 +1304,7 @@ async def receive_report(
         # Update and broadcast status if changed
         if new_status:
             current_status = subtask_status.get(report.subtask_id)
-            if (current_status != new_status):
+            if current_status != new_status:
                 subtask_status[report.subtask_id] = new_status
                 logger.info(
                     f"Subtask {report.subtask_id} status updated to: {new_status} "
@@ -1395,9 +1395,7 @@ async def update_ai_provider(data: dict):
 
     if not ai or ai not in config.get("ai_config", {}):
         logger.error(f"Invalid AI component specified: {ai}")
-        raise HTTPException(
-            status_code=400, 
-            detail=f"Invalid AI component: {ai}")
+        raise HTTPException(status_code=400, detail=f"Invalid AI component: {ai}")
 
     available_providers = get_available_provider_types()  # Get list of known providers
     if not provider or provider not in available_providers:
@@ -1429,8 +1427,7 @@ async def update_ai_provider(data: dict):
             )
             config_changed = True
         else:
-            message = (f"AI2 ({role}) provider is already {provider}. "
-                     f"No change.")
+            message = f"AI2 ({role}) provider is already {provider}. " f"No change."
 
     else:  # For AI1 and AI3
         if "ai_config" not in current_config:
@@ -2716,8 +2713,7 @@ async def request_task_for_idle_worker(data: dict):
 
     if queue.empty():
         logger.info(f"No tasks available for idle worker: {worker}")
-        return {"success": False, 
-                "message": f"No tasks available for {worker}"}
+        return {"success": False, "message": f"No tasks available for {worker}"}
 
     try:
         task = await queue.get()
@@ -3743,7 +3739,7 @@ def get_ai_provider_config(config, ai, role=None):
         provider_config = {}
 
     return {
-        "provider": provider_config.get("type", "openai"),
+        "provider": provider_config.get("type", ""),
         "model": provider_config.get("model", ""),
         "fallbacks": get_component_fallbacks_config(config, ai, role),
     }
@@ -3774,7 +3770,7 @@ def get_component_fallbacks_config(config, ai, role=None):
 
 def update_ai_provider_config(config, ai, provider_data, role=None):
     """Update provider configuration for an AI component."""
-    provider_type = provider_data.get("provider", "openai")
+    provider_type = provider_data.get("provider", "")
     model = provider_data.get("model", "")
     fallbacks = provider_data.get("fallbacks", [])
 
@@ -3817,26 +3813,29 @@ async def update_providers(data: dict):
             return {"status": "error", "message": "No data provided"}, 400
 
         # Load current configuration
-        config_data = config  # Use the global config
+        current_full_config = config_module.load_config()
 
         # Update AI1 provider if included
         if "ai1" in data:
             provider_data = data["ai1"]
-            provider_type = provider_data.get("provider", "openai")
+            provider_type = provider_data.get("provider", "")
             model = provider_data.get("model", "")
             fallbacks = provider_data.get("fallbacks", [])
 
-            if "ai_config" not in config_data:
-                config_data["ai_config"] = {}
-            if "ai1" not in config_data["ai_config"]:
-                config_data["ai_config"]["ai1"] = {}
+            if "ai_config" not in current_full_config:
+                current_full_config["ai_config"] = {}
+            if "ai1" not in current_full_config["ai_config"]:
+                current_full_config["ai_config"]["ai1"] = {}
 
-            config_data["ai_config"]["ai1"]["provider"] = provider_type
-            config_data["ai_config"]["ai1"]["model"] = model
+            current_full_config["ai_config"]["ai1"]["provider"] = provider_type
+            current_full_config["ai_config"]["ai1"]["model"] = model
 
             # Handle fallbacks if provided
             if fallbacks:
-                config_data["ai_config"]["ai1"]["fallbacks"] = fallbacks
+                current_full_config["ai_config"]["ai1"]["fallbacks"] = fallbacks
+            elif "fallbacks" in current_full_config["ai_config"]["ai1"]:
+                # Clear fallbacks if empty array was sent
+                current_full_config["ai_config"]["ai1"]["fallbacks"] = []
 
         # Update AI2 providers if included
         if "ai2" in data:
@@ -3844,64 +3843,97 @@ async def update_providers(data: dict):
             for role in ["executor", "tester", "documenter"]:
                 if role in ai2_data:
                     provider_data = ai2_data[role]
-                    provider_type = provider_data.get("provider", "openai")
+                    provider_type = provider_data.get("provider", "")
                     model = provider_data.get("model", "")
                     fallbacks = provider_data.get("fallbacks", [])
 
-                    if "ai_config" not in config_data:
-                        config_data["ai_config"] = {}
-                    if "ai2" not in config_data["ai_config"]:
-                        config_data["ai_config"]["ai2"] = {}
-                    if role not in config_data["ai_config"]["ai2"]:
-                        config_data["ai_config"]["ai2"][role] = {}
+                    if "ai_config" not in current_full_config:
+                        current_full_config["ai_config"] = {}
+                    if "ai2" not in current_full_config["ai_config"]:
+                        current_full_config["ai_config"]["ai2"] = {}
+                    if role not in current_full_config["ai_config"]["ai2"]:
+                        current_full_config["ai_config"]["ai2"][role] = {}
 
-                    config_data["ai_config"]["ai2"][role]["provider"] = provider_type
-                    config_data["ai_config"]["ai2"][role]["model"] = model
+                    current_full_config["ai_config"]["ai2"][role][
+                        "provider"
+                    ] = provider_type
+                    current_full_config["ai_config"]["ai2"][role]["model"] = model
 
                     # Handle fallbacks if provided
                     if fallbacks:
-                        config_data["ai_config"]["ai2"][role]["fallbacks"] = fallbacks
+                        current_full_config["ai_config"]["ai2"][role][
+                            "fallbacks"
+                        ] = fallbacks
+                    elif "fallbacks" in current_full_config["ai_config"]["ai2"][role]:
+                        # Clear fallbacks if empty array was sent
+                        current_full_config["ai_config"]["ai2"][role]["fallbacks"] = []
 
         # Update AI3 provider if included
         if "ai3" in data:
             provider_data = data["ai3"]
-            provider_type = provider_data.get("provider", "openai")
+            provider_type = provider_data.get("provider", "")
             model = provider_data.get("model", "")
             fallbacks = provider_data.get("fallbacks", [])
 
-            if "ai_config" not in config_data:
-                config_data["ai_config"] = {}
-            if "ai3" not in config_data["ai_config"]:
-                config_data["ai_config"]["ai3"] = {}
+            # Handle structure provider settings
+            structure_provider = provider_data.get("structure_provider")
+            structure_model = provider_data.get("structure_model")
+            structure_fallbacks = provider_data.get("structure_fallbacks", [])
 
-            config_data["ai_config"]["ai3"]["provider"] = provider_type
-            config_data["ai_config"]["ai3"]["model"] = model
+            if "ai_config" not in current_full_config:
+                current_full_config["ai_config"] = {}
+            if "ai3" not in current_full_config["ai_config"]:
+                current_full_config["ai_config"]["ai3"] = {}
 
-            # Handle fallbacks if provided
+            current_full_config["ai_config"]["ai3"]["provider"] = provider_type
+            current_full_config["ai_config"]["ai3"]["model"] = model
+
+            # Handle main fallbacks if provided
             if fallbacks:
-                config_data["ai_config"]["ai3"]["fallbacks"] = fallbacks
+                current_full_config["ai_config"]["ai3"]["fallbacks"] = fallbacks
+            elif "fallbacks" in current_full_config["ai_config"]["ai3"]:
+                # Clear fallbacks if empty array was sent
+                current_full_config["ai_config"]["ai3"]["fallbacks"] = []
 
-        # Save the updated configuration
-        try:
-            with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-                json.dump(
-                    config_data, f, indent=4, ensure_ascii=False
-                )  # Added ensure_ascii=False
-            logger.info("Provider configuration updated successfully")
-        except Exception as e:
-            logger.error(f"Failed to save configuration: {e}")
+            # Handle structure provider settings if provided
+            if structure_provider:
+                current_full_config["ai_config"]["ai3"][
+                    "structure_provider"
+                ] = structure_provider
+            if structure_model:
+                current_full_config["ai_config"]["ai3"][
+                    "structure_model"
+                ] = structure_model
+            if structure_fallbacks:
+                current_full_config["ai_config"]["ai3"][
+                    "structure_fallbacks"
+                ] = structure_fallbacks
+            elif "structure_fallbacks" in current_full_config["ai_config"]["ai3"]:
+                # Clear structure fallbacks if empty array was sent
+                current_full_config["ai_config"]["ai3"]["structure_fallbacks"] = []
+
+        # Save the updated configuration using the config module
+        if config_module.save_config(current_full_config):
+            logger.info("Provider configuration updated and saved successfully")
+
+            # Update global config
+            global config
+            config = current_full_config
+
+            # Return success
+            return {
+                "status": "success",
+                "message": "Provider configuration updated successfully",
+            }
+        else:
+            logger.error("Failed to save configuration")
             return {
                 "status": "error",
-                "message": f"Failed to save configuration: {e}",
+                "message": "Failed to save configuration",
             }, 500
 
-        # Return success
-        return {
-            "status": "success",
-            "message": "Provider configuration updated successfully",
-        }
     except Exception as e:
-        logger.error(f"Error updating providers: {e}")
+        logger.error(f"Error updating providers: {e}", exc_info=True)
         return {"status": "error", "message": f"Error updating providers: {e}"}, 500
 
 
@@ -3966,27 +3998,72 @@ async def get_component_fallbacks(
         ai_config = current_full_config.get("ai_config", {})
         fallbacks = []
 
-        ai_name, role = parse_component_name(component)  # Use existing helper
+        # Handle special case for ai3-structure
+        if component == "ai3-structure":
+            ai3_cfg = ai_config.get("ai3", {})
+            # Use new array-based structure_fallbacks
+            structure_fallbacks = ai3_cfg.get("structure_fallbacks", [])
+            return JSONResponse(content={"fallbacks": structure_fallbacks})
+        
+        # Don't process regular fallbacks for other components for now
+        # We want to keep the structure_fallbacks special and not have regular fallbacks
+        # for other components
+        
+        # Parse component name for regular components
+        ai_name, role = parse_component_name(component)
 
         if ai_name == "ai1":
             ai1_cfg = ai_config.get("ai1", {})
-            fb_provider = ai1_cfg.get("fallback_provider")
-            fb_model = ai1_cfg.get("fallback_model")
-            if fb_provider and fb_model:
-                fallbacks.append({"provider": fb_provider, "model": fb_model})
+            # Check for new array-based fallbacks first
+            array_fallbacks = ai1_cfg.get("fallbacks", [])
+            if array_fallbacks:
+                fallbacks = array_fallbacks
+            else:
+                # Fall back to old style fallback provider/model if present
+                fallback_provider = ai1_cfg.get("fallback_provider")
+                fallback_model = ai1_cfg.get("fallback_model")
+                if fallback_provider and fallback_model:
+                    fallbacks = [
+                        {"provider": fallback_provider, "model": fallback_model}
+                    ]
+
         elif ai_name == "ai3":
             ai3_cfg = ai_config.get("ai3", {})
-            fb_provider = ai3_cfg.get("fallback_provider")
-            fb_model = ai3_cfg.get("fallback_model")
-            if fb_provider and fb_model:
-                fallbacks.append({"provider": fb_provider, "model": fb_model})
+            # Check for new array-based fallbacks first
+            array_fallbacks = ai3_cfg.get("fallbacks", [])
+            if array_fallbacks:
+                fallbacks = array_fallbacks
+            else:
+                # Fall back to old style fallback provider/model if present
+                fallback_provider = ai3_cfg.get("fallback_provider")
+                fallback_model = ai3_cfg.get("fallback_model")
+                if fallback_provider and fallback_model:
+                    fallbacks = [
+                        {"provider": fallback_provider, "model": fallback_model}
+                    ]
+
         elif ai_name == "ai2" and role:
-            ai2_fb_cfg = ai_config.get("ai2", {}).get("fallback_config", {})
-            role_fb = ai2_fb_cfg.get(role, {})
-            fb_provider = role_fb.get("provider")
-            fb_model = role_fb.get("model")
-            if fb_provider and fb_model:
-                fallbacks.append({"provider": fb_provider, "model": fb_model})
+            ai2_component = ai_config.get("ai2", {}).get(role, {})
+            # Check for new array-based fallbacks first
+            array_fallbacks = ai2_component.get("fallbacks", [])
+            if array_fallbacks:
+                fallbacks = array_fallbacks
+            else:
+                # Fall back to old style fallback provider/model if present
+                fallback_provider = ai2_component.get("fallback_provider")
+                fallback_model = ai2_component.get("fallback_model")
+                if fallback_provider and fallback_model:
+                    fallbacks = [
+                        {"provider": fallback_provider, "model": fallback_model}
+                    ]
+                else:
+                    # Also check the legacy fallback_config format if needed
+                    ai2_fb_cfg = ai_config.get("ai2", {}).get("fallback_config", {})
+                    role_fb = ai2_fb_cfg.get(role, {})
+                    fb_provider = role_fb.get("provider")
+                    fb_model = role_fb.get("model")
+                    if fb_provider and fb_model:
+                        fallbacks = [{"provider": fb_provider, "model": fb_model}]
         else:
             logger.warning(f"Unknown component for fallbacks: {component}")
             return JSONResponse(
@@ -4108,17 +4185,23 @@ async def get_monitoring_status():
 # Define placeholder classes for services
 class PatternLearner:
     """Placeholder for the PatternLearner service."""
+
     def __init__(self):
         pass
+
 
 class PatternMatcher:
     """Placeholder for the PatternMatcher service."""
+
     def __init__(self):
         pass
 
+
 class RequirementAnalyzer:
     """Placeholder for the RequirementAnalyzer service."""
+
     def __init__(self):
         pass
+
 
 # ... rest of existing code ...

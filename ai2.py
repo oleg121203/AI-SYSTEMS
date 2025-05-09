@@ -68,7 +68,7 @@ class AI2:
             logger.warning(
                 "Section 'ai_config.ai2' not found in configuration. Using default values."
             )
-            self.ai_config = {"fallback_providers": ["openai"]}
+            self.ai_config = {"fallback_providers": [""]}
 
         # Load base prompts from config
         self.base_prompts = self.config.get(
@@ -96,12 +96,12 @@ class AI2:
         self.providers = self.ai_config.get("providers", {}).get(self.role, [])
         if not self.providers:
             logger.warning(
-                f"No providers configured for role '{self.role}'. Defaulting to ['openai']"
+                f"No providers configured for role '{self.role}'. Using empty provider list."
             )
-            self.providers = ["openai"]
+            self.providers = [""]  # Empty provider as default
 
         # Initialize fallback_providers
-        self.fallback_providers = self.ai_config.get("fallback_providers", ["ollama"])
+        self.fallback_providers = self.ai_config.get("fallback_providers", [""])
 
         # Initialize providers_config
         self.providers_config = self._setup_providers_config()
@@ -141,7 +141,7 @@ class AI2:
         provider_name: Optional[str] = None
         # self.ai_config is config.get("ai_config", {}).get("ai2", {})
         # self.providers is self.ai_config.get("providers", {}).get(self.role, [])
-        # self.fallback_providers is self.ai_config.get("fallback_providers", ["ollama"])
+        # self.fallback_providers is self.ai_config.get("fallback_providers", [""])
 
         role_settings = self.ai_config.get(
             self.role, {}
@@ -174,10 +174,10 @@ class AI2:
 
         # Last resort if no provider could be determined
         if not provider_name:
-            provider_name = "openai"  # Hardcoded default as a very last resort
+            provider_name = ""  # Empty default as a last resort
             logger.error(
                 f"CRITICAL: No provider could be determined for role '{self.role}' through any configuration. "
-                f"Defaulting to '{provider_name}'. This may not be intended."
+                f"No default provider specified. Provider factory will handle fallbacks."
             )
 
         # Assemble the configuration for this chosen provider_name
@@ -2362,9 +2362,7 @@ async def run_ai2_tester(providers=None):
     if not providers:
         # Default providers from configuration
         ai_config = config.get("ai_config", {}).get("ai2", {})
-        providers = ai_config.get("providers", {}).get(
-            "tester", ["codestral", "groq", "gemini"]
-        )
+        providers = ai_config.get("providers", {}).get("tester", [""])
 
     logger.info(f"Configured providers for role 'tester': {', '.join(providers)}")
     processor = TaskProcessor(providers)

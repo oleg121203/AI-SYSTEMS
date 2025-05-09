@@ -61,10 +61,10 @@
             "providers": [
                 "codestral"
             ],
-            "model": "codestral-latest",
+            "model": "claude-3-opus-20240229",
             "max_tokens": 2048,
             "temperature": 0.7,
-            "provider": "codestral",
+            "provider": "anthropic",
             "fallbacks": []
         },
         "ai2": {
@@ -82,18 +82,18 @@
             "max_tokens": 2048,
             "temperature": 0.4,
             "executor": {
-                "provider": "groq",
-                "model": "llama3-70b-8192",
+                "provider": "anthropic",
+                "model": "claude-3-opus-20240229",
                 "fallbacks": []
             },
             "tester": {
-                "provider": "groq",
-                "model": "llama3-70b-8192",
+                "provider": "anthropic",
+                "model": "claude-3-opus-20240229",
                 "fallbacks": []
             },
             "documenter": {
-                "provider": "openai",
-                "model": "llama3-70b-8192",
+                "provider": "anthropic",
+                "model": "claude-3-opus-20240229",
                 "fallbacks": []
             }
         },
@@ -104,13 +104,23 @@
             "structure_providers": [
                 "ollama1"
             ],
-            "model": "perplexity-ai/r1-1776",
+            "model": "claude-3-opus-20240229",
             "max_tokens": 2048,
             "temperature": 0.7,
-            "provider": "together",
-            "structure_provider": "ollama1",
-            "structure_model": "llama3.2:latest",
-            "fallbacks": []
+            "provider": "anthropic",
+            "structure_provider": "anthropic",
+            "structure_model": "claude-3-opus-20240229",
+            "fallbacks": [],
+            "structure_fallbacks": [
+                {
+                    "provider": "openrouter",
+                    "model": "mistralai/mistral-medium-3"
+                },
+                {
+                    "provider": "openai",
+                    "model": "gpt-4"
+                }
+            ]
         }
     },
     "providers": {

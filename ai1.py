@@ -34,8 +34,8 @@ class AI1:
                 "[AI1] Warning: 'ai_config.ai1' section not found in configuration. Using defaults."
             )
             ai1_config = {
-                "provider": "openai"
-            }  # Default provider if section is missing
+                "provider": ""
+            }  # Empty default provider if section is missing
 
         # Read the provider and model for AI1
         # Prioritize the 'provider' field, then the 'providers' list (first element), then a hardcoded default.
@@ -55,9 +55,9 @@ class AI1:
                     f"[AI1] Using provider '{provider_name}' from the 'providers' list."
                 )
             else:
-                provider_name = "openai"  # Hardcoded default if neither is found
+                provider_name = ""  # Empty provider as default, will be handled by the provider factory
                 log_message(
-                    f"[AI1] Warning: Neither 'provider' field nor 'providers' list found or valid in ai1_config. Defaulting to provider: '{provider_name}'."
+                    f"[AI1] Warning: Neither 'provider' field nor 'providers' list found or valid in ai1_config. No default provider specified."
                 )
         else:
             log_message(
