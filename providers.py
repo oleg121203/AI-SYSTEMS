@@ -204,7 +204,7 @@ async def reload_providers():
 
 
 class ProviderFactory:
-    """Фабрика для создания экземпляров провайдеров AI."""
+    """Factory for creating AI provider instances."""
 
     @staticmethod
     def create_provider(
@@ -213,20 +213,20 @@ class ProviderFactory:
         session: Optional[Any] = None,
     ) -> "BaseProvider":
         """
-        Создает экземпляр провайдера AI по имени.
+        Creates an AI provider instance by name.
 
         Args:
-            provider_name: Имя провайдера из секции "providers" в config.json
-                           или прямое название типа провайдера
-            config_arg: Дополнительная конфигурация для провайдера (необязательно),
-                        будет объединена с конфигурацией из файла.
+            provider_name: The provider name from the "providers" section in config.json
+                           or direct provider type name
+            config_arg: Additional provider configuration (optional),
+                        will be merged with configuration from the file.
             session: Optional session object (ignored, for backward compatibility)
 
         Returns:
-            BaseProvider: Экземпляр провайдера
+            BaseProvider: Provider instance
 
         Raises:
-            ValueError: Если тип провайдера не поддерживается или конфигурация некорректна.
+            ValueError: If the provider type is not supported or configuration is incorrect.
         """
         try:
             from config import load_config
@@ -235,7 +235,7 @@ class ProviderFactory:
             providers_config = all_config.get("providers", {})
         except Exception as e:
             logger.warning(
-                f"Не удалось загрузить общую конфигурацию: {e}. Будут использованы только переданные аргументы."
+                f"Failed to load general configuration: {e}. Only passed arguments will be used."
             )
             providers_config = {}
 
@@ -350,14 +350,14 @@ class ProviderFactory:
 
 
 class BaseProvider(ABC):
-    """Базовый класс для всех провайдеров AI."""
+    """Base class for all AI providers."""
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         """
-        Инициализация провайдера.
+        Provider initialization.
 
         Args:
-            config: Параметры конфигурации провайдера (из config.json["providers"][provider_name])
+            config: Provider configuration parameters (from config.json["providers"][provider_name])
         """
         self.config = config or {}
         self.name = self.config.get("type", "base")
@@ -369,7 +369,7 @@ class BaseProvider(ABC):
 
     @abstractmethod
     def setup(self) -> None:
-        """Настройка и проверка доступности провайдера."""
+        """Setup and check provider availability."""
         pass
 
     @abstractmethod
@@ -381,7 +381,7 @@ class BaseProvider(ABC):
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
     ) -> str:
-        """Генерация ответа на запрос."""
+        """Generate a response to the prompt."""
         pass
 
     async def generate_text(
@@ -455,11 +455,11 @@ class BaseProvider(ABC):
         await self.close_session()
 
     async def get_available_models(self) -> List[str]:
-        """Получение списка доступных моделей."""
+        """Get a list of available models."""
         return [self.model] if self.model else []
 
     def get_default_model(self) -> Optional[str]:
-        """Получение модели по умолчанию из конфигурации экземпляра."""
+        """Get the default model from instance configuration."""
         return self.model
 
 
@@ -1085,7 +1085,7 @@ class LocalProvider(BaseProvider):
 
 
 class OllamaProvider(BaseProvider):
-    """Провайдер для Ollama."""
+    """Provider for Ollama."""
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         super().__init__(config)
@@ -1098,7 +1098,7 @@ class OllamaProvider(BaseProvider):
         if not self.endpoint:
             self.endpoint = "http://localhost:11434"
             logger.warning(
-                f"Endpoint для OllamaProvider не указан, используется дефолтный: {self.endpoint}"
+                f"Endpoint for OllamaProvider not specified, using default: {self.endpoint}"
             )
         else:
             self.endpoint = (
@@ -1106,7 +1106,7 @@ class OllamaProvider(BaseProvider):
                 .replace("/api/chat", "")
                 .rstrip("/")
             )
-            logger.info(f"Ollama провайдер настроен на эндпоинт: {self.endpoint}")
+            logger.info(f"Ollama provider configured for endpoint: {self.endpoint}")
 
         self.use_sdk = False
         try:
@@ -1122,22 +1122,20 @@ class OllamaProvider(BaseProvider):
                 # For now, assume initialization implies usability
                 self.use_sdk = True
                 logger.info(
-                    f"Ollama SDK настроен успешно для эндпоинта: {self.endpoint}"
+                    f"Ollama SDK successfully configured for endpoint: {self.endpoint}"
                 )
             except Exception as client_err:
                 logger.warning(
-                    f"Не удалось инициализировать Ollama AsyncClient ({client_err}). Попытка использовать REST API."
+                    f"Failed to initialize Ollama AsyncClient ({client_err}). Attempting to use REST API."
                 )
                 self._client = None
                 self.ollama = None  # Ensure ollama module is not used if client fails
         except ImportError:
-            logger.warning(
-                "Модуль ollama не установлен. Будет использоваться REST API."
-            )
+            logger.warning("Module ollama not installed. REST API will be used.")
             self.ollama = None
 
         if not self.use_sdk:
-            logger.info(f"Ollama настроен на использование REST API: {self.endpoint}")
+            logger.info(f"Ollama configured to use REST API: {self.endpoint}")
 
     def get_client(self) -> Any:
         if self.use_sdk and self._client:
@@ -1191,10 +1189,10 @@ class OllamaProvider(BaseProvider):
                     return response["message"].get("content", "")
                 else:
                     logger.warning(
-                        f"Ответ от Ollama SDK ({model_to_use}) не содержит ожидаемых данных: {response}"
+                        f"Response from Ollama SDK ({model_to_use}) does not contain expected data: {response}"
                     )
                     return (
-                        "Ошибка генерации: Не получен корректный ответ от Ollama SDK."
+                        "Error generating: No valid response received from Ollama SDK."
                     )
             else:
                 # Use REST API
@@ -1219,9 +1217,9 @@ class OllamaProvider(BaseProvider):
                             return response_data["message"].get("content", "")
                         else:
                             logger.warning(
-                                f"Ответ от Ollama REST API ({model_to_use}) не содержит ожидаемых данных: {response_data}"
+                                f"Response from Ollama REST API ({model_to_use}) does not contain expected data: {response_data}"
                             )
-                            return "Ошибка генерации: Не получен корректный ответ от Ollama REST API."
+                            return "Error generating: No valid response received from Ollama REST API."
                     else:
                         response.raise_for_status()
 
@@ -1239,11 +1237,11 @@ class OllamaProvider(BaseProvider):
             logger.error(
                 f"Ollama REST API HTTP Error ({model_to_use}, {e.status}): {error_message}"
             )
-            return f"Ошибка генерации ({e.status}): {error_message}"
+            return f"Error generating ({e.status}): {error_message}"
         except aiohttp.ClientError as e:
             # This applies only to the REST API case
             logger.error(f"Ошибка соединения с Ollama REST API {self.endpoint}: {e}")
-            return f"Ошибка генерации: Не удалось подключиться к Ollama REST API ({e})"
+            return f"Error generating: Could not connect to Ollama REST API ({e})"
         except Exception as e:
             # Catch potential SDK errors or other unexpected errors
             sdk_or_rest = "SDK" if self.use_sdk else "REST API"
@@ -1257,8 +1255,8 @@ class OllamaProvider(BaseProvider):
                 and hasattr(self.ollama, "ResponseError")
                 and isinstance(e, self.ollama.ResponseError)
             ):
-                return f"Ошибка генерации (Ollama SDK {e.status_code}): {e.error}"
-            return f"Ошибка генерации: {str(e)}"
+                return f"Error generating (Ollama SDK {e.status_code}): {e.error}"
+            return f"Error generating: {str(e)}"
         # Removed finally block: session closing handled by __aexit__
 
     async def get_available_models(self) -> List[str]:
@@ -2734,7 +2732,7 @@ def discover_provider_plugins() -> Dict[str, Type[BaseProvider]]:
             f.write("# Provider plugins directory\n")
 
     # Add plugin directory to system path if not already there
-    if plugin_dir not in sys.path:
+    if (os.path.dirname(plugin_dir)) not in sys.path:
         sys.path.append(os.path.dirname(plugin_dir))
 
     try:

@@ -311,54 +311,109 @@ function connectWebSocket() {
   if (logContent)
     logContent.innerHTML += `<p><em>Attempting to connect to WebSocket: ${wsUrl}</em></p>`;
 
-  ws = new WebSocket(wsUrl);
-
-  ws.onopen = function (event) {
-    console.log("WebSocket connection opened");
-    if (logContent)
-      logContent.innerHTML +=
-        "<p><em>WebSocket connection established</em></p>";
-    showNotification("Connected to server", "success");
-    reconnectAttempts = 0; // Reset attempts on successful connection
-    // Request initial full status upon connection
-    ws.send(JSON.stringify({ action: "get_full_status" }));
-    showNotification("Connected to server, requesting full status...", "info");
-
-    // Запит на оновлення графіків
-    ws.send(JSON.stringify({ action: "get_chart_updates" }));
-  };
-
-  // Use the new handler function
-  ws.onmessage = handleWebSocketMessage;
-
-  ws.onerror = function (event) {
-    console.error("WebSocket error observed:", event);
-    logErrorToUI("WebSocket error.");
-    showNotification("WebSocket error", "error");
-  };
-
-  ws.onclose = function (event) {
-    console.log(
-      "WebSocket connection closed. Code:",
-      event.code,
-      "Reason:",
-      event.reason
-    );
-    if (logContent)
-      logContent.innerHTML += `<p><em>WebSocket connection closed. Attempting to reconnect... (${
-        reconnectAttempts + 1
-      }/${maxReconnectAttempts})</em></p>`;
-    showNotification("Disconnected. Reconnecting...", "warning");
-    reconnectAttempts++;
-    if (reconnectAttempts < maxReconnectAttempts) {
-      setTimeout(connectWebSocket, reconnectInterval);
-    } else {
-      console.error("Max WebSocket reconnection attempts reached.");
-      if (logContent)
-        logContent.innerHTML += `<p><em><strong style="color:red;">Failed to reconnect after ${maxReconnectAttempts} attempts.</strong> Please refresh the page.</em></p>`;
-      showNotification("Failed to reconnect to server", "error");
+  // Close existing connection if any
+  if (ws) {
+    try {
+      ws.close();
+    } catch (e) {
+      console.log("Error closing existing websocket:", e);
     }
-  };
+  }
+
+  try {
+    ws = new WebSocket(wsUrl);
+
+    ws.onopen = function (event) {
+      console.log("WebSocket connection opened");
+      if (logContent)
+        logContent.innerHTML +=
+          "<p><em>WebSocket connection established</em></p>";
+      showNotification("Connected to server", "success");
+      reconnectAttempts = 0; // Reset attempts on successful connection
+      // Request initial full status upon connection
+      ws.send(JSON.stringify({ action: "get_full_status" }));
+      showNotification(
+        "Connected to server, requesting full status...",
+        "info"
+      );
+
+      // Запит на оновлення графіків
+      ws.send(JSON.stringify({ action: "get_chart_updates" }));
+
+      // Start a ping interval to keep the connection alive
+      startPingInterval();
+    };
+
+    // Use the new handler function
+    ws.onmessage = handleWebSocketMessage;
+
+    ws.onerror = function (event) {
+      console.error("WebSocket error observed:", event);
+      console.log("WebSocket readyState:", ws.readyState);
+      logErrorToUI(`WebSocket error. ReadyState: ${ws.readyState}`);
+      showNotification("WebSocket error", "error");
+    };
+
+    ws.onclose = function (event) {
+      console.log(
+        "WebSocket connection closed. Code:",
+        event.code,
+        "Reason:",
+        event.reason
+      );
+      // Stop ping interval on close
+      stopPingInterval();
+
+      if (logContent)
+        logContent.innerHTML += `<p><em>WebSocket connection closed. Attempting to reconnect... (${
+          reconnectAttempts + 1
+        }/${maxReconnectAttempts})</em></p>`;
+      showNotification("Disconnected. Reconnecting...", "warning");
+      reconnectAttempts++;
+      if (reconnectAttempts < maxReconnectAttempts) {
+        // Use exponential backoff for reconnection attempts
+        const backoffTime =
+          reconnectInterval * Math.pow(1.5, reconnectAttempts - 1);
+        console.log(
+          `Attempting to reconnect in ${backoffTime}ms (attempt ${reconnectAttempts})`
+        );
+        setTimeout(connectWebSocket, backoffTime);
+      } else {
+        console.error("Max WebSocket reconnection attempts reached.");
+        if (logContent)
+          logContent.innerHTML +=
+            "<p><em>Max reconnection attempts reached. Please reload the page.</em></p>";
+        showNotification("Failed to reconnect to server", "error");
+      }
+    };
+  } catch (error) {
+    console.error("Error creating WebSocket:", error);
+    logErrorToUI(`Error creating WebSocket: ${error.message}`);
+    setTimeout(connectWebSocket, reconnectInterval);
+  }
+}
+
+// Ping interval to keep the connection alive
+let pingInterval = null;
+const PING_INTERVAL_MS = 30000; // 30 seconds
+
+function startPingInterval() {
+  stopPingInterval(); // Clear any existing interval
+  pingInterval = setInterval(() => {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      console.log("Sending ping to keep connection alive");
+      ws.send(
+        JSON.stringify({ type: "ping", timestamp: new Date().toISOString() })
+      );
+    }
+  }, PING_INTERVAL_MS);
+}
+
+function stopPingInterval() {
+  if (pingInterval) {
+    clearInterval(pingInterval);
+    pingInterval = null;
+  }
 }
 
 // --- UI Update Functions ---

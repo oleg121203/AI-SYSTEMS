@@ -504,65 +504,6 @@ def handle_signal(sig, frame):
     running = False
 
 
-async def main():
-    """Main function with enhanced monitoring"""
-    global running
-
-    logger.info("Starting Enhanced System Load Monitor")
-
-    # Set up signal handlers
-    signal.signal(signal.SIGINT, handle_signal)
-    signal.signal(signal.SIGTERM, handle_signal)
-
-    # Initial load level update
-    update_load_level()
-
-    # Start monitoring tasks
-    enhanced_log_monitor_task = asyncio.create_task(enhanced_monitor_api_logs())
-    legacy_log_monitor_task = asyncio.create_task(
-        monitor_api_logs()
-    )  # Keep for compatibility
-
-    try:
-        # Main monitoring loop
-        while running:
-            try:
-                # Update load level from config (in case it changed)
-                update_load_level()
-
-                # Generate enhanced report (includes WebSocket communication)
-                await enhanced_report_status()
-
-                # Wait before checking again (shorter interval for more responsive monitoring)
-                await asyncio.sleep(30)  # Report twice per minute
-            except Exception as e:
-                logger.error(f"Error in main monitoring loop: {e}", exc_info=True)
-                await asyncio.sleep(10)  # Wait before retrying
-    finally:
-        # Clean up
-        enhanced_log_monitor_task.cancel()
-        legacy_log_monitor_task.cancel()
-        try:
-            await enhanced_log_monitor_task
-            await legacy_log_monitor_task
-        except asyncio.CancelledError:
-            pass
-
-        logger.info("Enhanced System Load Monitor stopped")
-
-
-if __name__ == "__main__":
-    # Create PID file
-    try:
-        with open(os.path.join("logs", "load_monitor.pid"), "w") as f:
-            f.write(f"{os.getpid()}:{time.time()}")
-    except Exception as e:
-        logger.error(f"Error creating PID file: {e}")
-
-    # Run the main function
-    asyncio.run(main())
-
-
 async def get_enhanced_system_resources():
     """Get more detailed system resources using psutil"""
     try:
@@ -1180,3 +1121,62 @@ async def enhanced_report_status():
     )
 
     return status_report
+
+
+async def main():
+    """Main function with enhanced monitoring"""
+    global running
+
+    logger.info("Starting Enhanced System Load Monitor")
+
+    # Set up signal handlers
+    signal.signal(signal.SIGINT, handle_signal)
+    signal.signal(signal.SIGTERM, handle_signal)
+
+    # Initial load level update
+    update_load_level()
+
+    # Start monitoring tasks
+    enhanced_log_monitor_task = asyncio.create_task(enhanced_monitor_api_logs())
+    legacy_log_monitor_task = asyncio.create_task(
+        monitor_api_logs()
+    )  # Keep for compatibility
+
+    try:
+        # Main monitoring loop
+        while running:
+            try:
+                # Update load level from config (in case it changed)
+                update_load_level()
+
+                # Generate enhanced report (includes WebSocket communication)
+                await enhanced_report_status()
+
+                # Wait before checking again (shorter interval for more responsive monitoring)
+                await asyncio.sleep(30)  # Report twice per minute
+            except Exception as e:
+                logger.error(f"Error in main monitoring loop: {e}", exc_info=True)
+                await asyncio.sleep(10)  # Wait before retrying
+    finally:
+        # Clean up
+        enhanced_log_monitor_task.cancel()
+        legacy_log_monitor_task.cancel()
+        try:
+            await enhanced_log_monitor_task
+            await legacy_log_monitor_task
+        except asyncio.CancelledError:
+            pass
+
+        logger.info("Enhanced System Load Monitor stopped")
+
+
+if __name__ == "__main__":
+    # Create PID file
+    try:
+        with open(os.path.join("logs", "load_monitor.pid"), "w") as f:
+            f.write(f"{os.getpid()}:{time.time()}")
+    except Exception as e:
+        logger.error(f"Error creating PID file: {e}")
+
+    # Run the main function
+    asyncio.run(main())

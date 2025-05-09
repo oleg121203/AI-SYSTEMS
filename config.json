@@ -59,18 +59,18 @@
     "ai_config": {
         "ai1": {
             "providers": [
-                "ollama"
+                "codestral"
             ],
-            "model": "qwen2.5-coder:14b",
+            "model": "codestral-latest",
             "max_tokens": 2048,
             "temperature": 0.7,
-            "provider": "ollama",
+            "provider": "codestral",
             "fallbacks": []
         },
         "ai2": {
             "providers": {
                 "executor": [
-                    "codestral2"
+                    "ollama"
                 ],
                 "tester": [
                     "codestral2"
@@ -82,17 +82,17 @@
             "max_tokens": 2048,
             "temperature": 0.4,
             "executor": {
-                "provider": "codestral2",
-                "model": "codestral-latest",
+                "provider": "groq",
+                "model": "llama3-70b-8192",
                 "fallbacks": []
             },
             "tester": {
-                "provider": "codestral2",
-                "model": "codestral-latest",
+                "provider": "groq",
+                "model": "llama3-70b-8192",
                 "fallbacks": []
             },
             "documenter": {
-                "provider": "groq",
+                "provider": "openai",
                 "model": "llama3-70b-8192",
                 "fallbacks": []
             }
@@ -102,14 +102,14 @@
                 "gemini"
             ],
             "structure_providers": [
-                "gemini"
+                "ollama1"
             ],
-            "model": "gemini-1.5-pro-latest",
+            "model": "perplexity-ai/r1-1776",
             "max_tokens": 2048,
             "temperature": 0.7,
-            "provider": "gemini",
-            "structure_provider": "gemini",
-            "structure_model": "gemini-1.5-pro-latest",
+            "provider": "together",
+            "structure_provider": "ollama1",
+            "structure_model": "llama3.2:latest",
             "fallbacks": []
         }
     },

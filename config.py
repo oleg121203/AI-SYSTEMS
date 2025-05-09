@@ -91,6 +91,10 @@ _config_cache = None
 _config_file_path = "config.json"
 _config_last_mtime = 0
 
+# --- ADDED: Default model constant ---
+DEFAULT_AI2_MODEL = "gpt-3.5-turbo"
+# --- END ADDED ---
+
 # System load level constants
 LOAD_LEVEL_MINIMAL = 1
 LOAD_LEVEL_LOW = 2
@@ -395,36 +399,47 @@ def create_default_config(save_path: Optional[str] = None) -> Dict[str, Any]:
             "ai1": {
                 "provider": "openai",
                 "model": "gpt-4",
+                "fallback_provider": "groq",
+                "fallback_model": "llama3-8b-8192",
                 "max_tokens": 2000,
                 "temperature": 0.7,
             },
             "ai2": {
                 "provider": {
                     "executor": "openai",
+                    "executor_model": DEFAULT_AI2_MODEL,  # Used constant
                     "tester": "openai",
+                    "tester_model": DEFAULT_AI2_MODEL,  # Used constant
                     "documenter": "openai",
+                    "documenter_model": DEFAULT_AI2_MODEL,  # Used constant
                 },
-                "fallback_provider": "groq",
+                "fallback_config": {  # New structure for AI2 fallbacks
+                    "executor": {"provider": "groq", "model": "llama3-8b-8192"},
+                    "tester": {"provider": "anthropic", "model": "claude-3-haiku"},
+                    "documenter": {"provider": "gemini", "model": "gemini-1.0-pro"},
+                },
                 "max_tokens": 2000,
                 "temperature": 0.7,
             },
             "ai3": {
                 "provider": "openai",
                 "model": "gpt-4",
+                "fallback_provider": "groq",
+                "fallback_model": "llama3-8b-8192",
                 "max_tokens": 2000,
                 "temperature": 0.7,
             },
         },
         "ai1_prompts": [
-            "Вы опытный программист, специализирующийся на {language}. "
-            "Разбейте задачу на подзадачи и создайте план реализации.",
-            "Вы инженер по требованиям. Опишите требования к системе "
-            "на основе следующего задания.",
+            "You are an experienced programmer specializing in {language}. "
+            "Break down the task into subtasks and create an implementation plan.",
+            "You are a requirements engineer. Describe the system requirements "
+            "based on the following task.",
         ],
         "ai2_prompts": [
-            "Вы опытный программист. Создайте файл {filename} согласно заданию.",
-            "Вы тестировщик. Напишите тесты для файла {filename} согласно заданию.",
-            "Вы технический писатель. Создайте документацию для файла {filename}.",
+            "You are an experienced programmer. Create the file {filename} according to the task.",
+            "You are a tester. Write tests for the file {filename} according to the task.",
+            "You are a technical writer. Create documentation for the file {filename}.",
         ],
         "languages": [
             "python",
