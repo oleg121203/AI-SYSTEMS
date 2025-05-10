@@ -1535,6 +1535,32 @@ async def dashboard(request: Request):
         "ai_config": config_module.load_config().get("ai_config", {}),
         "roles": ["executor", "tester", "documenter"],
     }
+
+    # Add provider lists to ai_config if they don't exist (for template compatibility)
+    if "ai_config" in template_data and template_data["ai_config"]:
+        ai_config = template_data["ai_config"]
+        provider_list = template_data["providers"]
+
+        # Add providers to AI1 if needed
+        if "ai1" in ai_config and not ai_config["ai1"].get("providers"):
+            ai_config["ai1"]["providers"] = provider_list
+
+        # Add providers to AI2 if needed
+        if "ai2" in ai_config:
+            if not ai_config["ai2"].get("providers"):
+                ai_config["ai2"]["providers"] = {
+                    "executor": provider_list,
+                    "tester": provider_list,
+                    "documenter": provider_list,
+                }
+
+        # Add providers to AI3 if needed
+        if "ai3" in ai_config:
+            if not ai_config["ai3"].get("providers"):
+                ai_config["ai3"]["providers"] = provider_list
+            if not ai_config["ai3"].get("structure_providers"):
+                ai_config["ai3"]["structure_providers"] = provider_list
+
     return templates.TemplateResponse("index.html", template_data)
 
 

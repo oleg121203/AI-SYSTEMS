@@ -58,9 +58,6 @@
     ],
     "ai_config": {
         "ai1": {
-            "providers": [
-                "codestral"
-            ],
             "model": "claude-3-opus-20240229",
             "max_tokens": 2048,
             "temperature": 0.7,
@@ -68,22 +65,27 @@
             "fallbacks": [
                 {
                     "provider": "anthropic",
-                    "model": ""
+                    "model": "claude-3-opus-20240229"
                 }
+            ],
+            "providers": [
+                "openai",
+                "anthropic",
+                "groq",
+                "local",
+                "ollama",
+                "openrouter",
+                "cohere",
+                "gemini",
+                "together",
+                "codestral",
+                "gemini3",
+                "gemini4",
+                "tugezer",
+                "fallback"
             ]
         },
         "ai2": {
-            "providers": {
-                "executor": [
-                    "ollama"
-                ],
-                "tester": [
-                    "codestral2"
-                ],
-                "documenter": [
-                    "groq"
-                ]
-            },
             "max_tokens": 2048,
             "temperature": 0.4,
             "executor": {
@@ -92,7 +94,7 @@
                 "fallbacks": [
                     {
                         "provider": "anthropic",
-                        "model": ""
+                        "model": "claude-3-opus-20240229"
                     }
                 ]
             },
@@ -102,7 +104,7 @@
                 "fallbacks": [
                     {
                         "provider": "anthropic",
-                        "model": ""
+                        "model": "claude-3-opus-20240229"
                     }
                 ]
             },
@@ -112,23 +114,62 @@
                 "fallbacks": [
                     {
                         "provider": "anthropic",
-                        "model": ""
-                    },
-                    {
-                        "provider": "anthropic",
-                        "model": ""
+                        "model": "claude-3-opus-20240229"
                     }
+                ]
+            },
+            "providers": {
+                "executor": [
+                    "openai",
+                    "anthropic",
+                    "groq",
+                    "local",
+                    "ollama",
+                    "openrouter",
+                    "cohere",
+                    "gemini",
+                    "together",
+                    "codestral",
+                    "gemini3",
+                    "gemini4",
+                    "tugezer",
+                    "fallback"
+                ],
+                "tester": [
+                    "openai",
+                    "anthropic",
+                    "groq",
+                    "local",
+                    "ollama",
+                    "openrouter",
+                    "cohere",
+                    "gemini",
+                    "together",
+                    "codestral",
+                    "gemini3",
+                    "gemini4",
+                    "tugezer",
+                    "fallback"
+                ],
+                "documenter": [
+                    "openai",
+                    "anthropic",
+                    "groq",
+                    "local",
+                    "ollama",
+                    "openrouter",
+                    "cohere",
+                    "gemini",
+                    "together",
+                    "codestral",
+                    "gemini3",
+                    "gemini4",
+                    "tugezer",
+                    "fallback"
                 ]
             }
         },
         "ai3": {
-            "providers": [
-                "gemini"
-            ],
-            "structure_providers": [
-                "groq",
-                "ollama1"
-            ],
             "model": "claude-3-opus-20240229",
             "max_tokens": 2048,
             "temperature": 0.7,
@@ -146,6 +187,38 @@
                     "provider": "anthropic",
                     "model": "claude-3-opus-20240229"
                 }
+            ],
+            "providers": [
+                "openai",
+                "anthropic",
+                "groq",
+                "local",
+                "ollama",
+                "openrouter",
+                "cohere",
+                "gemini",
+                "together",
+                "codestral",
+                "gemini3",
+                "gemini4",
+                "tugezer",
+                "fallback"
+            ],
+            "structure_providers": [
+                "openai",
+                "anthropic",
+                "groq",
+                "local",
+                "ollama",
+                "openrouter",
+                "cohere",
+                "gemini",
+                "together",
+                "codestral",
+                "gemini3",
+                "gemini4",
+                "tugezer",
+                "fallback"
             ]
         }
     },
