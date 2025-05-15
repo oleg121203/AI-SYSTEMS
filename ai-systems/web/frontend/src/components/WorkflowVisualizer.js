@@ -1,26 +1,72 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   Box,
   Typography,
   CircularProgress,
   Tooltip,
   Paper,
-  useTheme
+  useTheme,
+  IconButton,
+  Chip,
+  Badge,
+  Collapse,
+  Zoom,
+  Fade,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  Button,
+  Divider,
+  LinearProgress,
+  Stack,
+  Grid
 } from '@mui/material';
 import { motion, AnimatePresence } from 'framer-motion';
+import InfoIcon from '@mui/icons-material/Info';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import ErrorIcon from '@mui/icons-material/Error';
+import PendingIcon from '@mui/icons-material/Pending';
+import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import PauseIcon from '@mui/icons-material/Pause';
+import ZoomInIcon from '@mui/icons-material/ZoomIn';
+import ZoomOutIcon from '@mui/icons-material/ZoomOut';
+import RefreshIcon from '@mui/icons-material/Refresh';
+import VisibilityIcon from '@mui/icons-material/Visibility';
+import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
+import MemoryIcon from '@mui/icons-material/Memory';
+import SettingsIcon from '@mui/icons-material/Settings';
 
 /**
  * WorkflowVisualizer component displays a real-time visualization of the AI workflow
  * @param {Object} props - Component props
  * @param {Array} props.tasks - Array of tasks to visualize
  * @param {Boolean} props.loading - Whether the component is loading data
+ * @param {Object} props.aiConfig - Configuration of AI models being used
  */
-const WorkflowVisualizer = ({ tasks = [], loading = false }) => {
+const WorkflowVisualizer = ({ tasks = [], loading = false, aiConfig = {} }) => {
   const theme = useTheme();
   const containerRef = useRef(null);
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
   const [nodes, setNodes] = useState([]);
   const [edges, setEdges] = useState([]);
+  const [zoom, setZoom] = useState(1);
+  const [selectedNode, setSelectedNode] = useState(null);
+  const [dataFlows, setDataFlows] = useState([]);
+  const [showDetails, setShowDetails] = useState(false);
+  const [animationPaused, setAnimationPaused] = useState(false);
+  const [showModelInfo, setShowModelInfo] = useState(false);
+  const [taskStats, setTaskStats] = useState({
+    completed: 0,
+    inProgress: 0,
+    pending: 0,
+    failed: 0
+  });
+  
+  // Track task execution times for performance metrics
+  const [executionTimes, setExecutionTimes] = useState({});
+  const [nodeDetailsOpen, setNodeDetailsOpen] = useState(false);
+  const [selectedNodeDetails, setSelectedNodeDetails] = useState(null);
 
   // Update dimensions on resize
   useEffect(() => {
@@ -28,7 +74,7 @@ const WorkflowVisualizer = ({ tasks = [], loading = false }) => {
       if (containerRef.current) {
         setDimensions({
           width: containerRef.current.offsetWidth,
-          height: 500 // Fixed height for visualization
+          height: 600 // Increased height for better visualization
         });
       }
     };
@@ -40,6 +86,35 @@ const WorkflowVisualizer = ({ tasks = [], loading = false }) => {
       window.removeEventListener('resize', updateDimensions);
     };
   }, []);
+  
+  // Handle zoom in/out
+  const handleZoomIn = () => {
+    setZoom(prevZoom => Math.min(prevZoom + 0.2, 2));
+  };
+  
+  const handleZoomOut = () => {
+    setZoom(prevZoom => Math.max(prevZoom - 0.2, 0.5));
+  };
+  
+  const handleResetZoom = () => {
+    setZoom(1);
+  };
+  
+  // Toggle animation pause
+  const toggleAnimationPause = () => {
+    setAnimationPaused(prev => !prev);
+  };
+  
+  // Handle node selection for details view
+  const handleNodeClick = (node) => {
+    setSelectedNodeDetails(node);
+    setNodeDetailsOpen(true);
+  };
+  
+  // Close node details dialog
+  const handleCloseDetails = () => {
+    setNodeDetailsOpen(false);
+  };
 
   // Process tasks into nodes and edges for visualization
   useEffect(() => {
@@ -47,28 +122,164 @@ const WorkflowVisualizer = ({ tasks = [], loading = false }) => {
     
     const newNodes = [];
     const newEdges = [];
+    const newDataFlows = [];
     
-    // Define AI agent nodes
+    // Calculate task statistics
+    const stats = {
+      completed: 0,
+      inProgress: 0,
+      pending: 0,
+      failed: 0
+    };
+    
+    tasks.forEach(task => {
+      if (task.status === 'completed') stats.completed++;
+      else if (task.status === 'in_progress') stats.inProgress++;
+      else if (task.status === 'failed') stats.failed++;
+      else stats.pending++;
+      
+      // Track execution times for performance metrics
+      if (task.startTime && task.endTime && task.status === 'completed') {
+        setExecutionTimes(prev => ({
+          ...prev,
+          [task.id]: (new Date(task.endTime) - new Date(task.startTime)) / 1000 // in seconds
+        }));
+      }
+    });
+    
+    setTaskStats(stats);
+    
+    // Define AI agent nodes with model info from aiConfig
     const agentNodes = [
-      { id: 'ai1', label: 'AI1 Coordinator', x: dimensions.width * 0.5, y: 80, type: 'coordinator' },
-      { id: 'ai2_executor', label: 'AI2 Executor', x: dimensions.width * 0.25, y: 200, type: 'executor' },
-      { id: 'ai2_tester', label: 'AI2 Tester', x: dimensions.width * 0.5, y: 200, type: 'tester' },
-      { id: 'ai2_documenter', label: 'AI2 Documenter', x: dimensions.width * 0.75, y: 200, type: 'documenter' },
-      { id: 'ai3', label: 'AI3 Project Manager', x: dimensions.width * 0.5, y: 320, type: 'manager' }
+      { 
+        id: 'ai1', 
+        label: 'AI1 Coordinator', 
+        x: dimensions.width * 0.5, 
+        y: 80, 
+        type: 'coordinator',
+        model: aiConfig.ai1?.model || 'Unknown',
+        provider: aiConfig.ai1?.provider || 'Unknown',
+        tasks: tasks.filter(t => t.agent === 'ai1').length
+      },
+      { 
+        id: 'ai2_executor', 
+        label: 'AI2 Executor', 
+        x: dimensions.width * 0.25, 
+        y: 200, 
+        type: 'executor',
+        model: aiConfig.ai2_executor?.model || 'Unknown',
+        provider: aiConfig.ai2_executor?.provider || 'Unknown',
+        tasks: tasks.filter(t => t.agent === 'ai2_executor' || t.role === 'executor').length
+      },
+      { 
+        id: 'ai2_tester', 
+        label: 'AI2 Tester', 
+        x: dimensions.width * 0.5, 
+        y: 200, 
+        type: 'tester',
+        model: aiConfig.ai2_tester?.model || 'Unknown',
+        provider: aiConfig.ai2_tester?.provider || 'Unknown',
+        tasks: tasks.filter(t => t.agent === 'ai2_tester' || t.role === 'tester').length
+      },
+      { 
+        id: 'ai2_documenter', 
+        label: 'AI2 Documenter', 
+        x: dimensions.width * 0.75, 
+        y: 200, 
+        type: 'documenter',
+        model: aiConfig.ai2_documenter?.model || 'Unknown',
+        provider: aiConfig.ai2_documenter?.provider || 'Unknown',
+        tasks: tasks.filter(t => t.agent === 'ai2_documenter' || t.role === 'documenter').length
+      },
+      { 
+        id: 'ai3', 
+        label: 'AI3 Project Manager', 
+        x: dimensions.width * 0.5, 
+        y: 320, 
+        type: 'manager',
+        model: aiConfig.ai3?.model || 'Unknown',
+        provider: aiConfig.ai3?.provider || 'Unknown',
+        tasks: tasks.filter(t => t.agent === 'ai3').length
+      }
     ];
     
     // Add agent nodes
     newNodes.push(...agentNodes);
     
-    // Add connections between agents
+    // Add connections between agents with data flow indicators
     newEdges.push(
-      { source: 'ai1', target: 'ai2_executor', animated: true },
-      { source: 'ai1', target: 'ai2_tester', animated: true },
-      { source: 'ai1', target: 'ai2_documenter', animated: true },
-      { source: 'ai1', target: 'ai3', animated: true }
+      { 
+        id: 'edge-ai1-executor',
+        source: 'ai1', 
+        target: 'ai2_executor', 
+        animated: !animationPaused && stats.inProgress > 0,
+        type: 'command',
+        strength: tasks.filter(t => t.role === 'executor').length
+      },
+      { 
+        id: 'edge-ai1-tester',
+        source: 'ai1', 
+        target: 'ai2_tester', 
+        animated: !animationPaused && stats.inProgress > 0,
+        type: 'command',
+        strength: tasks.filter(t => t.role === 'tester').length
+      },
+      { 
+        id: 'edge-ai1-documenter',
+        source: 'ai1', 
+        target: 'ai2_documenter', 
+        animated: !animationPaused && stats.inProgress > 0,
+        type: 'command',
+        strength: tasks.filter(t => t.role === 'documenter').length
+      },
+      { 
+        id: 'edge-ai1-manager',
+        source: 'ai1', 
+        target: 'ai3', 
+        animated: !animationPaused && stats.inProgress > 0,
+        type: 'report',
+        strength: tasks.filter(t => t.agent === 'ai3').length
+      },
+      { 
+        id: 'edge-executor-manager',
+        source: 'ai2_executor', 
+        target: 'ai3', 
+        animated: !animationPaused && stats.inProgress > 0,
+        type: 'feedback',
+        strength: Math.min(5, tasks.filter(t => t.role === 'executor' && t.status === 'completed').length)
+      },
+      { 
+        id: 'edge-tester-manager',
+        source: 'ai2_tester', 
+        target: 'ai3', 
+        animated: !animationPaused && stats.inProgress > 0,
+        type: 'feedback',
+        strength: Math.min(5, tasks.filter(t => t.role === 'tester' && t.status === 'completed').length)
+      },
+      { 
+        id: 'edge-documenter-manager',
+        source: 'ai2_documenter', 
+        target: 'ai3', 
+        animated: !animationPaused && stats.inProgress > 0,
+        type: 'feedback',
+        strength: Math.min(5, tasks.filter(t => t.role === 'documenter' && t.status === 'completed').length)
+      }
     );
     
-    // Add task nodes
+    // Create data flow visualizations
+    newEdges.forEach(edge => {
+      if (edge.strength > 0) {
+        newDataFlows.push({
+          id: `flow-${edge.id}`,
+          sourceId: edge.source,
+          targetId: edge.target,
+          strength: edge.strength,
+          type: edge.type
+        });
+      }
+    });
+    
+    // Add task nodes with more information
     tasks.forEach((task, index) => {
       const taskId = `task-${task.id || index}`;
       const taskType = task.role || 'unknown';
@@ -88,87 +299,177 @@ const WorkflowVisualizer = ({ tasks = [], loading = false }) => {
           targetAgent = 'ai3';
       }
       
-      // Add task node
+      // Calculate position with some randomness but avoid overlaps
+      const baseX = getAgentNodeById(targetAgent, agentNodes).x;
+      const baseY = getAgentNodeById(targetAgent, agentNodes).y + 100;
+      const offset = index % 3 - 1; // -1, 0, or 1
+      
+      // Add task node with enhanced information
       newNodes.push({
         id: taskId,
         label: task.filename || `Task ${index + 1}`,
-        x: getAgentNodeById(targetAgent, agentNodes).x + (Math.random() * 60 - 30),
-        y: getAgentNodeById(targetAgent, agentNodes).y + 80,
+        x: baseX + (offset * 80),
+        y: baseY + (Math.floor(index / 3) * 70),
         type: 'task',
         status: task.status,
+        progress: task.progress || 0,
+        startTime: task.startTime,
+        endTime: task.endTime,
+        priority: task.priority || 'medium',
         data: task
       });
       
-      // Add edge from agent to task
+      // Add edge from agent to task with more information
       newEdges.push({
+        id: `edge-${targetAgent}-${taskId}`,
         source: targetAgent,
         target: taskId,
-        animated: task.status === 'in_progress',
-        status: task.status
+        animated: !animationPaused && task.status === 'in_progress',
+        status: task.status,
+        type: 'assignment'
       });
+      
+      // Add dependencies between tasks if they exist
+      if (task.dependencies && task.dependencies.length > 0) {
+        task.dependencies.forEach(depId => {
+          const depTaskId = `task-${depId}`;
+          if (newNodes.some(n => n.id === depTaskId)) {
+            newEdges.push({
+              id: `dep-${depTaskId}-${taskId}`,
+              source: depTaskId,
+              target: taskId,
+              animated: false,
+              status: 'dependency',
+              type: 'dependency',
+              style: { strokeDasharray: '3,3' }
+            });
+          }
+        });
+      }
     });
     
     setNodes(newNodes);
     setEdges(newEdges);
-  }, [tasks, dimensions.width]);
+    setDataFlows(newDataFlows);
+  }, [tasks, dimensions.width, animationPaused, aiConfig]);
   
   // Helper function to get agent node by ID
   const getAgentNodeById = (id, agentNodes) => {
     return agentNodes.find(node => node.id === id) || { x: 0, y: 0 };
   };
   
-  // Get node color based on type and status
-  const getNodeColor = (node) => {
-    if (node.type === 'coordinator') return theme.palette.primary.main;
-    if (node.type === 'executor') return theme.palette.secondary.main;
-    if (node.type === 'tester') return theme.palette.info.main;
-    if (node.type === 'documenter') return theme.palette.warning.main;
-    if (node.type === 'manager') return theme.palette.success.main;
+  // Get node style based on type and status
+  const getNodeStyle = (node) => {
+    let color, borderColor, opacity = 1, glow = false;
     
-    // Task nodes
+    // Base color by node type
+    if (node.type === 'coordinator') color = theme.palette.primary.main;
+    else if (node.type === 'executor') color = theme.palette.secondary.main;
+    else if (node.type === 'tester') color = theme.palette.info.main;
+    else if (node.type === 'documenter') color = theme.palette.warning.main;
+    else if (node.type === 'manager') color = theme.palette.success.main;
+    else color = theme.palette.grey[500];
+    
+    // Task nodes get special styling based on status
     if (node.type === 'task') {
       switch (node.status) {
         case 'completed':
-          return theme.palette.success.main;
+          color = theme.palette.success.main;
+          borderColor = theme.palette.success.dark;
+          break;
         case 'in_progress':
-          return theme.palette.primary.main;
+          color = theme.palette.info.main;
+          borderColor = theme.palette.info.dark;
+          glow = true;
+          break;
         case 'failed':
-          return theme.palette.error.main;
+          color = theme.palette.error.main;
+          borderColor = theme.palette.error.dark;
+          break;
+        case 'pending':
+          color = theme.palette.grey[400];
+          borderColor = theme.palette.grey[600];
+          opacity = 0.8;
+          break;
         default:
-          return theme.palette.grey[500];
+          color = theme.palette.grey[500];
+          borderColor = theme.palette.grey[700];
+      }
+      
+      // Adjust by priority if available
+      if (node.priority === 'high') {
+        opacity = 1;
+        glow = true;
+      } else if (node.priority === 'low') {
+        opacity = 0.7;
+      }
+    } else {
+      // For agent nodes
+      borderColor = color;
+      
+      // Highlight active agents
+      if (node.tasks > 0) {
+        glow = true;
       }
     }
     
-    return theme.palette.grey[500];
+    return {
+      backgroundColor: color,
+      borderColor: borderColor || color,
+      opacity,
+      boxShadow: glow ? `0 0 8px 2px ${color}80` : '0 4px 8px rgba(0, 0, 0, 0.2)',
+      border: `2px solid ${borderColor || color}`
+    };
   };
   
-  // Get edge color based on status
-  const getEdgeColor = (edge) => {
-    switch (edge.status) {
-      case 'completed':
-        return theme.palette.success.main;
-      case 'in_progress':
-        return theme.palette.primary.main;
-      case 'failed':
-        return theme.palette.error.main;
-      default:
-        return theme.palette.grey[500];
-    }
+  // Get node color (for backward compatibility)
+  const getNodeColor = (node) => {
+    return getNodeStyle(node).backgroundColor;
   };
-
-  if (loading) {
-    return (
-      <Box sx={{ display: 'flex', justifyContent: 'center', p: 3 }}>
-        <CircularProgress />
-      </Box>
-    );
-  }
+  
+  // Get edge style based on status and type
+  const getEdgeStyle = (edge) => {
+    let color, width = 2, dashArray = 'none';
+    
+    // Color based on edge type
+    if (edge.type === 'command') color = theme.palette.primary.main;
+    else if (edge.type === 'feedback') color = theme.palette.info.main;
+    else if (edge.type === 'report') color = theme.palette.warning.main;
+    else if (edge.type === 'dependency') {
+      color = theme.palette.grey[600];
+      dashArray = '5,5';
+    }
+    else if (edge.type === 'assignment') {
+      // Assignment edges get colored by status
+      if (edge.status === 'completed') color = theme.palette.success.main;
+      else if (edge.status === 'in_progress') color = theme.palette.info.main;
+      else if (edge.status === 'failed') color = theme.palette.error.main;
+      else color = theme.palette.grey[400];
+    }
+    else color = theme.palette.grey[400];
+    
+    // Adjust width based on strength if available
+    if (edge.strength) {
+      width = Math.min(5, 1 + edge.strength * 0.5);
+    }
+    
+    return {
+      stroke: color,
+      strokeWidth: width,
+      strokeDasharray: edge.style?.strokeDasharray || dashArray
+    };
+  };
+  
+  // Get edge color (for backward compatibility)
+  const getEdgeColor = (edge) => {
+    return getEdgeStyle(edge).stroke;
+  };
 
   return (
     <Paper 
       ref={containerRef}
       sx={{ 
-        height: 500, 
+        height: 600, 
         position: 'relative', 
         overflow: 'hidden',
         bgcolor: 'background.paper',
@@ -180,6 +481,30 @@ const WorkflowVisualizer = ({ tasks = [], loading = false }) => {
       <Typography variant="h6" sx={{ p: 2, borderBottom: `1px solid ${theme.palette.divider}` }}>
         AI Workflow Visualization
       </Typography>
+      
+      {/* Control Panel */}
+      <Box sx={{ display: 'flex', justifyContent: 'flex-end', p: 1, borderBottom: `1px solid ${theme.palette.divider}` }}>
+        <Tooltip title="Zoom In">
+          <IconButton onClick={handleZoomIn} size="small">
+            <ZoomInIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+        <Tooltip title="Zoom Out">
+          <IconButton onClick={handleZoomOut} size="small">
+            <ZoomOutIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+        <Tooltip title={animationPaused ? "Resume Animation" : "Pause Animation"}>
+          <IconButton onClick={toggleAnimationPause} size="small">
+            {animationPaused ? <PlayArrowIcon fontSize="small" /> : <PauseIcon fontSize="small" />}
+          </IconButton>
+        </Tooltip>
+        <Tooltip title="Show Model Info">
+          <IconButton onClick={() => setShowModelInfo(!showModelInfo)} size="small">
+            <MemoryIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+      </Box>
       
       <Box sx={{ position: 'relative', height: 'calc(100% - 60px)' }}>
         {/* Render edges */}
@@ -218,13 +543,13 @@ const WorkflowVisualizer = ({ tasks = [], loading = false }) => {
                 </defs>
                 <path
                   d={`M${sourceNode.x},${sourceNode.y} L${targetNode.x},${targetNode.y}`}
-                  stroke={getEdgeColor(edge)}
-                  strokeWidth="2"
+                  stroke={getEdgeStyle(edge).stroke}
+                  strokeWidth={getEdgeStyle(edge).strokeWidth}
                   fill="none"
                   markerEnd={`url(#arrowhead-${index})`}
-                  strokeDasharray={edge.animated ? "5,5" : "none"}
+                  strokeDasharray={getEdgeStyle(edge).strokeDasharray}
                 >
-                  {edge.animated && (
+                  {edge.animated && !animationPaused && (
                     <animate 
                       attributeName="stroke-dashoffset" 
                       from="0" 
@@ -245,10 +570,40 @@ const WorkflowVisualizer = ({ tasks = [], loading = false }) => {
             <Tooltip 
               key={node.id} 
               title={
-                node.type === 'task' 
-                  ? `${node.label} - ${node.status}`
-                  : node.label
+                <Box sx={{ p: 1 }}>
+                  <Typography variant="subtitle2">{node.label}</Typography>
+                  {node.type === 'task' ? (
+                    <>
+                      <Typography variant="caption" display="block">
+                        Status: {node.status}
+                      </Typography>
+                      {node.progress > 0 && (
+                        <Typography variant="caption" display="block">
+                          Progress: {node.progress}%
+                        </Typography>
+                      )}
+                      {node.startTime && (
+                        <Typography variant="caption" display="block">
+                          Started: {new Date(node.startTime).toLocaleTimeString()}
+                        </Typography>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <Typography variant="caption" display="block">
+                        Model: {node.model || 'Not specified'}
+                      </Typography>
+                      <Typography variant="caption" display="block">
+                        Provider: {node.provider || 'Not specified'}
+                      </Typography>
+                      <Typography variant="caption" display="block">
+                        Tasks: {node.tasks || 0}
+                      </Typography>
+                    </>
+                  )}
+                </Box>
               }
+              arrow
             >
               <motion.div
                 initial={{ opacity: 0, scale: 0 }}
@@ -265,7 +620,7 @@ const WorkflowVisualizer = ({ tasks = [], loading = false }) => {
                   width: node.type === 'task' ? 60 : 80,
                   height: node.type === 'task' ? 60 : 60,
                   borderRadius: node.type === 'task' ? '8px' : '50%',
-                  backgroundColor: getNodeColor(node),
+                  ...getNodeStyle(node),
                   display: 'flex',
                   justifyContent: 'center',
                   alignItems: 'center',
@@ -274,10 +629,11 @@ const WorkflowVisualizer = ({ tasks = [], loading = false }) => {
                   fontSize: node.type === 'task' ? '0.75rem' : '0.875rem',
                   textAlign: 'center',
                   padding: '8px',
-                  boxShadow: '0 4px 8px rgba(0, 0, 0, 0.2)',
                   cursor: 'pointer',
-                  zIndex: 10
+                  zIndex: 10,
+                  transform: `scale(${zoom})`
                 }}
+                onClick={() => handleNodeClick(node)}
               >
                 {node.type === 'task' ? (
                   <Box sx={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', width: '100%' }}>
@@ -297,7 +653,124 @@ const WorkflowVisualizer = ({ tasks = [], loading = false }) => {
             </Tooltip>
           ))}
         </AnimatePresence>
+        
+        {/* Statistics Panel */}
+        <Box sx={{ mt: 2, p: 2, borderTop: `1px solid ${theme.palette.divider}` }}>
+          <Typography variant="subtitle2" gutterBottom>Task Statistics</Typography>
+          <Grid container spacing={2}>
+            <Grid item xs={3}>
+              <Chip 
+                icon={<CheckCircleIcon fontSize="small" />} 
+                label={`Completed: ${taskStats.completed}`}
+                size="small"
+                color="success"
+                variant="outlined"
+              />
+            </Grid>
+            <Grid item xs={3}>
+              <Chip 
+                icon={<PendingIcon fontSize="small" />} 
+                label={`In Progress: ${taskStats.inProgress}`}
+                size="small"
+                color="info"
+                variant="outlined"
+              />
+            </Grid>
+            <Grid item xs={3}>
+              <Chip 
+                icon={<ErrorIcon fontSize="small" />} 
+                label={`Failed: ${taskStats.failed}`}
+                size="small"
+                color="error"
+                variant="outlined"
+              />
+            </Grid>
+            <Grid item xs={3}>
+              <Chip 
+                icon={<PendingIcon fontSize="small" />} 
+                label={`Pending: ${taskStats.pending}`}
+                size="small"
+                color="default"
+                variant="outlined"
+              />
+            </Grid>
+          </Grid>
+          
+          {Object.keys(executionTimes).length > 0 && (
+            <Box sx={{ mt: 2 }}>
+              <Typography variant="caption">
+                Avg. Execution Time: {
+                  (Object.values(executionTimes).reduce((a, b) => a + b, 0) / Object.values(executionTimes).length).toFixed(2)
+                } seconds
+              </Typography>
+            </Box>
+          )}
+        </Box>
       </Box>
+      
+      {/* Node details dialog */}
+      <Dialog open={nodeDetailsOpen} onClose={handleCloseDetails} maxWidth="sm" fullWidth>
+        {selectedNodeDetails && (
+          <>
+            <DialogTitle>
+              {selectedNodeDetails.type === 'task' ? 'Task Details' : 'AI Agent Details'}
+            </DialogTitle>
+            <DialogContent dividers>
+              <Typography variant="h6">{selectedNodeDetails.label}</Typography>
+              
+              {selectedNodeDetails.type === 'task' ? (
+                <Box sx={{ mt: 2 }}>
+                  <Typography variant="body2" gutterBottom>
+                    <strong>Status:</strong> {selectedNodeDetails.status}
+                  </Typography>
+                  {selectedNodeDetails.progress > 0 && (
+                    <Box sx={{ mt: 1 }}>
+                      <Typography variant="body2" gutterBottom>
+                        <strong>Progress:</strong> {selectedNodeDetails.progress}%
+                      </Typography>
+                      <LinearProgress 
+                        variant="determinate" 
+                        value={selectedNodeDetails.progress} 
+                        sx={{ mt: 1, mb: 2 }}
+                      />
+                    </Box>
+                  )}
+                  {selectedNodeDetails.startTime && (
+                    <Typography variant="body2" gutterBottom>
+                      <strong>Started:</strong> {new Date(selectedNodeDetails.startTime).toLocaleString()}
+                    </Typography>
+                  )}
+                  {selectedNodeDetails.endTime && (
+                    <Typography variant="body2" gutterBottom>
+                      <strong>Completed:</strong> {new Date(selectedNodeDetails.endTime).toLocaleString()}
+                    </Typography>
+                  )}
+                  {selectedNodeDetails.priority && (
+                    <Typography variant="body2" gutterBottom>
+                      <strong>Priority:</strong> {selectedNodeDetails.priority}
+                    </Typography>
+                  )}
+                </Box>
+              ) : (
+                <Box sx={{ mt: 2 }}>
+                  <Typography variant="body2" gutterBottom>
+                    <strong>Model:</strong> {selectedNodeDetails.model || 'Not specified'}
+                  </Typography>
+                  <Typography variant="body2" gutterBottom>
+                    <strong>Provider:</strong> {selectedNodeDetails.provider || 'Not specified'}
+                  </Typography>
+                  <Typography variant="body2" gutterBottom>
+                    <strong>Active Tasks:</strong> {selectedNodeDetails.tasks || 0}
+                  </Typography>
+                </Box>
+              )}
+            </DialogContent>
+            <DialogActions>
+              <Button onClick={handleCloseDetails}>Close</Button>
+            </DialogActions>
+          </>
+        )}
+      </Dialog>
     </Paper>
   );
 };
