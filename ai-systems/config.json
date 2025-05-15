@@ -1,22 +1,22 @@
 {
   "services": {
     "ai_core": {
-      "url": "http://localhost:7871",
+      "url": "http://localhost:7875",
       "name": "AI Core",
       "description": "AI1 Coordinator service responsible for project planning and coordination"
     },
     "development_agents": {
-      "url": "http://localhost:7872",
+      "url": "http://localhost:7875",
       "name": "Development Agents",
       "description": "AI2 Development Agents service responsible for code generation, testing, and documentation"
     },
     "project_manager": {
-      "url": "http://localhost:7873",
+      "url": "http://localhost:7875",
       "name": "Project Manager",
       "description": "AI3 Project Manager service responsible for task management and progress tracking"
     },
     "cmp": {
-      "url": "http://localhost:7874",
+      "url": "http://localhost:7875",
       "name": "Continuous Monitoring Platform",
       "description": "Monitoring service responsible for system metrics and health checks"
     },
@@ -37,13 +37,25 @@
     "retry_delay": 1
   },
   "cors": {
-    "allowed_origins": ["*"],
-    "allowed_methods": ["*"],
-    "allowed_headers": ["*"]
+    "allowed_origins": [
+      "*"
+    ],
+    "allowed_methods": [
+      "*"
+    ],
+    "allowed_headers": [
+      "*"
+    ]
   },
   "logging": {
     "level": "INFO",
     "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    "file": "/workspaces/AI-SYSTEMS/logs/ai-systems.log"
+    "file": "/Users/olegkizima/workspace/AI-SYSTEMS/logs/ai-systems.log"
+  },
+  "ai_config": {
+    "ai1": {
+      "provider": "ollama_local",
+      "model": "llama3"
+    }
   }
 }

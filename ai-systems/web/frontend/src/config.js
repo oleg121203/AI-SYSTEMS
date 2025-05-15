@@ -3,15 +3,16 @@
 
 const config = {
   // API endpoints
-  apiBaseUrl: 'http://localhost:8001',
-  wsBaseUrl: 'ws://localhost:8001',
+  apiBaseUrl: 'http://localhost:8002',
+  wsBaseUrl: 'ws://localhost:8002',
   
   // Service endpoints
   services: {
-    aiCore: 'http://localhost:7871',
-    developmentAgents: 'http://localhost:7872',
-    projectManager: 'http://localhost:7873',
-    cmp: 'http://localhost:7874'
+    aiCore: 'http://localhost:7875',
+    developmentAgents: 'http://localhost:7875',
+    projectManager: 'http://localhost:7875',
+    cmp: 'http://localhost:7875',
+    gitService: 'http://localhost:7875'
   }
 };
 

@@ -1003,39 +1003,65 @@ async def update_ai_config(ai_config: Dict[str, Dict[str, Any]]):
                 if "apiKey" in broadcast_config[ai_key]:
                     broadcast_config[ai_key]["apiKey"] = "[REDACTED]"
 
-        # Actually save the configuration to the config file
+        # Actually save the configuration to both config files
         try:
-            # Read the current config file
-            config_path = os.getenv("CONFIG_PATH", "config.json")
-            with open(config_path, "r") as f:
-                current_config = json.load(f)
+            # Save to main config file
+            main_config_path = os.getenv("CONFIG_PATH", "config.json")
+            with open(main_config_path, "r") as f:
+                main_config = json.load(f)
             
-            # Update the AI configuration section
-            if "ai_config" not in current_config:
-                current_config["ai_config"] = {}
+            # Update the AI configuration section in main config
+            if "ai_config" not in main_config:
+                main_config["ai_config"] = {}
                 
-            # Update each AI agent's configuration
+            # Update each AI agent's configuration in main config
             for ai_key, config_data in ai_config.items():
-                if ai_key not in current_config["ai_config"]:
-                    current_config["ai_config"][ai_key] = {}
+                if ai_key not in main_config["ai_config"]:
+                    main_config["ai_config"][ai_key] = {}
                 
-                # Update provider and model
-                current_config["ai_config"][ai_key]["provider"] = config_data.get("provider")
-                current_config["ai_config"][ai_key]["model"] = config_data.get("model")
+                # Update provider and model in main config
+                main_config["ai_config"][ai_key]["provider"] = config_data.get("provider")
+                main_config["ai_config"][ai_key]["model"] = config_data.get("model")
+            
+            # Write the updated main config back to the file
+            with open(main_config_path, "w") as f:
+                json.dump(main_config, f, indent=2)
+            
+            # Also save to ai-systems config file
+            ai_systems_config_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "config.json")
+            if os.path.exists(ai_systems_config_path):
+                with open(ai_systems_config_path, "r") as f:
+                    ai_systems_config = json.load(f)
                 
-                # If an API key is provided, store it in the .env file instead of config.json
+                # Update the AI configuration section in ai-systems config
+                if "ai_config" not in ai_systems_config:
+                    ai_systems_config["ai_config"] = {}
+                
+                # Update each AI agent's configuration in ai-systems config
+                for ai_key, config_data in ai_config.items():
+                    if ai_key not in ai_systems_config["ai_config"]:
+                        ai_systems_config["ai_config"][ai_key] = {}
+                    
+                    # Update provider and model in ai-systems config
+                    ai_systems_config["ai_config"][ai_key]["provider"] = config_data.get("provider")
+                    ai_systems_config["ai_config"][ai_key]["model"] = config_data.get("model")
+                
+                # Write the updated ai-systems config back to the file
+                with open(ai_systems_config_path, "w") as f:
+                    json.dump(ai_systems_config, f, indent=2)
+                
+                logger.info(f"Successfully saved AI configuration to both {main_config_path} and {ai_systems_config_path}")
+            else:
+                logger.info(f"Successfully saved AI configuration to {main_config_path} (ai-systems config not found)")
+                
+            # If an API key is provided, store it in the .env file instead of config.json
+            for ai_key, config_data in ai_config.items():
                 if "apiKey" in config_data and config_data["apiKey"]:
                     provider_name = config_data.get("provider", "").upper()
                     if provider_name:
                         # We don't directly modify .env here for security reasons
                         # Just log that we would update it
                         logger.info(f"Would update {provider_name}_API_KEY in .env file")
-            
-            # Write the updated config back to the file
-            with open(config_path, "w") as f:
-                json.dump(current_config, f, indent=2)
-                
-            logger.info(f"Successfully saved AI configuration to {config_path}")
         except Exception as config_error:
             logger.error(f"Failed to save configuration: {config_error}")
             raise HTTPException(status_code=500, detail=f"Failed to save configuration: {str(config_error)}")

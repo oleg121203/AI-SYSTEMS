@@ -68,42 +68,6 @@ const AIModelSelector = ({ onConfigUpdate, initialConfig, loading = false }) => 
         }
         const data = await response.json();
         setProviders(data);
-        
-        // Initialize with initial config if available
-        if (initialConfig) {
-          const providerConfig = {};
-          const modelConfig = {};
-          
-          Object.keys(initialConfig).forEach(aiKey => {
-            if (initialConfig[aiKey]?.provider) {
-              providerConfig[aiKey] = initialConfig[aiKey].provider;
-              modelConfig[aiKey] = initialConfig[aiKey].model || '';
-              
-              // Initialize API key selection if available
-              if (initialConfig[aiKey]?.apiKey) {
-                setSelectedApiKeys(prev => ({
-                  ...prev,
-                  [aiKey]: initialConfig[aiKey].apiKey
-                }));
-              }
-            }
-          });
-          
-          setSelectedProviders(prevState => ({
-            ...prevState,
-            ...providerConfig
-          }));
-          
-          setSelectedModels(prevState => ({
-            ...prevState,
-            ...modelConfig
-          }));
-          
-          // Fetch models for each selected provider
-          Object.entries(providerConfig).forEach(([aiKey, provider]) => {
-            fetchModelsForProvider(provider, aiKey);
-          });
-        }
       } catch (err) {
         console.error('Failed to fetch providers:', err);
         setError('Failed to load AI providers. Please try again later.');
@@ -111,7 +75,55 @@ const AIModelSelector = ({ onConfigUpdate, initialConfig, loading = false }) => 
     };
     
     fetchProviders();
-  }, [initialConfig]);
+  }, []); // Only fetch providers once
+  
+  // Separate useEffect to handle initialConfig changes
+  useEffect(() => {
+    // Initialize with initial config if available
+    if (initialConfig) {
+      console.log('Initializing with config:', initialConfig);
+      const providerConfig = {};
+      const modelConfig = {};
+      const apiKeyConfig = {};
+      
+      Object.keys(initialConfig).forEach(aiKey => {
+        if (initialConfig[aiKey]?.provider) {
+          providerConfig[aiKey] = initialConfig[aiKey].provider;
+          modelConfig[aiKey] = initialConfig[aiKey].model || '';
+          
+          // Initialize API key selection if available
+          if (initialConfig[aiKey]?.apiKey) {
+            apiKeyConfig[aiKey] = initialConfig[aiKey].apiKey;
+          }
+        }
+      });
+      
+      setSelectedProviders(prevState => ({
+        ...prevState,
+        ...providerConfig
+      }));
+      
+      setSelectedModels(prevState => ({
+        ...prevState,
+        ...modelConfig
+      }));
+      
+      setSelectedApiKeys(prevState => ({
+        ...prevState,
+        ...apiKeyConfig
+      }));
+      
+      // Fetch models for each selected provider
+      Object.entries(providerConfig).forEach(([aiKey, provider]) => {
+        if (provider) {
+          fetchModelsForProvider(provider, aiKey, apiKeyConfig[aiKey]);
+        }
+      });
+      
+      // Reset unsaved changes flag since we just loaded from server
+      setHasUnsavedChanges(false);
+    }
+  }, [initialConfig]); // Re-run when initialConfig changes
 
   // Fetch available models for a provider
   const fetchModelsForProvider = async (provider, aiKey, apiKey = '') => {

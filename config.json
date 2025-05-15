@@ -59,10 +59,10 @@
     "ai_config": {
         "ai1": {
             "providers": [
-                "ollama",
+                "codestral",
                 "openrouter-qwen",
                 "gemini-pro2.5",
-                "gemini3",
+                "groq",
                 "ollama"
             ],
             "model": "qwen3:latest",
@@ -73,6 +73,7 @@
             "providers": {
                 "executor": [
                     "codestral",
+                    "codestral2",
                     "groq",
                     "openrouter-qwen",
                     "gemini-pro2.5",
@@ -80,10 +81,12 @@
                 ],
                 "tester": [
                     "codestral",
+                    "codestral2",
                     "groq",
                     "gemini"
                 ],
                 "documenter": [
+                    "codestral",
                     "codestral2",
                     "groq",
                     "gemini4",
@@ -97,10 +100,11 @@
         },
         "ai3": {
             "providers": [
-                "ollama1",
+                "codestral",
                 "groq",
                 "together",
-                "openrouter-qwen"
+                "openrouter-qwen",
+                "ollama"
             ],
             "model": "llama3.2:latest",
             "max_tokens": 2048,
@@ -111,82 +115,127 @@
         "ollama": {
             "type": "ollama",
             "endpoint": "http://host.docker.internal:11434",
-            "model": "qwen3:latest"
+            "model": "qwen3:latest",
+            "api_key_env": "OLLAMA_API_KEY"
         },
-        "ollama1": {
+        "ollama2": {
+            "type": "ollama",
+            "endpoint": "http://host.docker.internal:11434",
+            "model": "llama3.2:latest",
+            "api_key_env": "OLLAMA2_API_KEY"
+        },
+        "ollama3": {
             "type": "ollama",
             "endpoint": "http://46.219.108.236:11434",
-            "model": "qwen2:1.5b"
+            "model": "qwen2:1.5b",
+            "api_key_env": "OLLAMA3_API_KEY"
         },
         "codestral": {
             "type": "codestral",
             "endpoint": "https://codestral.mistral.ai/v1",
-            "model": "codestral-latest"
+            "model": "codestral-latest",
+            "api_key_env": "CODESTRAL_API_KEY"
         },
         "codestral2": {
             "type": "codestral",
             "endpoint": "https://codestral.mistral.ai/v1",
-            "model": "codestral-latest"
+            "model": "codestral-latest",
+            "api_key_env": "CODESTRAL2_API_KEY"
+        },
+        "codestral3": {
+            "type": "codestral",
+            "endpoint": "https://codestral.mistral.ai/v1",
+            "model": "codestral-latest",
+            "api_key_env": "CODESTRAL3_API_KEY"
         },
         "gemini": {
             "type": "gemini",
-            "model": "gemini-1.5-flash"
+            "model": "gemini-1.5-flash",
+            "api_key_env": "GEMINI_API_KEY"
+        },
+        "gemini2": {
+            "type": "gemini",
+            "model": "gemini-1.5-flash",
+            "api_key_env": "GEMINI2_API_KEY"
         },
         "gemini-pro2.5": {
             "type": "gemini",
-            "model": "gemini-2.5-pro-preview-03-25"
+            "model": "gemini-2.5-pro-preview-03-25",
+            "api_key_env": "GEMINI_PRO25_API_KEY"
         },
         "gemini3": {
             "type": "gemini3",
-            "model": "gemini-2.0-flash"
+            "model": "gemini-2.0-flash",
+            "api_key_env": "GEMINI3_API_KEY"
         },
         "gemini4": {
             "type": "gemini4",
-            "model": "gemini-2.0-pro"
+            "model": "gemini-2.0-pro",
+            "api_key_env": "GEMINI4_API_KEY"
         },
         "cohere": {
             "type": "cohere",
             "endpoint": null,
-            "model": "command-r"
+            "model": "command-r",
+            "api_key_env": "COHERE_API_KEY"
+        },
+        "cohere2": {
+            "type": "cohere",
+            "endpoint": null,
+            "model": "command-r-plus",
+            "api_key_env": "COHERE2_API_KEY"
         },
         "groq": {
             "type": "groq",
             "endpoint": null,
-            "model": "llama3-70b-8192"
+            "model": "llama3-70b-8192",
+            "api_key_env": "GROQ_API_KEY"
+        },
+        "groq2": {
+            "type": "groq",
+            "endpoint": null,
+            "model": "mixtral-8x7b-32768",
+            "api_key_env": "GROQ2_API_KEY"
         },
         "together": {
             "type": "together",
             "endpoint": null,
-            "model": "mistralai/Mixtral-8x7B-Instruct-v0.1"
+            "model": "mistralai/Mixtral-8x7B-Instruct-v0.1",
+            "api_key_env": "TOGETHER_API_KEY"
         },
-        "together-maverick": {
+        "together2": {
             "type": "together",
             "endpoint": null,
-            "model": "meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8"
+            "model": "meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8",
+            "api_key_env": "TOGETHER2_API_KEY"
         },
         "openrouter": {
             "type": "openrouter",
             "endpoint": "https://openrouter.ai/api/v1",
             "model": "anthropic/claude-3-opus",
-            "max_tokens": 1024
+            "max_tokens": 1024,
+            "api_key_env": "OPENROUTER_API_KEY"
+        },
+        "openrouter2": {
+            "type": "openrouter",
+            "endpoint": "https://openrouter.ai/api/v1",
+            "model": "anthropic/claude-3-sonnet",
+            "max_tokens": 1024,
+            "api_key_env": "OPENROUTER2_API_KEY"
         },
         "openrouter-qwen": {
             "type": "openrouter",
             "endpoint": "https://openrouter.ai/api/v1",
             "model": "qwen/qwen-2.5-coder-32b-instruct",
-            "max_tokens": 1024
-        },
-        "openrouter-qwen-2": {
-            "type": "openrouter",
-            "endpoint": "https://openrouter.ai/api/v1",
-            "model": "anthropic/claude-3-sonnet",
-            "max_tokens": 1024
+            "max_tokens": 1024,
+            "api_key_env": "OPENROUTER_QWEN_API_KEY"
         },
         "openrouter-gemini": {
             "type": "openrouter",
             "endpoint": "https://openrouter.ai/api/v1",
             "model": "google/gemini-pro-1.5",
-            "max_tokens": 1024
+            "max_tokens": 1024,
+            "api_key_env": "OPENROUTER_GEMINI_API_KEY"
         }
     },
     "request_delays": {

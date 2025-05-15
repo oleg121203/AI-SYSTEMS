@@ -429,6 +429,7 @@ function App() {
   useEffect(() => {
     fetchProjects();
     fetchSystemStatus();
+    fetchAIConfigFromServer(); // Fetch AI configuration on initialization
     connectWebSocket();
     
     return () => {
@@ -441,6 +442,11 @@ function App() {
   // Handle tab changes
   const handleTabChange = (event, newValue) => {
     setCurrentTab(newValue);
+    
+    // Fetch AI configuration when switching to the AI Configuration tab
+    if (newValue === 4) { // AI Configuration tab
+      fetchAIConfigFromServer();
+    }
   };
   
   // Toggle drawer
