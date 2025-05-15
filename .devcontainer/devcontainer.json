@@ -1,0 +1,93 @@
+{
+  "name": "Python & Node.js Development",
+  "image": "mcr.microsoft.com/devcontainers/python:1-3.12",
+  "features": {
+    "ghcr.io/devcontainers/features/java:1": {
+      "version": "17",
+      "installMaven": "false",
+      "installGradle": "false"
+    },
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "lts"
+    },
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {},
+    "ghcr.io/devcontainers/features/rust:1": {},
+    "ghcr.io/devcontainers/features/go:1": {}
+  },
+  "runArgs": [
+    "--add-host=host.docker.internal:host-gateway",
+    "--network=bridge"
+  ],
+  "containerEnv": {
+    "OLLAMA_HOST": "http://host.docker.internal:11434",
+    "TZ": "Europe/Kyiv" // Змініть, якщо потрібно
+    // JAVA_HOME видалено, оскільки встановлюється функцією Java
+  },
+  "mounts": [
+    "source=my-app-data,target=/data,type=volume",
+    "source=${localEnv:HOME}/.ssh,target=/home/vscode/.ssh,type=bind,consistency=cached,readonly"
+  ],
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "sonarlint.ls.javaHome": "${env:JAVA_HOME}",
+        "java.home": "${env:JAVA_HOME}"
+      },
+      "extensions": [
+        "ms-python.python",
+        "ms-python.black-formatter",
+        "ms-python.flake8",
+        "ms-python.isort",
+        "ms-python.vscode-pylance",
+        "njpwerner.autodocstring",
+        "ms-toolsai.jupyter",
+        "ms-python.debugpy",
+        "ms-python.pytest",
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        "vscjava.vscode-java-pack",
+        "redhat.java",
+        "vscjava.vscode-java-debug",
+        "vscjava.vscode-maven",
+        "streetsidesoftware.code-spell-checker",
+        "ms-vscode-remote.remote-containers",
+        "eamodio.gitlens",
+        "ms-azuretools.vscode-docker",
+        "GitHub.copilot",
+        "GitHub.copilot-chat",
+        "GitHub.copilot-labs",
+        "GitHub.copilot-labs-experiments",
+        "donjayamanne.python-environment-manager",
+        "foxundermoon.shell-format",
+        "timonwong.shellcheck",
+        "yzhang.markdown-all-in-one",
+        "redhat.vscode-yaml",
+        "golang.go",
+        "rust-lang.rust-analyzer",
+        "editorconfig.editorconfig",
+        "DavidAnson.vscode-markdownlint",
+        "SonarSource.sonarlint-vscode",
+        "ciiqr.note",
+        "GitHub.vscode-github-actions"
+      ]
+    }
+  },
+  "forwardPorts": [3000, 7860, 11434],
+  "portsAttributes": {
+    // Видалено атрибути для порту 9000
+    "3000": {
+      "label": "Node.js Application",
+      "onAutoForward": "notify"
+    },
+    "7860": {
+      "label": "Application Port",
+      "onAutoForward": "notify"
+    },
+    "11434": {
+      "label": "Ollama API",
+      "onAutoForward": "notify"
+    }
+  },
+  "postCreateCommand": "chmod +x /workspaces/AI-SYSTEMS/setup.sh && /workspaces/AI-SYSTEMS/setup.sh", // Переконайтеся в ідемпотентності setup.sh
+  "workspaceFolder": "/workspaces/AI-SYSTEMS"
+}
