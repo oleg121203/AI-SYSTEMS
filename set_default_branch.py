@@ -10,7 +10,7 @@ load_dotenv()
 # Get GitHub credentials from environment variables
 GITHUB_TOKEN = os.getenv('GITHUB_TOKEN')
 REPO_OWNER = "oleg121203"  # GitHub username
-REPO_NAME = "AI-SYSTEMS"    # Repository name
+REPO_NAME = "AI-SYSTEMS-REPO"    # Repository name
 
 if not GITHUB_TOKEN:
     print("Error: GITHUB_TOKEN not found in .env file")
