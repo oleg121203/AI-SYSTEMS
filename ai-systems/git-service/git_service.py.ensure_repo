@@ -1,0 +1,23 @@
+def ensure_repo_exists(self):
+        """Ensure the repository exists and is up to date"""
+        if not os.path.exists(self.repo_path):
+            logger.info(f"Cloning repository {GITHUB_REPO} to {self.repo_path}")
+            os.makedirs(os.path.dirname(self.repo_path), exist_ok=True)
+            try:
+                self._run_command(["git", "clone", REPO_URL, str(self.repo_path)])
+            except subprocess.CalledProcessError as e:
+                logger.error(f"Error cloning repository: {e}")
+                # Create an empty repository as fallback
+                os.makedirs(self.repo_path, exist_ok=True)
+                self._run_command(["git", "init"], cwd=str(self.repo_path))
+        else:
+            logger.info(f"Repository already exists at {self.repo_path}, pulling latest changes")
+            try:
+                self._run_command(["git", "pull"], cwd=str(self.repo_path))
+            except subprocess.CalledProcessError as e:
+                logger.warning(f"Error pulling latest changes: {e}")
+                # Continue anyway
+        
+        # Configure Git user
+        self._run_command(["git", "config", "user.name", GIT_USER_NAME], cwd=str(self.repo_path))
+        self._run_command(["git", "config", "user.email", GIT_USER_EMAIL], cwd=str(self.repo_path))

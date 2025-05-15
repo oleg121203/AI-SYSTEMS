@@ -1,0 +1,486 @@
+import json
+import logging
+import os
+import subprocess
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+import uvicorn
+from dotenv import load_dotenv
+from fastapi import BackgroundTasks, FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
+logger = logging.getLogger("git-service")
+
+# Load environment variables
+load_dotenv()
+
+# Constants
+GIT_USER_NAME = os.getenv("GIT_USER_NAME", "AI-SYSTEMS")
+GIT_USER_EMAIL = os.getenv("GIT_USER_EMAIL", "ai-systems@example.com")
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
+GITHUB_REPO = os.getenv("GITHUB_REPO", "oleg121203/AI-SYSTEMS-REPO")
+MAIN_BRANCH = os.getenv("MAIN_BRANCH", "main")
+SERVICE_PORT = int(os.getenv("GIT_SERVICE_PORT", "7865"))
+
+# Ensure we have a valid repository URL
+if not GITHUB_REPO:
+    logger.error("GITHUB_REPO environment variable is not set")
+    raise ValueError("GITHUB_REPO environment variable is not set")
+
+# Construct the repository URL with token for authentication
+REPO_URL = (
+    f"https://{GITHUB_TOKEN}@github.com/{GITHUB_REPO}.git"
+    if GITHUB_TOKEN
+    else f"https://github.com/{GITHUB_REPO}.git"
+)
+
+# FastAPI app
+app = FastAPI(title="Git Service API")
+
+# Configure CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# Pydantic models
+class FileContent(BaseModel):
+    path: str
+    content: str
+
+
+class CommitRequest(BaseModel):
+    files: List[FileContent]
+    commit_message: str
+    branch: Optional[str] = Field(default="main")
+
+
+class CommitResponse(BaseModel):
+    success: bool
+    message: str
+    commit_hash: Optional[str] = None
+
+
+class RepositoryInfo(BaseModel):
+    repo_url: str
+    branch: str
+    last_commit: Optional[str] = None
+    file_count: int
+
+
+# Git Service class
+class GitService:
+    """Service for handling Git operations for the AI-SYSTEMS platform"""
+
+    def __init__(self, repo_path=None):
+        """Initialize the Git service
+
+        Args:
+            repo_path: Path to the repository. If None, a temporary directory will be used.
+        """
+        self.repo_path = (
+            repo_path or Path(os.path.expanduser("~")) / "workspace" / "AI-SYSTEMS-REPO"
+        )
+        self.ensure_repo_exists()
+
+    def ensure_repo_exists(self):
+        """Ensure the repository exists and is up to date"""
+        if not os.path.exists(self.repo_path):
+            logger.info(f"Cloning repository {GITHUB_REPO} to {self.repo_path}")
+            os.makedirs(os.path.dirname(self.repo_path), exist_ok=True)
+            try:
+                self._run_command(["git", "clone", REPO_URL, str(self.repo_path)])
+            except subprocess.CalledProcessError as e:
+                logger.error(f"Error cloning repository: {e}")
+                # Create an empty repository as fallback
+                os.makedirs(self.repo_path, exist_ok=True)
+                self._run_command(["git", "init"], cwd=str(self.repo_path))
+        else:
+            logger.info(
+                f"Repository already exists at {self.repo_path}, pulling latest changes"
+            )
+            try:
+                # First, ensure we're in a clean state
+                self._run_command(["git", "reset", "--hard"], cwd=str(self.repo_path))
+                # Fetch remote changes
+                self._run_command(["git", "fetch"], cwd=str(self.repo_path))
+                # Try to pull changes
+                self._run_command(["git", "pull"], cwd=str(self.repo_path))
+            except subprocess.CalledProcessError as e:
+                logger.warning(f"Error pulling latest changes: {e}")
+                # Handle common git pull problems
+                try:
+                    # Get current branch
+                    branch = self._run_command(
+                        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                        cwd=str(self.repo_path),
+                    )
+                    logger.info(f"Attempting to reset and pull from origin/{branch}")
+                    # Reset to origin's state
+                    self._run_command(
+                        ["git", "reset", "--hard", f"origin/{branch}"],
+                        cwd=str(self.repo_path),
+                    )
+                except Exception as inner_e:
+                    logger.warning(f"Failed to reset repository: {inner_e}")
+                # Continue anyway
+
+        # Configure Git user
+        self._run_command(
+            ["git", "config", "user.name", GIT_USER_NAME], cwd=str(self.repo_path)
+        )
+        self._run_command(
+            ["git", "config", "user.email", GIT_USER_EMAIL], cwd=str(self.repo_path)
+        )
+
+    def commit_file(self, file_path, content, commit_message, branch=MAIN_BRANCH):
+        """Commit a file to the repository
+
+        Args:
+            file_path: Path to the file, relative to the repository root
+            content: Content of the file
+            commit_message: Commit message
+            branch: Branch to commit to
+
+        Returns:
+            bool: True if the commit was successful, False otherwise
+        """
+        try:
+            # Ensure we're on the right branch
+            self._ensure_branch(branch)
+
+            # Ensure the directory exists
+            full_path = os.path.join(self.repo_path, file_path)
+            os.makedirs(os.path.dirname(full_path), exist_ok=True)
+
+            # Write the file
+            with open(full_path, "w") as f:
+                f.write(content)
+
+            # Add the file to Git
+            self._run_command(["git", "add", file_path], cwd=str(self.repo_path))
+
+            # Commit the file
+            self._run_command(
+                ["git", "commit", "-m", commit_message], cwd=str(self.repo_path)
+            )
+
+            # Get commit hash
+            commit_hash = self._run_command(
+                ["git", "rev-parse", "HEAD"], cwd=str(self.repo_path)
+            )
+
+            # Push the changes
+            self._run_command(
+                ["git", "push", "origin", branch], cwd=str(self.repo_path)
+            )
+
+            logger.info(f"Successfully committed and pushed {file_path}")
+            return True, commit_hash
+        except Exception as e:
+            logger.error(f"Error committing file {file_path}: {e}")
+            return False, None
+
+    def commit_files(self, files, commit_message, branch=MAIN_BRANCH):
+        """Commit multiple files to the repository
+
+        Args:
+            files: List of dictionaries with 'path' and 'content' keys
+            commit_message: Commit message
+            branch: Branch to commit to
+
+        Returns:
+            tuple: (success, commit_hash)
+        """
+        try:
+            # Ensure we're on the right branch
+            self._ensure_branch(branch)
+
+            # Write all files
+            for file_info in files:
+                file_path = file_info.path
+                content = file_info.content
+
+                # Ensure the directory exists
+                full_path = os.path.join(self.repo_path, file_path)
+                os.makedirs(os.path.dirname(full_path), exist_ok=True)
+
+                # Write the file
+                with open(full_path, "w") as f:
+                    f.write(content)
+
+                # Add the file to Git
+                self._run_command(["git", "add", file_path], cwd=str(self.repo_path))
+
+            # Commit all files
+            self._run_command(
+                ["git", "commit", "-m", commit_message], cwd=str(self.repo_path)
+            )
+
+            # Get commit hash
+            commit_hash = self._run_command(
+                ["git", "rev-parse", "HEAD"], cwd=str(self.repo_path)
+            )
+
+            # Push the changes
+            self._run_command(
+                ["git", "push", "origin", branch], cwd=str(self.repo_path)
+            )
+
+            logger.info(f"Successfully committed and pushed {len(files)} files")
+            return True, commit_hash
+        except Exception as e:
+            logger.error(f"Error committing files: {e}")
+            return False, None
+
+    def setup_github_actions(self):
+        """Set up GitHub Actions workflows for testing"""
+        workflows_dir = os.path.join(self.repo_path, ".github", "workflows")
+        os.makedirs(workflows_dir, exist_ok=True)
+
+        # Create a basic CI workflow for testing
+        ci_workflow = """name: CI
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+    - name: Set up Python
+      uses: actions/setup-python@v2
+      with:
+        python-version: '3.9'
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+    - name: Run tests
+      run: |
+        if [ -d tests ]; then
+          python -m unittest discover tests
+        else
+          echo "No tests directory found, skipping tests"
+        fi
+"""
+
+        workflow_path = os.path.join(workflows_dir, "ci.yml")
+        with open(workflow_path, "w") as f:
+            f.write(ci_workflow)
+
+        # Commit the workflow file
+        self._run_command(
+            ["git", "add", ".github/workflows/ci.yml"], cwd=str(self.repo_path)
+        )
+        self._run_command(
+            ["git", "commit", "-m", "Set up GitHub Actions CI workflow"],
+            cwd=str(self.repo_path),
+        )
+        self._run_command(
+            ["git", "push", "origin", MAIN_BRANCH], cwd=str(self.repo_path)
+        )
+
+        logger.info("Successfully set up GitHub Actions workflow")
+
+    def _ensure_branch(self, branch):
+        """Ensure the specified branch exists and we're on it"""
+        try:
+            # Check if the branch exists
+            branches = self._run_command(["git", "branch"], cwd=str(self.repo_path))
+
+            if f"* {branch}" in branches:
+                # Already on the branch
+                return
+
+            if branch in branches:
+                # Branch exists, switch to it
+                self._run_command(["git", "checkout", branch], cwd=str(self.repo_path))
+            else:
+                # Create and switch to the branch
+                self._run_command(
+                    ["git", "checkout", "-b", branch], cwd=str(self.repo_path)
+                )
+                # Push the branch to remote
+                self._run_command(
+                    ["git", "push", "-u", "origin", branch], cwd=str(self.repo_path)
+                )
+        except Exception as e:
+            logger.error(f"Error ensuring branch {branch}: {e}")
+            raise
+
+    def get_repo_info(self):
+        """Get information about the repository"""
+        try:
+            # Get current branch
+            branch = self._run_command(
+                ["git", "branch", "--show-current"], cwd=str(self.repo_path)
+            )
+
+            # Get last commit
+            last_commit = self._run_command(
+                ["git", "log", "-1", "--pretty=format:%h - %s"], cwd=str(self.repo_path)
+            )
+
+            # Count files in repository
+            file_count = len(
+                self._run_command(
+                    ["git", "ls-files"], cwd=str(self.repo_path)
+                ).splitlines()
+            )
+
+            return {
+                "repo_url": REPO_URL.replace(GITHUB_TOKEN, "***"),
+                "branch": branch,
+                "last_commit": last_commit,
+                "file_count": file_count,
+            }
+        except Exception as e:
+            logger.error(f"Error getting repository info: {e}")
+            return {
+                "repo_url": REPO_URL.replace(GITHUB_TOKEN, "***"),
+                "branch": "unknown",
+                "last_commit": None,
+                "file_count": 0,
+            }
+
+    def _run_command(self, command, cwd=None):
+        """Run a command and return its output
+
+        Args:
+            command: Command to run as a list of strings
+            cwd: Working directory
+
+        Returns:
+            str: Output of the command
+
+        Raises:
+            subprocess.CalledProcessError: If the command fails
+        """
+        logger.debug(f"Running command: {' '.join(command)}")
+        try:
+            result = subprocess.run(
+                command, cwd=cwd, capture_output=True, text=True, check=True
+            )
+            return result.stdout.strip()
+        except subprocess.CalledProcessError as e:
+            # Use warning level for git operations that commonly fail
+            if command[0] == "git" and command[1] in ["pull", "push", "clone", "fetch"]:
+                logger.warning(f"Command failed: {' '.join(command)}, Error: {e}")
+            else:
+                logger.error(f"Command failed: {' '.join(command)}, Error: {e}")
+
+            # Re-raise if the command is critical
+            if command[0] != "git" or command[1] not in [
+                "pull",
+                "push",
+                "clone",
+                "fetch",
+            ]:
+                raise
+            return f"Error: {e}"
+
+
+# Create a global instance of the git service
+git_service = GitService()
+
+
+# API endpoints
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    return {"status": "healthy"}
+
+
+@app.get("/info")
+async def get_repository_info():
+    """Get information about the repository"""
+    return git_service.get_repo_info()
+
+
+@app.post("/commit", response_model=CommitResponse)
+async def commit_files(commit_request: CommitRequest):
+    """Commit files to the repository"""
+    success, commit_hash = git_service.commit_files(
+        commit_request.files, commit_request.commit_message, commit_request.branch
+    )
+
+    if success:
+        return {
+            "success": True,
+            "message": f"Successfully committed {len(commit_request.files)} files",
+            "commit_hash": commit_hash,
+        }
+    else:
+        return {
+            "success": False,
+            "message": "Failed to commit files",
+            "commit_hash": None,
+        }
+
+
+@app.post("/setup-actions")
+async def setup_github_actions():
+    """Set up GitHub Actions workflows"""
+    try:
+        git_service.setup_github_actions()
+        return {"success": True, "message": "Successfully set up GitHub Actions"}
+    except Exception as e:
+        logger.error(f"Error setting up GitHub Actions: {e}")
+        return {"success": False, "message": str(e)}
+
+
+if __name__ == "__main__":
+    # Repository is already initialized when the GitService instance was created
+    # Just create a README if it doesn't exist
+    readme_path = os.path.join(git_service.repo_path, "README.md")
+    if not os.path.exists(readme_path):
+        readme_content = f"""# {GITHUB_REPO}
+
+This repository contains code generated by the AI-SYSTEMS platform.
+
+## About
+
+AI-SYSTEMS is an advanced AI-driven development platform that helps create, test, and deploy software projects.
+
+## Structure
+
+- `src/`: Source code
+- `tests/`: Test files
+- `.github/workflows/`: CI/CD configuration
+
+## Usage
+
+This repository is automatically updated by the AI-SYSTEMS platform.
+"""
+        git_service.commit_file(
+            "README.md", readme_content, "Initial commit: Add README"
+        )
+
+        # Create a basic directory structure
+        git_service.commit_files(
+            [
+                FileContent(path="src/__init__.py", content="# Source code package"),
+                FileContent(path="tests/__init__.py", content="# Test package"),
+            ],
+            "Add basic directory structure",
+        )
+
+    # Start the server
+    logger.info(f"Starting Git Service on port {SERVICE_PORT}")
+    uvicorn.run(app, host="0.0.0.0", port=SERVICE_PORT)

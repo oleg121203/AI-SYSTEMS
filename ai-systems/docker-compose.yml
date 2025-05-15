@@ -1,0 +1,146 @@
+version: '3.8'
+
+services:
+  ai-core:
+    build: ./ai-core
+    ports:
+      - "${AI_CORE_PORT:-7861}:7861"
+    environment:
+      - PYTHONPATH=/app
+    env_file:
+      - ./.env
+    volumes:
+      - ./ai-core:/app
+      - ./logs:/app/logs
+    depends_on:
+      - postgres
+      - redis
+      - rabbitmq
+
+  development-agents:
+    build: ./development-agents
+    ports:
+      - "${DEV_AGENTS_PORT:-7862}:7862"
+    environment:
+      - PYTHONPATH=/app
+    env_file:
+      - ./.env
+    volumes:
+      - ./development-agents:/app
+      - ./logs:/app/logs
+    depends_on:
+      - postgres
+      - redis
+      - rabbitmq
+
+  project-manager:
+    build: ./project-manager
+    ports:
+      - "${PROJECT_MANAGER_PORT:-7863}:7863"
+    environment:
+      - PYTHONPATH=/app
+    env_file:
+      - ./.env
+    volumes:
+      - ./project-manager:/app
+      - ./logs:/app/logs
+    depends_on:
+      - postgres
+      - redis
+      - rabbitmq
+
+  cmp:
+    build: ./cmp
+    ports:
+      - "${CMP_PORT:-7864}:7864"
+    environment:
+      - PYTHONPATH=/app
+    env_file:
+      - ./.env
+    volumes:
+      - ./cmp:/app
+      - ./logs:/app/logs
+    depends_on:
+      - postgres
+      - redis
+      - rabbitmq
+
+  web-frontend:
+    build: ./web/frontend
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    env_file:
+      - ./.env
+    volumes:
+      - ./web/frontend:/app
+    depends_on:
+      - web-backend
+
+  web-backend:
+    build: ./web/backend
+    ports:
+      - "${WEB_PORT:-8000}:8000"
+    environment:
+      - PYTHONPATH=/app
+    env_file:
+      - ./.env
+    volumes:
+      - ./web/backend:/app
+      - ./logs:/app/logs
+    depends_on:
+      - postgres
+      - redis
+      - rabbitmq
+
+  git-service:
+    build: ./git-service
+    ports:
+      - "${GIT_SERVICE_PORT:-7865}:7865"
+    environment:
+      - PYTHONPATH=/app
+    env_file:
+      - ./.env
+    volumes:
+      - ./git-service:/app
+      - ${REPOSITORY_PATH:-~/workspace/AI-SYSTEMS-REPO}:/root/workspace/AI-SYSTEMS-REPO
+      - ./logs:/app/logs
+    depends_on:
+      - postgres
+      - redis
+
+  postgres:
+    image: postgres:14
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_DB=${DB_NAME:-ai_systems}
+      - POSTGRES_USER=${DB_USER:-postgres}
+      - POSTGRES_PASSWORD=${DB_PASSWORD:-postgres}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  redis:
+    image: redis:6
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    environment:
+      - RABBITMQ_DEFAULT_USER=${RABBITMQ_USER:-guest}
+      - RABBITMQ_DEFAULT_PASS=${RABBITMQ_PASSWORD:-guest}
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+  rabbitmq_data:

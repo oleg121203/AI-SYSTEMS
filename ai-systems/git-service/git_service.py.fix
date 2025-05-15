@@ -1,0 +1,29 @@
+def _run_command(self, command, cwd=None):
+        """Run a command and return its output
+        
+        Args:
+            command: Command to run as a list of strings
+            cwd: Working directory
+            
+        Returns:
+            str: Output of the command
+            
+        Raises:
+            subprocess.CalledProcessError: If the command fails
+        """
+        logger.debug(f"Running command: {' '.join(command)}")
+        try:
+            result = subprocess.run(
+                command,
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            return result.stdout.strip()
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Command failed: {' '.join(command)}, Error: {e}")
+            # Re-raise if the command is critical
+            if command[0] != "git" or command[1] not in ["pull", "push", "clone"]:
+                raise
+            return f"Error: {e}"

@@ -1,0 +1,74 @@
+version: 1.0
+
+# Core Configuration
+server:
+  port: 7860
+  environment: development
+  log_level: debug
+
+database:
+  host: localhost
+  port: 5432
+  name: ai_systems
+  user: admin
+
+redis:
+  host: localhost
+  port: 6379
+  db: 0
+
+rabbitmq:
+  host: localhost
+  port: 5672
+  user: guest
+  password: guest
+
+# Services Configuration
+services:
+  ai_core:
+    host: localhost
+    port: 7861
+    workers: 2
+
+  development_agents:
+    host: localhost
+    port: 7862
+    workers: 4
+
+  project_manager:
+    host: localhost
+    port: 7863
+    workers: 2
+
+  cmp:
+    host: localhost
+    port: 7864
+    workers: 1
+    
+  git_service:
+    host: localhost
+    port: 7865
+    repository_path: ~/workspace/AI-SYSTEMS-REPO
+    github_repo: oleg121203/AI-SYSTEMS-REPO
+
+web:
+  frontend:
+    port: 3000
+    build_dir: web/frontend/build
+
+  backend:
+    port: 8000
+    static_dir: web/frontend/public
+
+security:
+  jwt_secret: your-secret-key-here
+  password_salt_rounds: 10
+
+caching:
+  enabled: true
+  provider: redis
+  ttl: 3600
+
+external_services:
+  email_provider: sendgrid
+  storage_provider: aws-s3
