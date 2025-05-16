@@ -80,23 +80,7 @@ document.addEventListener('DOMContentLoaded', function() {
   });
   
   // Toggle expand output
-  toggleExpandBtn.addEventListener('click', function() {
-      toggleExpandOutput();
-  });
-  
-  function toggleExpandOutput() {
-      outputContainer.classList.toggle('expanded');
-      
-      if (outputContainer.classList.contains('expanded')) {
-          toggleExpandBtn.innerHTML = '<i class="fas fa-compress"></i>';
-          commandInputContainer.classList.remove('hidden');
-          document.body.style.overflow = 'hidden'; // Prevent scrolling of background
-      } else {
-          toggleExpandBtn.innerHTML = '<i class="fas fa-expand"></i>';
-          commandInputContainer.classList.add('hidden');
-          document.body.style.overflow = ''; // Restore scrolling
-      }
-  }
+  toggleExpandBtn.addEventListener('click', toggleExpandOutput);
   
   // Clear output
   clearBtn.addEventListener('click', function() {
@@ -233,7 +217,7 @@ function setupEventListeners() {
   // Action buttons
   actionButtons.forEach(button => {
       button.addEventListener('click', () => {
-          const scriptId = button.getAttribute('data-script-id');
+          const scriptId = button.getAttribute('data-script');
           showConfirmation(scriptId);
       });
   });
@@ -266,9 +250,9 @@ function setupEventListeners() {
   
   // Confirmation modal buttons
   confirmYesBtn.addEventListener('click', () => {
-      const scriptId = confirmYesBtn.getAttribute('data-script-id');
+      const scriptId = confirmYesBtn.getAttribute('data-script');
       hideConfirmation();
-      runScript(scriptId);
+      runScript(scriptId, true); // Pass true to indicate confirmation
   });
   
   confirmNoBtn.addEventListener('click', hideConfirmation);
@@ -292,12 +276,15 @@ function setupEventListeners() {
 }
 
 // Show confirmation modal
-function showConfirmation(scriptId) {
-  const button = document.querySelector(`[data-script-id="${scriptId}"]`);
-  const scriptName = button.textContent.trim();
+function showConfirmation(scriptId, scriptName) {
+  // If scriptName is not provided, try to get it from the button
+  if (!scriptName) {
+    const button = document.querySelector(`[data-script="${scriptId}"]`);
+    scriptName = button ? button.textContent.trim() : scriptId;
+  }
   
   confirmMessage.textContent = `Are you sure you want to run "${scriptName}"?`;
-  confirmYesBtn.setAttribute('data-script-id', scriptId);
+  confirmYesBtn.setAttribute('data-script', scriptId);
   
   confirmModal.style.display = 'flex';
 }
@@ -308,7 +295,7 @@ function hideConfirmation() {
 }
 
 // Run a script
-function runScript(scriptId) {
+function runScript(scriptId, confirmed = false) {
   // Clear output if a different script is being run
   if (currentScriptId !== scriptId) {
     outputElement.innerHTML = '';
@@ -316,11 +303,8 @@ function runScript(scriptId) {
   
   currentScriptId = scriptId;
   
-  // Show loading message
-  appendToOutput(`Running script...\n`, 'normal');
-  
   // Disable the button
-  const button = document.querySelector(`[data-script-id="${scriptId}"]`);
+  const button = document.querySelector(`[data-script="${scriptId}"]`);
   button.disabled = true;
   
   // Send request to run the script
@@ -329,14 +313,27 @@ function runScript(scriptId) {
     headers: {
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify({ scriptId })
+    body: JSON.stringify({ scriptId, confirmed })
   })
   .then(response => response.json())
   .then(data => {
     if (!data.success) {
       appendToOutput(`Error: ${data.message}\n`, 'error');
       button.disabled = false;
+      return;
     }
+    
+    // Check if confirmation is required
+    if (data.requiresConfirmation) {
+      // Re-enable the button until confirmation
+      button.disabled = false;
+      // Show confirmation dialog
+      showConfirmation(scriptId, data.scriptName);
+      return;
+    }
+    
+    // Show loading message for confirmed execution
+    appendToOutput(`Running script...\n`, 'normal');
   })
   .catch(error => {
     appendToOutput(`Error: ${error.message}\n`, 'error');
@@ -359,7 +356,7 @@ function handleScriptComplete(data) {
     appendToOutput(`\nScript completed with exit code: ${data.exitCode}\n`, outputClass);
     
     // Re-enable the button
-    const button = document.querySelector(`[data-script-id="${data.scriptId}"]`);
+    const button = document.querySelector(`[data-script="${data.scriptId}"]`);
     button.disabled = false;
     
     // Update system status after script completion
@@ -385,16 +382,40 @@ function appendToOutput(text, className) {
 
 // Toggle expand output
 function toggleExpandOutput() {
+  // Force the display of output container before toggling class to ensure animations work
+  outputContainer.style.display = 'block';
+  
+  // Toggle expanded class
   outputContainer.classList.toggle('expanded');
   
   if (outputContainer.classList.contains('expanded')) {
+    // Expanded state
     toggleExpandBtn.innerHTML = '<i class="fas fa-compress"></i>';
     commandInputContainer.classList.remove('hidden');
     document.body.style.overflow = 'hidden'; // Prevent scrolling of background
+    // Auto-focus the command input when expanded
+    setTimeout(() => {
+      commandInput.focus();
+    }, 100);
+    // Add keyboard shortcut for collapse (Escape key)
+    document.addEventListener('keydown', collapseOnEscape);
   } else {
+    // Collapsed state
     toggleExpandBtn.innerHTML = '<i class="fas fa-expand"></i>';
     commandInputContainer.classList.add('hidden');
     document.body.style.overflow = ''; // Restore scrolling
+    // Remove keyboard event listener
+    document.removeEventListener('keydown', collapseOnEscape);
+  }
+  
+  // Ensure scrolling to bottom
+  outputElement.scrollTop = outputElement.scrollHeight;
+}
+
+// Helper function to collapse terminal on Escape key
+function collapseOnEscape(e) {
+  if (e.key === 'Escape' && outputContainer.classList.contains('expanded')) {
+    toggleExpandOutput();
   }
 }
 

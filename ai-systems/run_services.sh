@@ -11,19 +11,23 @@ NC='\033[0m' # No Color
 
 echo -e "${GREEN}Starting AI-SYSTEMS services from ai-systems directory...${NC}"
 
-# Determine the root directory
-ROOT_DIR="$(pwd)"
+# Determine the script directory and AI-SYSTEMS root directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PARENT_DIR="$(dirname "${SCRIPT_DIR}")"
+
+# Always use the ai-systems directory regardless of where the script is executed from
+ROOT_DIR="${PARENT_DIR}/ai-systems"
 echo -e "${YELLOW}Using root directory: ${ROOT_DIR}${NC}"
 
-# Check if virtual environment exists
-if [ ! -d "${ROOT_DIR}/venv" ]; then
+# Check if virtual environment exists in the parent directory
+if [ ! -d "${PARENT_DIR}/venv" ]; then
   echo -e "${RED}Error: Virtual environment not found. Please run setup_venv.sh from the root directory first.${NC}"
   exit 1
 fi
 
 # Activate virtual environment
 echo -e "${YELLOW}Activating virtual environment...${NC}"
-source "${ROOT_DIR}/venv/bin/activate"
+source "${PARENT_DIR}/venv/bin/activate"
 
 # Check if .env file exists, create it if not
 if [ ! -f "${ROOT_DIR}/.env" ]; then
@@ -40,12 +44,8 @@ if [ -f "${ROOT_DIR}/.env" ]; then
   set +a
 fi
 
-# Change to the ai-systems directory
-echo -e "${YELLOW}Changing to ai-systems directory...${NC}"
-cd "${ROOT_DIR}/ai-systems" || {
-  echo -e "${RED}ai-systems directory not found.${NC}"
-  exit 1
-}
+# We're already in the ai-systems directory, no need to change
+echo -e "${YELLOW}Using current directory for services...${NC}"
 
 # Check for port availability and adjust if needed
 check_port() {

@@ -218,9 +218,9 @@ start_web_interface() {
   if ! command -v node &>/dev/null; then
     echo -e "${RED}Node.js is not installed. Please install Node.js first.${NC}"
     return 1
-  }
+  fi
   
-  echo -e "${YELLOW}Starting web interface on http://localhost:3030${NC}"
+  echo -e "${YELLOW}Starting web interface on http://localhost:3031${NC}"
   echo -e "${YELLOW}Press Ctrl+C to stop the web interface${NC}"
   
   npm start

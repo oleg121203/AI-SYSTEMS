@@ -10,6 +10,48 @@ const app = express();
 const server = http.createServer(app);
 const io = socketIo(server);
 
+// Helper functions for checking service status
+function checkDockerRunning() {
+  return new Promise((resolve) => {
+    exec('docker info', (error) => {
+      resolve(!error);
+    });
+  });
+}
+
+function checkServicesRunning() {
+  return new Promise((resolve) => {
+    exec('docker ps | grep ai-systems', (error, stdout) => {
+      resolve(stdout.trim().length > 0);
+    });
+  });
+}
+
+function getServicesStatus() {
+  return new Promise((resolve) => {
+    exec('docker ps --format "{{.Names}},{{.Status}}" | grep ai-systems', (error, stdout) => {
+      if (error) {
+        resolve([]);
+        return;
+      }
+      
+      const services = [];
+      stdout.split('\n').filter(Boolean).forEach(line => {
+        const [name, status] = line.split(',');
+        if (name && status) {
+          services.push({
+            name: name.replace('ai-systems_', ''),
+            status: status,
+            running: status.includes('Up')
+          });
+        }
+      });
+      
+      resolve(services);
+    });
+  });
+}
+
 // Set view engine
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
@@ -140,6 +182,7 @@ const scripts = {
 // Routes
 app.get('/', async (req, res) => {
   try {
+    // Set up categories object
     const categories = {};
     Object.entries(scripts).forEach(([id, script]) => {
       if (!categories[script.category]) {
@@ -147,6 +190,8 @@ app.get('/', async (req, res) => {
       }
       categories[script.category].push({ id, name: script.name });
     });
+
+    console.log('Categories set up successfully');
 
     const categoryDisplayNames = {
       'services': 'System Services',
@@ -157,10 +202,37 @@ app.get('/', async (req, res) => {
       'monitoring': 'System Monitoring'
     };
 
-    const categoryOrder = ['services', 'docker', 'backup', 'testing', 'monitoring', 'git'];
+    console.log('Category display names defined');
 
-    const dockerRunning = await checkDockerRunning();
-    const servicesRunning = await checkServicesRunning();
+    const categoryOrder = ['services', 'docker', 'backup', 'testing', 'monitoring', 'git'];
+    
+    console.log('Category order defined');
+
+    // Check Docker and services status
+    let dockerRunning = false;
+    let servicesRunning = false;
+    
+    try {
+      dockerRunning = await checkDockerRunning();
+      console.log('Docker status checked:', dockerRunning);
+    } catch (err) {
+      console.error('Error checking Docker status:', err);
+    }
+    
+    try {
+      servicesRunning = await checkServicesRunning();
+      console.log('Services status checked:', servicesRunning);
+    } catch (err) {
+      console.error('Error checking services status:', err);
+    }
+
+    console.log('Ready to render template with:', {
+      categoriesCount: Object.keys(categories).length,
+      dockerRunning,
+      servicesRunning
+    });
+
+    // Render the template
     res.render('index', { 
       categories, 
       categoryDisplayNames,
@@ -169,9 +241,11 @@ app.get('/', async (req, res) => {
       dockerRunning,
       servicesRunning
     });
+
+    console.log('Template rendered successfully');
   } catch (error) {
     console.error('Error rendering index:', error);
-    res.status(500).send('Internal Server Error');
+    res.status(500).send(`Internal Server Error: ${error.message}\n${error.stack}`);
   }
 });
 

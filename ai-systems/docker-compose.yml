@@ -240,7 +240,7 @@ services:
     ports:
       - "6379:6379"
     volumes:
-      - redis_data:/data
+      - redis_data_v2:/data
     networks:
       - db_network
     restart: unless-stopped
@@ -312,29 +312,8 @@ networks:
         - subnet: 172.28.2.0/24
 
 volumes:
-  # Database volumes with explicit configuration
+  # Using standard Docker named volumes without bind mounts to avoid configuration mismatches
   postgres_data:
-    driver: local
-    driver_opts:
-      type: none
-      device: ${POSTGRES_DATA_PATH:-./data/postgres}
-      o: bind
-  redis_data:
-    driver: local
-    driver_opts:
-      type: none
-      device: ${REDIS_DATA_PATH:-./data/redis}
-      o: bind
+  redis_data_v2:  # New volume name to avoid previous configuration conflicts
   rabbitmq_data:
-    driver: local
-    driver_opts:
-      type: none
-      device: ${RABBITMQ_DATA_PATH:-./data/rabbitmq}
-      o: bind
-  # Shared logs volume for centralized logging
   logs_volume:
-    driver: local
-    driver_opts:
-      type: none
-      device: ${LOGS_PATH:-./logs}
-      o: bind

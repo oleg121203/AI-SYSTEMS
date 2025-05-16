@@ -46,11 +46,16 @@
 
 body {
   font-family: 'Hack', 'Courier New', monospace;
+  font-size: 14px;
   line-height: 1.6;
   background-color: var(--background-color);
   color: var(--text-color);
   position: relative;
   overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  letter-spacing: 0.03em;
 }
 
 body::before {
@@ -295,9 +300,12 @@ h3 {
   cursor: pointer;
   transition: all 0.3s;
   font-family: 'Hack', monospace;
-  font-size: 0.9em;
+  font-size: 0.95em;
+  font-weight: 500;
   position: relative;
   overflow: hidden;
+  letter-spacing: 0.03em;
+  text-shadow: 0 0 1px rgba(0, 255, 0, 0.3);
 }
 
 .action-btn::before {
@@ -375,11 +383,15 @@ h3 {
   padding: 15px;
   border-radius: 3px;
   font-family: 'Hack', monospace;
+  font-size: 14px;
+  font-weight: 500;
   height: 300px;
   overflow-y: auto;
   white-space: pre-wrap;
   border: 1px solid var(--border-color);
   position: relative;
+  text-shadow: 0 0 1px rgba(0, 255, 0, 0.5);
+  line-height: 1.5;
 }
 
 .output::before {
@@ -648,13 +660,17 @@ footer a:hover {
 
 .modal-content {
   background-color: var(--card-background);
-  padding: 20px;
+  padding: 25px;
   border-radius: 4px;
-  width: 400px;
+  width: 450px;
   max-width: 90%;
   border: 1px solid var(--border-color);
-  box-shadow: 0 0 20px var(--shadow-color);
+  box-shadow: 0 0 30px var(--shadow-color);
   position: relative;
+  font-family: 'Hack', monospace;
+  font-size: 15px;
+  letter-spacing: 0.03em;
+  line-height: 1.5;
 }
 
 .modal-content::before {
@@ -706,22 +722,30 @@ footer a:hover {
   background-color: var(--card-background-alt);
   color: var(--text-color);
   border: 1px solid var(--border-color);
-  padding: 8px 15px;
+  padding: 10px 20px;
   border-radius: 3px;
   cursor: pointer;
   transition: all 0.3s;
   font-family: 'Hack', monospace;
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  text-shadow: 0 0 1px rgba(0, 255, 0, 0.3);
 }
 
 .btn-secondary {
   background-color: var(--card-background-alt);
   color: var(--text-color);
   border: 1px solid var(--border-color);
-  padding: 8px 15px;
+  padding: 10px 20px;
   border-radius: 3px;
   cursor: pointer;
   transition: all 0.3s;
   font-family: 'Hack', monospace;
+  font-size: 14px;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  text-shadow: 0 0 1px rgba(0, 255, 0, 0.3);
 }
 
 .btn-primary:hover {

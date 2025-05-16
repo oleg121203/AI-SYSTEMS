@@ -94,8 +94,13 @@ start_web_interface() {
         ;;
     esac
   else
-    PORT=3030
+    PORT=3031
   fi
+  
+  # Kill any existing processes on port 3031
+  echo -e "${YELLOW}Checking for existing processes on port 3031...${NC}"
+  lsof -i :3031 | grep LISTEN | awk '{print $2}' | xargs kill -9 2>/dev/null
+  sleep 1
   
   echo -e "${GREEN}Launching web interface on http://localhost:$PORT${NC}"
   echo -e "${YELLOW}Press Ctrl+C to stop the web interface${NC}"

@@ -1,27 +1,27 @@
 {
   "services": {
     "ai_core": {
-      "url": "http://ai-core:7861",
+      "url": "http://localhost:7871",
       "name": "AI Core",
       "description": "AI1 Coordinator service responsible for project planning and coordination"
     },
     "development_agents": {
-      "url": "http://development-agents:7862",
+      "url": "http://localhost:7872",
       "name": "Development Agents",
       "description": "AI2 Development Agents service responsible for code generation, testing, and documentation"
     },
     "project_manager": {
-      "url": "http://project-manager:7863",
+      "url": "http://localhost:7873",
       "name": "Project Manager",
       "description": "AI3 Project Manager service responsible for task management and progress tracking"
     },
     "cmp": {
-      "url": "http://cmp:7864",
+      "url": "http://localhost:7874",
       "name": "Continuous Monitoring Platform",
       "description": "Monitoring service responsible for system metrics and health checks"
     },
     "git_service": {
-      "url": "http://git-service:7865",
+      "url": "http://localhost:7875",
       "name": "Git Service",
       "description": "Service responsible for Git operations and GitHub integration"
     }
@@ -44,6 +44,6 @@
   "logging": {
     "level": "INFO",
     "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    "file": "/Users/olegkizima/workspace/AI-SYSTEMS/logs/ai-systems.log"
+    "file": "/Users/olegkizima/workspace/AI-SYSTEMS/ai-systems/logs/ai-systems.log"
   }
 }

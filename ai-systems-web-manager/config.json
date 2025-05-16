@@ -1,0 +1,49 @@
+{
+  "services": {
+    "ai_core": {
+      "url": "http://localhost:7876",
+      "name": "AI Core",
+      "description": "AI1 Coordinator service responsible for project planning and coordination"
+    },
+    "development_agents": {
+      "url": "http://localhost:7876",
+      "name": "Development Agents",
+      "description": "AI2 Development Agents service responsible for code generation, testing, and documentation"
+    },
+    "project_manager": {
+      "url": "http://localhost:7876",
+      "name": "Project Manager",
+      "description": "AI3 Project Manager service responsible for task management and progress tracking"
+    },
+    "cmp": {
+      "url": "http://localhost:7876",
+      "name": "Continuous Monitoring Platform",
+      "description": "Monitoring service responsible for system metrics and health checks"
+    },
+    "git_service": {
+      "url": "http://localhost:7876",
+      "name": "Git Service",
+      "description": "Service responsible for Git operations and GitHub integration"
+    }
+  },
+  "websocket": {
+    "ping_interval": 30,
+    "reconnect_interval": 5,
+    "max_reconnect_attempts": 5
+  },
+  "api": {
+    "timeout": 30,
+    "retry_attempts": 3,
+    "retry_delay": 1
+  },
+  "cors": {
+    "allowed_origins": ["*"],
+    "allowed_methods": ["*"],
+    "allowed_headers": ["*"]
+  },
+  "logging": {
+    "level": "INFO",
+    "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    "file": "/Users/olegkizima/workspace/AI-SYSTEMS/ai-systems-web-manager/logs/ai-systems.log"
+  }
+}
