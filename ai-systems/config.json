@@ -54,8 +54,12 @@
   },
   "ai_config": {
     "ai1": {
-      "provider": "ollama_local",
-      "model": "llama3"
+      "provider": "gemini",
+      "model": "gemini-pro"
+    },
+    "ai2_executor": {
+      "provider": "codestral",
+      "model": ""
     }
   }
 }

@@ -36,6 +36,8 @@ import VisibilityIcon from '@mui/icons-material/Visibility';
 import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import MemoryIcon from '@mui/icons-material/Memory';
 import SettingsIcon from '@mui/icons-material/Settings';
+import WarningIcon from '@mui/icons-material/Warning';
+import ReplayIcon from '@mui/icons-material/Replay';
 
 /**
  * WorkflowVisualizer component displays a real-time visualization of the AI workflow
@@ -129,7 +131,9 @@ const WorkflowVisualizer = ({ tasks = [], loading = false, aiConfig = {} }) => {
       completed: 0,
       inProgress: 0,
       pending: 0,
-      failed: 0
+      failed: 0,
+      stalled: 0,
+      retrying: 0
     };
     
     tasks.forEach(task => {
@@ -360,7 +364,7 @@ const WorkflowVisualizer = ({ tasks = [], loading = false, aiConfig = {} }) => {
   
   // Get node style based on type and status
   const getNodeStyle = (node) => {
-    let color, borderColor, opacity = 1, glow = false;
+    let color, borderColor, opacity = 1, glow = false, pulse = false;
     
     // Base color by node type
     if (node.type === 'coordinator') color = theme.palette.primary.main;
@@ -386,6 +390,18 @@ const WorkflowVisualizer = ({ tasks = [], loading = false, aiConfig = {} }) => {
           color = theme.palette.error.main;
           borderColor = theme.palette.error.dark;
           break;
+        case 'stalled':
+          color = theme.palette.warning.dark;
+          borderColor = theme.palette.error.light;
+          glow = true;
+          pulse = true;
+          break;
+        case 'retrying':
+          color = theme.palette.warning.main;
+          borderColor = theme.palette.warning.dark;
+          glow = true;
+          pulse = true;
+          break;
         case 'pending':
           color = theme.palette.grey[400];
           borderColor = theme.palette.grey[600];
@@ -410,6 +426,13 @@ const WorkflowVisualizer = ({ tasks = [], loading = false, aiConfig = {} }) => {
       // Highlight active agents
       if (node.tasks > 0) {
         glow = true;
+      }
+      
+      // Mark unhealthy agents
+      if (node.health === 'unhealthy') {
+        color = theme.palette.error.light;
+        borderColor = theme.palette.error.main;
+        pulse = true;
       }
     }
     
@@ -657,8 +680,8 @@ const WorkflowVisualizer = ({ tasks = [], loading = false, aiConfig = {} }) => {
         {/* Statistics Panel */}
         <Box sx={{ mt: 2, p: 2, borderTop: `1px solid ${theme.palette.divider}` }}>
           <Typography variant="subtitle2" gutterBottom>Task Statistics</Typography>
-          <Grid container spacing={2}>
-            <Grid item xs={3}>
+          <Grid container spacing={1} sx={{ mt: 1 }}>
+            <Grid item xs={2}>
               <Chip 
                 icon={<CheckCircleIcon fontSize="small" />} 
                 label={`Completed: ${taskStats.completed}`}
@@ -667,16 +690,16 @@ const WorkflowVisualizer = ({ tasks = [], loading = false, aiConfig = {} }) => {
                 variant="outlined"
               />
             </Grid>
-            <Grid item xs={3}>
+            <Grid item xs={2}>
               <Chip 
-                icon={<PendingIcon fontSize="small" />} 
+                icon={<InfoIcon fontSize="small" />} 
                 label={`In Progress: ${taskStats.inProgress}`}
                 size="small"
                 color="info"
                 variant="outlined"
               />
             </Grid>
-            <Grid item xs={3}>
+            <Grid item xs={2}>
               <Chip 
                 icon={<ErrorIcon fontSize="small" />} 
                 label={`Failed: ${taskStats.failed}`}
@@ -685,12 +708,30 @@ const WorkflowVisualizer = ({ tasks = [], loading = false, aiConfig = {} }) => {
                 variant="outlined"
               />
             </Grid>
-            <Grid item xs={3}>
+            <Grid item xs={2}>
               <Chip 
                 icon={<PendingIcon fontSize="small" />} 
                 label={`Pending: ${taskStats.pending}`}
                 size="small"
                 color="default"
+                variant="outlined"
+              />
+            </Grid>
+            <Grid item xs={2}>
+              <Chip 
+                icon={<WarningIcon fontSize="small" />} 
+                label={`Stalled: ${taskStats.stalled || 0}`}
+                size="small"
+                color="warning"
+                variant="outlined"
+              />
+            </Grid>
+            <Grid item xs={2}>
+              <Chip 
+                icon={<ReplayIcon fontSize="small" />} 
+                label={`Retrying: ${taskStats.retrying || 0}`}
+                size="small"
+                sx={{ color: '#ff9800', borderColor: '#ff9800' }}
                 variant="outlined"
               />
             </Grid>

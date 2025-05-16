@@ -118,49 +118,84 @@ class ModelLister:
     async def list_ollama_models(self, provider: str) -> Dict[str, Any]:
         """List models available from an Ollama provider (local or remote)"""
         if provider not in ["ollama_local", "ollama_remote"]:
-            return {"error": f"Invalid Ollama provider: {provider}"}
-        
-        # First verify if the Ollama endpoint is available
-        availability = await self.verify_ollama_availability(provider)
-        if not availability["available"]:
             return {
                 "provider": provider,
-                "error": f"Ollama endpoint unavailable: {availability.get('error', 'Unknown error')}",
-                "status": "error",
-                "available": False
+                "models": [],
+                "error": f"Invalid Ollama provider: {provider}",
+                "status": "error"
             }
-        
-        base_url = self.providers[provider]
-        endpoint = f"{base_url}/api/tags"
-        
+            
+        # First verify if the Ollama endpoint is available
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(endpoint) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        return {
-                            "provider": provider,
-                            "models": data.get("models", []),
-                            "count": len(data.get("models", [])),
-                            "status": "success",
-                            "available": True
-                        }
-                    else:
-                        error_text = await response.text()
-                        return {
-                            "provider": provider,
-                            "error": f"Failed to fetch models: {error_text}",
-                            "status": "error",
-                            "status_code": response.status,
-                            "available": False
-                        }
+            availability = await self.verify_ollama_availability(provider)
+            
+            if not availability.get("available", False):
+                logger.warning(f"Ollama provider {provider} is unavailable: {availability.get('error', 'Unknown error')}")
+                return {
+                    "provider": provider,
+                    "models": [],
+                    "error": f"Ollama endpoint unavailable: {availability.get('error', 'Unknown error')}",
+                    "status": "unavailable"
+                }
+            
+            base_url = self.providers[provider]
+            endpoint = f"{base_url}/api/tags"
+            
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(endpoint, timeout=10) as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            models = []
+                            
+                            # Process the models list
+                            if "models" in data:
+                                for model in data["models"]:
+                                    name = model.get("name", "")
+                                    models.append({
+                                        "id": name,
+                                        "name": name,
+                                        "provider": provider
+                                    })
+                            
+                            return {
+                                "provider": provider,
+                                "models": models,
+                                "count": len(models),
+                                "status": "available"
+                            }
+                        else:
+                            error_text = await response.text()
+                            logger.error(f"Error response from Ollama: {error_text}")
+                            return {
+                                "provider": provider,
+                                "models": [],
+                                "error": f"API error: {error_text}",
+                                "status": "error"
+                            }
+            except asyncio.TimeoutError:
+                logger.warning(f"Timeout connecting to Ollama provider {provider}")
+                return {
+                    "provider": provider,
+                    "models": [],
+                    "error": "Connection timeout",
+                    "status": "timeout"
+                }
+            except Exception as e:
+                logger.error(f"Error fetching Ollama models from {provider}: {str(e)}")
+                return {
+                    "provider": provider,
+                    "models": [],
+                    "error": str(e),
+                    "status": "error"
+                }
         except Exception as e:
-            logger.error(f"Error fetching Ollama models from {provider}: {str(e)}")
+            logger.error(f"Unexpected error with Ollama provider {provider}: {str(e)}")
             return {
                 "provider": provider,
-                "error": f"Connection error: {str(e)}",
-                "status": "error",
-                "available": False
+                "models": [],
+                "error": f"Unexpected error: {str(e)}",
+                "status": "error"
             }
     
     async def list_huggingface_models(self, filter_query: str = None) -> Dict[str, Any]:

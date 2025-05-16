@@ -354,7 +354,11 @@ function App() {
           break;
           
         case 'ai_config_update':
-          setAIConfig(data.data);
+          console.log('Received AI config update from WebSocket:', data.data);
+          // Make sure we have valid data before updating the state
+          if (data.data && typeof data.data === 'object') {
+            setAIConfig(data.data);
+          }
           break;
           
         case 'project_update':
@@ -441,11 +445,21 @@ function App() {
   
   // Handle tab changes
   const handleTabChange = (event, newValue) => {
+    const previousTab = currentTab;
     setCurrentTab(newValue);
     
-    // Fetch AI configuration when switching to the AI Configuration tab
+    // Always fetch AI configuration when switching to the AI Configuration tab
     if (newValue === 4) { // AI Configuration tab
+      console.log('Switching to AI Configuration tab, fetching latest config');
+      // Set loading state to show loading indicator
+      setLoading(prev => ({ ...prev, aiConfig: true }));
+      // Fetch the latest AI configuration from the server
       fetchAIConfigFromServer();
+    }
+    
+    // If we're switching away from the AI Configuration tab and have unsaved changes, warn the user
+    if (previousTab === 4 && newValue !== 4) {
+      console.log('Switched away from AI Configuration tab');
     }
   };
   
@@ -511,8 +525,8 @@ function App() {
   // Update AI configuration
   const handleUpdateAIConfig = async (configData) => {
     try {
-      // Set global loading state and show notification
-      setLoading(prev => ({ ...prev, global: true }));
+      // Set loading state and show notification
+      setLoading(prev => ({ ...prev, global: true, aiConfig: true }));
       setNotification({
         open: true,
         message: "Updating AI configuration...",
@@ -560,12 +574,14 @@ function App() {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
       
-      // Update local state with the new configuration
-      setAIConfig(processedConfig);
-      
-      // Force refresh config from server after update
-      // Refresh AI config from the server
-      fetchAIConfigFromServer();
+      // Update local state with the new configuration from the response
+      // This ensures we have the exact state that was saved on the server
+      if (responseData.config) {
+        setAIConfig(responseData.config);
+      } else {
+        // Fallback to using our processed config if the response doesn't include the config
+        setAIConfig(processedConfig);
+      }
       
       setNotification({
         open: true,
@@ -592,9 +608,12 @@ function App() {
         severity: "error",
         title: "Error"
       });
+      
+      // Refresh from server to ensure UI is in sync with server state
+      fetchAIConfigFromServer();
     } finally {
-      // Clear global loading state
-      setLoading(prev => ({ ...prev, global: false }));
+      // Clear loading states
+      setLoading(prev => ({ ...prev, global: false, aiConfig: false }));
     }
   };
   
@@ -751,19 +770,37 @@ function App() {
         title: "Loading"
       });
       
-      const response = await fetch(`${config.apiBaseUrl}/api/ai-config`);
+      // Add a cache-busting parameter to prevent browser caching
+      const timestamp = new Date().getTime();
+      const response = await fetch(`${config.apiBaseUrl}/api/ai-config?t=${timestamp}`, {
+        headers: {
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'Pragma': 'no-cache',
+          'Expires': '0'
+        }
+      });
+      
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);
       }
-      const data = await response.json();
-      setAIConfig(data);
       
-      setNotification({
-        open: true,
-        message: "AI configuration loaded successfully",
-        severity: "success",
-        title: "Success"
-      });
+      const data = await response.json();
+      console.log('Fetched AI configuration from server:', data);
+      
+      // Ensure we have a valid configuration object
+      if (data && typeof data === 'object') {
+        // Update the state with the fetched configuration
+        setAIConfig(data);
+        
+        setNotification({
+          open: true,
+          message: "AI configuration loaded successfully",
+          severity: "success",
+          title: "Success"
+        });
+      } else {
+        throw new Error('Invalid configuration data received from server');
+      }
     } catch (e) {
       console.error("Error fetching AI configuration:", e);
       setNotification({
@@ -1101,9 +1138,12 @@ function App() {
                 <AIModelSelector 
                   initialConfig={aiConfig} 
                   onConfigUpdate={(newConfig) => {
-                    handleUpdateAIConfig(newConfig);
+                    // First update local state immediately for UI responsiveness
                     setAIConfig(newConfig);
+                    // Then send to backend
+                    handleUpdateAIConfig(newConfig);
                   }}
+                  loading={loading.aiConfig}
                 />
                 {/* Add debugging tool for AI configuration */}
                 <DebugAIConfig />

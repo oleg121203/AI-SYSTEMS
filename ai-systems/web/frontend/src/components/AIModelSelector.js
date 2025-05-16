@@ -86,10 +86,15 @@ const AIModelSelector = ({ onConfigUpdate, initialConfig, loading = false }) => 
       const modelConfig = {};
       const apiKeyConfig = {};
       
+      // Process each AI agent's configuration
       Object.keys(initialConfig).forEach(aiKey => {
         if (initialConfig[aiKey]?.provider) {
+          // Store provider
           providerConfig[aiKey] = initialConfig[aiKey].provider;
+          
+          // Store model (ensure it's at least an empty string if undefined)
           modelConfig[aiKey] = initialConfig[aiKey].model || '';
+          console.log(`Processing ${aiKey}: provider=${providerConfig[aiKey]}, model=${modelConfig[aiKey]}`);
           
           // Initialize API key selection if available
           if (initialConfig[aiKey]?.apiKey) {
@@ -98,24 +103,44 @@ const AIModelSelector = ({ onConfigUpdate, initialConfig, loading = false }) => 
         }
       });
       
-      setSelectedProviders(prevState => ({
-        ...prevState,
-        ...providerConfig
-      }));
+      // Use direct state setting with default empty values for all AI agents
+      // This ensures we have a clean slate before applying the loaded configuration
+      setSelectedProviders({
+        ai1: '',
+        ai2_executor: '',
+        ai2_tester: '',
+        ai2_documenter: '',
+        ai3: '',
+        ...providerConfig  // Override with actual values from config
+      });
       
-      setSelectedModels(prevState => ({
-        ...prevState,
-        ...modelConfig
-      }));
+      // Set models with defaults for all AI agents
+      setSelectedModels({
+        ai1: '',
+        ai2_executor: '',
+        ai2_tester: '',
+        ai2_documenter: '',
+        ai3: '',
+        ...modelConfig  // Override with actual values from config
+      });
       
-      setSelectedApiKeys(prevState => ({
-        ...prevState,
-        ...apiKeyConfig
-      }));
+      // Set API keys with defaults for all AI agents
+      setSelectedApiKeys({
+        ai1: '',
+        ai2_executor: '',
+        ai2_tester: '',
+        ai2_documenter: '',
+        ai3: '',
+        ...apiKeyConfig  // Override with actual values from config
+      });
+      
+      // Clear any previous model availability data when config changes
+      setModelAvailability({});
       
       // Fetch models for each selected provider
       Object.entries(providerConfig).forEach(([aiKey, provider]) => {
         if (provider) {
+          console.log(`Fetching models for ${aiKey} with provider ${provider}`);
           fetchModelsForProvider(provider, aiKey, apiKeyConfig[aiKey]);
         }
       });
@@ -207,10 +232,14 @@ const AIModelSelector = ({ onConfigUpdate, initialConfig, loading = false }) => 
   const handleModelChange = async (event, aiKey) => {
     const model = event.target.value;
     
+    // Update selected models with the new selection
     setSelectedModels(prevState => ({
       ...prevState,
       [aiKey]: model
     }));
+    
+    // Log the model change for debugging
+    console.log(`Model changed for ${aiKey} to ${model}`);
     
     // Mark that we have unsaved changes
     setHasUnsavedChanges(true);
@@ -339,13 +368,22 @@ const AIModelSelector = ({ onConfigUpdate, initialConfig, loading = false }) => 
     // Add current selections to the config
     Object.keys(selectedProviders).forEach(key => {
       if (selectedProviders[key]) {
+        // Ensure model is included even if it's an empty string
+        const modelValue = selectedModels[key] || '';
+        
         completeConfig[key] = {
           provider: selectedProviders[key],
-          model: selectedModels[key] || '',
+          model: modelValue,
           apiKey: selectedApiKeys[key] || ''
         };
+        
+        // Log the configuration being saved for debugging
+        console.log(`Saving config for ${key}: provider=${selectedProviders[key]}, model=${modelValue}`);
       }
     });
+    
+    // Log the complete configuration being sent to the parent
+    console.log('Saving complete configuration:', completeConfig);
     
     // Notify parent component about the configuration update
     onConfigUpdate(completeConfig);

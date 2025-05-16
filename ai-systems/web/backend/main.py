@@ -265,40 +265,87 @@ class GitCommitRequest(BaseModel):
 
 # Service clients
 class AIServiceClient:
-    """Base client for interacting with AI services"""
+    """Base class for AI service clients"""
 
     def __init__(self, base_url: str, service_name: str):
         self.base_url = base_url
         self.service_name = service_name
         self.session = None
+        self.retry_count = 0
+        self.max_retries = 3
+        self.last_health_status = {"status": "unknown"}
+        self.recovery_in_progress = False
 
     async def get_session(self):
-        """Gets or creates the aiohttp session"""
+        """Get a new or existing aiohttp session"""
         if self.session is None or self.session.closed:
             self.session = aiohttp.ClientSession()
         return self.session
 
-    async def close_session(self):
-        """Closes the aiohttp session"""
-        if self.session and not self.session.closed:
-            await self.session.close()
-
     async def health_check(self) -> Dict[str, Any]:
-        """Check the health of the service"""
+        """Check if the service is running with retry logic"""
         try:
             session = await self.get_session()
-            async with session.get(f"{self.base_url}/health") as response:
+            async with session.get(f"{self.base_url}/health", timeout=5) as response:
                 if response.status == 200:
-                    return await response.json()
+                    self.retry_count = 0  # Reset retry count on success
+                    self.last_health_status = {"status": "healthy", "timestamp": datetime.now().isoformat()}
+                    return self.last_health_status
                 else:
                     error_text = await response.text()
-                    logger.error(
-                        f"Error checking health of {self.service_name}: {error_text}"
+                    logger.warning(
+                        f"Health check failed for {self.service_name}: {response.status} - {error_text}"
                     )
-                    return {"status": "unhealthy", "error": error_text}
+                    self.last_health_status = {"status": "unhealthy", "error": error_text}
+                    # Attempt recovery if needed
+                    if not self.recovery_in_progress:
+                        asyncio.create_task(self.attempt_recovery())
+                    return self.last_health_status
         except Exception as e:
-            logger.error(f"Exception checking health of {self.service_name}: {e}")
-            return {"status": "unhealthy", "error": str(e)}
+            logger.warning(f"Error connecting to {self.service_name}: {e}")
+            self.last_health_status = {"status": "unhealthy", "error": str(e)}
+            # Attempt recovery if needed
+            if not self.recovery_in_progress:
+                asyncio.create_task(self.attempt_recovery())
+            return self.last_health_status
+
+    async def attempt_recovery(self):
+        """Attempt to recover connection to the service"""
+        if self.recovery_in_progress:
+            return
+            
+        self.recovery_in_progress = True
+        try:
+            # Log the recovery attempt
+            logger.info(f"Attempting to recover connection to {self.service_name}")
+            
+            # Close the current session if it exists
+            if self.session and not self.session.closed:
+                await self.session.close()
+                self.session = None
+                
+            # Create a new session and try to connect
+            self.session = aiohttp.ClientSession()
+            retry_count = 0
+            
+            while retry_count < self.max_retries:
+                try:
+                    async with self.session.get(f"{self.base_url}/health", timeout=5) as response:
+                        if response.status == 200:
+                            logger.info(f"Successfully recovered connection to {self.service_name}")
+                            self.last_health_status = {"status": "healthy", "timestamp": datetime.now().isoformat()}
+                            break
+                        else:
+                            retry_count += 1
+                            await asyncio.sleep(2 ** retry_count)  # Exponential backoff
+                except Exception:
+                    retry_count += 1
+                    await asyncio.sleep(2 ** retry_count)  # Exponential backoff
+                    
+            if retry_count >= self.max_retries:
+                logger.error(f"Failed to recover connection to {self.service_name} after {self.max_retries} attempts")
+        finally:
+            self.recovery_in_progress = False
 
 
 class AICore(AIServiceClient):
@@ -562,29 +609,43 @@ async def create_project(project: Project, background_tasks: BackgroundTasks):
 
         # Start the project with AI Core in the background
         async def start_ai_project():
-            # Start project with AI Core
-            ai_result = await ai_core.start_project(project_id, project.idea_md or "")
+            try:
+                # Start project with AI Core
+                ai_result = await ai_core.start_project(project_id, project.idea_md or "")
 
-            # Record metric
-            await cmp.record_metric(
-                service="web-backend",
-                metric_name="project_created",
-                value=1.0,
-                labels={"project_id": project_id},
-            )
+                # Record metric
+                await cmp.record_metric(
+                    service="web-backend",
+                    metric_name="project_created",
+                    value=1.0,
+                    labels={"project_id": project_id},
+                )
 
-            # Generate project plan
-            plan_result = await project_manager.create_project_plan(project_id)
+                # Generate project plan
+                plan_result = await project_manager.create_project_plan(project_id)
 
-            # Broadcast update
-            await manager.broadcast(
-                {
-                    "type": "project_update",
-                    "project_id": project_id,
-                    "status": "planning_complete",
-                    "message": "Project plan generated",
-                }
-            )
+                # Broadcast update
+                await manager.broadcast(
+                    {
+                        "type": "project_update",
+                        "project_id": project_id,
+                        "status": "planning_complete",
+                        "message": "Project plan generated",
+                    }
+                )
+            except Exception as e:
+                logger.error(f"Error in background processing for project {project_id}: {e}")
+                logger.error(traceback.format_exc())
+                
+                # Broadcast error
+                await manager.broadcast(
+                    {
+                        "type": "project_update",
+                        "project_id": project_id,
+                        "status": "error",
+                        "message": f"Error during project setup: {str(e)}",
+                    }
+                )
 
         background_tasks.add_task(start_ai_project)
 
@@ -811,22 +872,60 @@ async def update_task_status(task_id: str, status: TaskStatus, background_tasks:
 @app.post("/api/subtasks", response_model=Dict[str, Any])
 async def create_subtask(subtask: Subtask, background_tasks: BackgroundTasks):
     try:
-        # Store subtask locally
-        subtasks[subtask.subtask_id] = subtask.dict()
+        # Store subtask locally with timestamp for monitoring
+        subtask_data = subtask.dict()
+        subtask_data['created_at'] = datetime.now().isoformat()
+        subtask_data['last_updated'] = datetime.now().isoformat()
+        subtask_data['attempts'] = 1
+        subtask_data['max_attempts'] = 3
+        subtasks[subtask.subtask_id] = subtask_data
 
         # Process subtask with Development Agents in the background
         async def process_subtask():
-            result = await development_agents.process_subtask(subtask)
-
-            # Broadcast update
-            await manager.broadcast(
-                {
-                    "type": "subtask_update",
-                    "subtask_id": subtask.subtask_id,
-                    "status": result.get("status", "unknown"),
-                    "message": result.get("message", ""),
-                }
-            )
+            try:
+                # Check service health before processing
+                health_status = await development_agents.health_check()
+                if health_status.get('status') != 'healthy':
+                    logger.warning(f"Development Agents service unhealthy, retrying: {health_status}")
+                    # Wait for recovery attempt to complete
+                    await asyncio.sleep(5)
+                
+                # Process the subtask
+                result = await development_agents.process_subtask(subtask)
+                
+                # Update subtask status in local storage
+                if subtask.subtask_id in subtasks:
+                    subtasks[subtask.subtask_id]['status'] = result.get('status', 'unknown')
+                    subtasks[subtask.subtask_id]['message'] = result.get('message', '')
+                    subtasks[subtask.subtask_id]['last_updated'] = datetime.now().isoformat()
+                
+                # Broadcast update
+                await manager.broadcast(
+                    {
+                        "type": "subtask_update",
+                        "subtask_id": subtask.subtask_id,
+                        "status": result.get("status", "unknown"),
+                        "message": result.get("message", ""),
+                    }
+                )
+            except Exception as e:
+                logger.error(f"Error processing subtask {subtask.subtask_id}: {e}")
+                # Mark subtask as needing retry
+                if subtask.subtask_id in subtasks:
+                    subtasks[subtask.subtask_id]['status'] = 'error'
+                    subtasks[subtask.subtask_id]['error'] = str(e)
+                    subtasks[subtask.subtask_id]['needs_retry'] = True
+                    subtasks[subtask.subtask_id]['last_updated'] = datetime.now().isoformat()
+                
+                # Broadcast error
+                await manager.broadcast(
+                    {
+                        "type": "subtask_update",
+                        "subtask_id": subtask.subtask_id,
+                        "status": "error",
+                        "message": f"Error processing subtask: {str(e)}",
+                    }
+                )
 
         background_tasks.add_task(process_subtask)
 
@@ -1021,7 +1120,13 @@ async def update_ai_config(ai_config: Dict[str, Dict[str, Any]]):
                 
                 # Update provider and model in main config
                 main_config["ai_config"][ai_key]["provider"] = config_data.get("provider")
-                main_config["ai_config"][ai_key]["model"] = config_data.get("model")
+                
+                # Ensure model is explicitly saved, even if it's an empty string
+                model_value = config_data.get("model", "")
+                main_config["ai_config"][ai_key]["model"] = model_value
+                
+                # Log the values being saved for debugging
+                logger.info(f"Saving for {ai_key}: provider={config_data.get('provider')}, model={model_value}")
             
             # Write the updated main config back to the file
             with open(main_config_path, "w") as f:
@@ -1044,7 +1149,13 @@ async def update_ai_config(ai_config: Dict[str, Dict[str, Any]]):
                     
                     # Update provider and model in ai-systems config
                     ai_systems_config["ai_config"][ai_key]["provider"] = config_data.get("provider")
-                    ai_systems_config["ai_config"][ai_key]["model"] = config_data.get("model")
+                    
+                    # Ensure model is explicitly saved, even if it's an empty string
+                    model_value = config_data.get("model", "")
+                    ai_systems_config["ai_config"][ai_key]["model"] = model_value
+                    
+                    # Log the values being saved for debugging
+                    logger.info(f"Saving to ai-systems config for {ai_key}: provider={config_data.get('provider')}, model={model_value}")
                 
                 # Write the updated ai-systems config back to the file
                 with open(ai_systems_config_path, "w") as f:
@@ -1081,7 +1192,13 @@ async def update_ai_config(ai_config: Dict[str, Dict[str, Any]]):
             }
         )
 
-        return {"status": "success", "message": "AI configuration updated"}
+        # Return the updated config along with the success message
+        # This ensures the frontend has the exact state that was saved
+        return {
+            "status": "success", 
+            "message": "AI configuration updated",
+            "config": ai_config
+        }
     except HTTPException as e:
         raise e
     except Exception as e:
@@ -2556,6 +2673,117 @@ async def get_available_logs():
             status_code=500, detail=f"Failed to get available logs: {str(e)}"
         )
 
+
+# Task monitoring system
+async def monitor_workflow():
+    """Monitor and recover stalled tasks and subtasks"""
+    while True:
+        try:
+            logger.info("Running workflow monitoring check")
+            current_time = datetime.now()
+            stalled_count = 0
+            retried_count = 0
+            
+            # Check for stalled subtasks (no updates for 5 minutes)
+            for subtask_id, subtask_data in list(subtasks.items()):
+                try:
+                    # Skip completed or failed subtasks
+                    if subtask_data.get('status') in ['completed', 'failed']:
+                        continue
+                        
+                    # Check if subtask is stalled
+                    last_updated = datetime.fromisoformat(subtask_data.get('last_updated', subtask_data.get('created_at')))
+                    time_since_update = (current_time - last_updated).total_seconds()
+                    
+                    # If subtask hasn't been updated in 5 minutes, mark it for retry
+                    if time_since_update > 300:  # 5 minutes
+                        stalled_count += 1
+                        logger.warning(f"Detected stalled subtask: {subtask_id}, last updated {time_since_update/60:.1f} minutes ago")
+                        
+                        # Check if we can retry
+                        if subtask_data.get('attempts', 0) < subtask_data.get('max_attempts', 3):
+                            # Increment attempt counter
+                            subtask_data['attempts'] = subtask_data.get('attempts', 0) + 1
+                            subtask_data['last_updated'] = current_time.isoformat()
+                            subtask_data['status'] = 'retrying'
+                            
+                            # Create a clone of the original subtask
+                            original_subtask = Subtask(
+                                subtask_id=subtask_id,
+                                task_text=subtask_data.get('task_text', ''),
+                                role=subtask_data.get('role', AgentRole.EXECUTOR),
+                                filename=subtask_data.get('filename', ''),
+                                code=subtask_data.get('code'),
+                                idea_md=subtask_data.get('idea_md'),
+                                is_rework=True
+                            )
+                            
+                            # Process the subtask again
+                            logger.info(f"Retrying stalled subtask {subtask_id}, attempt {subtask_data['attempts']}")
+                            result = await development_agents.process_subtask(original_subtask)
+                            retried_count += 1
+                            
+                            # Update subtask data and broadcast
+                            subtask_data['status'] = result.get('status', 'unknown')
+                            subtask_data['message'] = result.get('message', '')
+                            subtask_data['last_updated'] = current_time.isoformat()
+                            
+                            await manager.broadcast({
+                                "type": "subtask_update",
+                                "subtask_id": subtask_id,
+                                "status": result.get("status", "unknown"),
+                                "message": f"Automatically retried stalled subtask (attempt {subtask_data['attempts']})"                                
+                            })
+                        else:
+                            # Max retries reached, mark as failed
+                            logger.error(f"Subtask {subtask_id} failed after {subtask_data.get('attempts')} attempts")
+                            subtask_data['status'] = 'failed'
+                            subtask_data['last_updated'] = current_time.isoformat()
+                            subtask_data['message'] = "Failed after maximum retry attempts"
+                            
+                            await manager.broadcast({
+                                "type": "subtask_update",
+                                "subtask_id": subtask_id,
+                                "status": "failed",
+                                "message": "Failed after maximum retry attempts"
+                            })
+                except Exception as e:
+                    logger.error(f"Error monitoring subtask {subtask_id}: {e}")
+            
+            # Log monitoring results
+            if stalled_count > 0:
+                logger.info(f"Workflow monitoring: found {stalled_count} stalled subtasks, retried {retried_count}")
+                
+            # Check overall system health
+            ai_core_health = await ai_core.health_check()
+            development_agents_health = await development_agents.health_check()
+            project_manager_health = await project_manager.health_check()
+            cmp_health = await cmp.health_check()
+            
+            # Broadcast system status update
+            await manager.broadcast({
+                "type": "system_status",
+                "services": {
+                    "ai_core": ai_core_health,
+                    "development_agents": development_agents_health,
+                    "project_manager": project_manager_health,
+                    "cmp": cmp_health
+                },
+                "timestamp": current_time.isoformat()
+            })
+            
+        except Exception as e:
+            logger.error(f"Error in workflow monitoring: {e}")
+            
+        # Run every minute
+        await asyncio.sleep(60)
+
+# Start workflow monitoring on app startup
+@app.on_event("startup")
+async def start_workflow_monitoring():
+    # Start workflow monitoring in the background
+    asyncio.create_task(monitor_workflow())
+    logger.info("Started workflow monitoring task")
 
 if __name__ == "__main__":
     # Start Prometheus metrics server

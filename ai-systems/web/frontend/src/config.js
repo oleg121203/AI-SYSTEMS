@@ -3,8 +3,8 @@
 
 const config = {
   // API endpoints
-  apiBaseUrl: 'http://localhost:8002',
-  wsBaseUrl: 'ws://localhost:8002',
+  apiBaseUrl: 'http://localhost:8001',
+  wsBaseUrl: 'ws://localhost:8001',
   
   // Service endpoints
   services: {
