@@ -1,0 +1,333 @@
+const express = require('express');
+const bodyParser = require('body-parser');
+const { exec } = require('child_process');
+const path = require('path');
+const http = require('http');
+const socketIo = require('socket.io');
+
+// Initialize Express app
+const app = express();
+const server = http.createServer(app);
+const io = socketIo(server);
+
+// Set view engine
+app.set('view engine', 'ejs');
+app.set('views', path.join(__dirname, 'views'));
+
+// Middleware
+app.use(bodyParser.urlencoded({ extended: false }));
+app.use(bodyParser.json());
+app.use(express.static(path.join(__dirname, 'public')));
+
+// Root directory
+const ROOT_DIR = path.join(__dirname, '..');
+const AI_SYSTEMS_DIR = path.join(ROOT_DIR, 'ai-systems');
+
+// Available scripts
+const scripts = {
+  // Service management
+  startServicesDirect: {
+    name: 'Start Services (Direct)',
+    command: `bash ${AI_SYSTEMS_DIR}/run_services.sh`,
+    category: 'services'
+  },
+  stopServices: {
+    name: 'Stop All Services',
+    command: `bash ${AI_SYSTEMS_DIR}/stop_services.sh`,
+    category: 'services'
+  },
+  
+  // Docker profiles
+  startInfrastructure: {
+    name: 'Start Infrastructure Services',
+    command: `cd ${AI_SYSTEMS_DIR} && docker-compose --profile infrastructure up -d`,
+    category: 'docker'
+  },
+  startAI: {
+    name: 'Start AI Services',
+    command: `cd ${AI_SYSTEMS_DIR} && docker-compose --profile ai up -d`,
+    category: 'docker'
+  },
+  startWeb: {
+    name: 'Start Web Services',
+    command: `cd ${AI_SYSTEMS_DIR} && docker-compose --profile web up -d`,
+    category: 'docker'
+  },
+  startManagement: {
+    name: 'Start Management Services',
+    command: `cd ${AI_SYSTEMS_DIR} && docker-compose --profile management up -d`,
+    category: 'docker'
+  },
+  startMonitoring: {
+    name: 'Start Monitoring Services',
+    command: `cd ${AI_SYSTEMS_DIR} && docker-compose --profile monitoring up -d`,
+    category: 'docker'
+  },
+  startAll: {
+    name: 'Start All Services (Docker)',
+    command: `cd ${AI_SYSTEMS_DIR} && docker-compose --profile full up -d`,
+    category: 'docker'
+  },
+  
+  // Testing and monitoring
+  testProfiles: {
+    name: 'Test Docker Profiles',
+    command: `bash ${AI_SYSTEMS_DIR}/test_profiles.sh`,
+    category: 'testing'
+  },
+  monitorPerformance: {
+    name: 'Monitor Performance',
+    command: `bash ${AI_SYSTEMS_DIR}/monitor_performance.sh`,
+    category: 'monitoring'
+  },
+  backupVolumes: {
+    name: 'Backup Volumes',
+    command: `bash ${AI_SYSTEMS_DIR}/backup_volumes.sh`,
+    category: 'backup'
+  },
+  backupRabbitMQ: {
+    name: 'Backup RabbitMQ Data',
+    command: `bash ${AI_SYSTEMS_DIR}/backup_rabbitmq_data.sh`,
+    category: 'backup'
+  },
+  backupPostgres: {
+    name: 'Backup PostgreSQL Data',
+    command: `bash ${AI_SYSTEMS_DIR}/backup_postgres_data.sh`,
+    category: 'backup'
+  },
+  checkRepo: {
+    name: 'Check Git Repository',
+    command: `bash ${AI_SYSTEMS_DIR}/check_repo.sh`,
+    category: 'git'
+  },
+  syncRepo: {
+    name: 'Sync Git Repository',
+    command: `bash ${AI_SYSTEMS_DIR}/sync_repo.sh`,
+    category: 'git'
+  },
+  forcePush: {
+    name: 'Force Push to Git',
+    command: `bash ${AI_SYSTEMS_DIR}/force_push.sh`,
+    category: 'git'
+  },
+  resetRepo: {
+    name: 'Reset Git Repository',
+    command: `bash ${AI_SYSTEMS_DIR}/reset_repo.sh`,
+    category: 'git'
+  },
+  testHealthEndpoints: {
+    name: 'Test Health Endpoints',
+    command: `curl -s http://localhost:8000/health && echo "\n" && curl -s http://localhost:8001/health`,
+    category: 'testing'
+  },
+  testLoadBalancing: {
+    name: 'Test Load Balancing',
+    command: `for i in {1..5}; do curl -s http://localhost:8080/api/status; echo "\n"; done`,
+    category: 'testing'
+  },
+  runIntegrationTests: {
+    name: 'Run Integration Tests',
+    command: `cd ${AI_SYSTEMS_DIR}/.. && python -m pytest tests/integration -v`,
+    category: 'testing'
+  },
+  checkSecurityConfig: {
+    name: 'Check Security Config',
+    command: `docker-compose -f ${AI_SYSTEMS_DIR}/docker-compose.yml config | grep -i secret || echo "No secrets found in docker-compose.yml"`,
+    category: 'testing'
+  }
+};
+
+// Routes
+app.get('/', async (req, res) => {
+  try {
+    const categories = {};
+    Object.entries(scripts).forEach(([id, script]) => {
+      if (!categories[script.category]) {
+        categories[script.category] = [];
+      }
+      categories[script.category].push({ id, name: script.name });
+    });
+
+    const categoryDisplayNames = {
+      'services': 'System Services',
+      'docker': 'Docker Management',
+      'backup': 'Backup Operations',
+      'git': 'Git Repository',
+      'testing': 'Testing & Diagnostics',
+      'monitoring': 'System Monitoring'
+    };
+
+    const categoryOrder = ['services', 'docker', 'backup', 'testing', 'monitoring', 'git'];
+
+    const dockerRunning = await checkDockerRunning();
+    const servicesRunning = await checkServicesRunning();
+    res.render('index', { 
+      categories, 
+      categoryDisplayNames,
+      categoryOrder,
+      scripts,
+      dockerRunning,
+      servicesRunning
+    });
+  } catch (error) {
+    console.error('Error rendering index:', error);
+    res.status(500).send('Internal Server Error');
+  }
+});
+
+// API endpoint to run a script
+app.post('/api/run', (req, res) => {
+  const { scriptId, customCommand } = req.body;
+  
+  if (customCommand) {
+    // Custom command execution
+    res.json({ success: true, message: `Running custom command` });
+    
+    // Execute the custom command
+    const process = exec(customCommand, { cwd: AI_SYSTEMS_DIR });
+    
+    // Generate a unique ID for this custom command
+    const customId = `custom-${Date.now()}`;
+    
+    // Broadcast output to all connected clients
+    process.stdout.on('data', (data) => {
+      io.emit('output', { scriptId: customId, data });
+    });
+    
+    process.stderr.on('data', (data) => {
+      io.emit('output', { scriptId: customId, data, error: true });
+    });
+    
+    process.on('close', (code) => {
+      io.emit('scriptComplete', { 
+        scriptId: customId, 
+        exitCode: code,
+        success: code === 0
+      });
+    });
+    
+    return;
+  }
+  
+  if (!scripts[scriptId]) {
+    return res.status(400).json({ success: false, message: 'Invalid script ID' });
+  }
+  
+  const script = scripts[scriptId];
+  
+  // Send initial response
+  res.json({ success: true, message: `Running: ${script.name}` });
+  
+  // Execute the script
+  const process = exec(script.command);
+  
+  // Broadcast output to all connected clients
+  process.stdout.on('data', (data) => {
+    io.emit('output', { scriptId, data });
+  });
+  
+  process.stderr.on('data', (data) => {
+    io.emit('output', { scriptId, data, error: true });
+  });
+  
+  process.on('close', (code) => {
+    io.emit('scriptComplete', { 
+      scriptId, 
+      exitCode: code,
+      success: code === 0
+    });
+  });
+});
+
+// API endpoint to get system status
+app.get('/api/status', async (req, res) => {
+  try {
+    const dockerRunning = await checkDockerRunning();
+    const servicesRunning = await checkServicesRunning();
+    const services = await getServicesStatus();
+    res.json({
+      dockerRunning,
+      servicesRunning,
+      services
+    });
+  } catch (error) {
+    console.error('Error getting status:', error);
+    res.status(500).send('Internal Server Error');
+  }
+});
+
+// Socket.IO connection
+io.on('connection', (socket) => {
+  console.log('Client connected');
+  
+  // Handle script execution
+  socket.on('run-script', (scriptId) => {
+    const script = scripts[scriptId];
+    if (!script) {
+      socket.emit('script-error', `Script ${scriptId} not found`);
+      return;
+    }
+    
+    console.log(`Running script: ${script.name}`);
+    
+    const child = exec(script.command);
+    
+    child.stdout.on('data', (data) => {
+      socket.emit('script-output', data.toString());
+    });
+    
+    child.stderr.on('data', (data) => {
+      socket.emit('script-error', data.toString());
+    });
+    
+    child.on('close', (code) => {
+      socket.emit('script-complete', code);
+    });
+  });
+  
+  // Handle custom command execution
+  socket.on('run-custom-command', (command) => {
+    // Security check - prevent dangerous commands
+    if (command.includes('rm -rf') || command.includes('sudo') || command.includes(':(){ :|:& };:')) {
+      socket.emit('script-error', 'Command rejected for security reasons');
+      return;
+    }
+    
+    console.log(`Running custom command: ${command}`);
+    
+    // Execute in the AI-SYSTEMS directory for context
+    const child = exec(command, { cwd: path.join(AI_SYSTEMS_DIR, '..') });
+    
+    child.stdout.on('data', (data) => {
+      socket.emit('script-output', data.toString());
+    });
+    
+    child.stderr.on('data', (data) => {
+      socket.emit('script-error', data.toString());
+    });
+    
+    child.on('close', (code) => {
+      socket.emit('script-complete', code);
+    });
+  });
+  
+  // Handle status request
+  socket.on('get-status', async () => {
+    try {
+      const services = await getServicesStatus();
+      socket.emit('status-update', services);
+    } catch (error) {
+      console.error('Error getting status:', error);
+    }
+  });
+  
+  socket.on('disconnect', () => {
+    console.log('Client disconnected');
+  });
+});
+
+// Start server
+const PORT = process.env.PORT || 3031;
+server.listen(PORT, () => {
+  console.log(`AI-SYSTEMS Web Manager running on http://localhost:${PORT}`);
+});

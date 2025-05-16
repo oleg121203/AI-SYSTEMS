@@ -1,0 +1,176 @@
+:root {
+  --primary-color: #00ff00;
+  --primary-dark: #00cc00;
+  --primary-light: #33ff33;
+  --secondary-color: #00aa00;
+  --accent-color: #00ffaa;
+  --dark-color: #001800;
+  --darker-color: #000800;
+  --background-color: #000000;
+  --card-background: #0a0a0a;
+  --card-background-alt: #101010;
+  --text-color: #00ff00;
+  --text-dim: #00cc00;
+  --text-bright: #00ffaa;
+  --border-color: #003300;
+  --active-color: #00ff00;
+  --inactive-color: #aa0000;
+  --terminal-background: #000000;
+  --terminal-text: #00ff00;
+  --terminal-prompt: #00ffaa;
+  --terminal-error: #ff3333;
+  --terminal-success: #00ff00;
+  --terminal-command: #00ffaa;
+  --shadow-color: rgba(0, 255, 0, 0.2);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+@font-face {
+  font-family: 'Hack';
+  src: url('https://cdn.jsdelivr.net/npm/hack-font@3.3.0/build/web/fonts/hack-regular.woff2') format('woff2');
+  font-weight: normal;
+  font-style: normal;
+}
+
+@font-face {
+  font-family: 'Hack';
+  src: url('https://cdn.jsdelivr.net/npm/hack-font@3.3.0/build/web/fonts/hack-bold.woff2') format('woff2');
+  font-weight: bold;
+  font-style: normal;
+}
+
+body {
+  font-family: 'Hack', 'Courier New', monospace;
+  line-height: 1.6;
+  background-color: var(--background-color);
+  color: var(--text-color);
+  position: relative;
+  overflow-x: hidden;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-image: 
+    linear-gradient(rgba(0, 255, 0, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 255, 0, 0.03) 1px, transparent 1px);
+  background-size: 20px 20px;
+  z-index: -1;
+  pointer-events: none;
+}
+
+.container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+/* Glowing text effect */
+@keyframes glow {
+  0% {
+    text-shadow: 0 0 5px rgba(0, 255, 0, 0.5);
+  }
+  50% {
+    text-shadow: 0 0 10px rgba(0, 255, 0, 0.7), 0 0 15px rgba(0, 255, 0, 0.3);
+  }
+  100% {
+    text-shadow: 0 0 5px rgba(0, 255, 0, 0.5);
+  }
+}
+
+/* Typing cursor animation */
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 20px 0;
+  border-bottom: 1px solid var(--border-color);
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+  position: relative;
+}
+
+header::after {
+  content: "";
+  position: absolute;
+  bottom: -1px;
+  left: 0;
+  width: 100%;
+  height: 1px;
+  background: linear-gradient(90deg, 
+    transparent 0%, 
+    var(--primary-color) 20%, 
+    var(--primary-color) 80%, 
+    transparent 100%);
+  box-shadow: 0 0 10px var(--primary-color);
+}
+
+header h1 {
+  color: var(--primary-color);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  animation: glow 2s infinite;
+  font-weight: bold;
+  letter-spacing: 1px;
+}
+
+header h1 i {
+  font-size: 1.2em;
+}
+
+.status-indicators {
+  display: flex;
+  gap: 15px;
+  flex-wrap: wrap;
+}
+
+.status-item {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border-radius: 3px;
+  font-weight: 500;
+  background-color: var(--card-background);
+  border: 1px solid var(--border-color);
+  font-size: 0.9em;
+  transition: all 0.3s ease;
+}
+
+.status-item.active {
+  background-color: rgba(0, 255, 0, 0.1);
+  color: var(--active-color);
+  border-color: var(--active-color);
+  box-shadow: 0 0 5px var(--shadow-color);
+}
+
+.status-item.inactive {
+  background-color: rgba(170, 0, 0, 0.1);
+  color: var(--inactive-color);
+  border-color: var(--inactive-color);
+}
+
+main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}

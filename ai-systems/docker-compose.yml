@@ -9,11 +9,26 @@ services:
       - ./.env
     volumes:
       - ./ai-core:/app
-      - ./logs:/app/logs
+      - logs_volume:/app/logs
+    networks:
+      - backend_network
+      - db_network
     depends_on:
-      - postgres
-      - redis
-      - rabbitmq
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7861/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    profiles:
+      - ai
+      - full
 
   development-agents:
     build: ./development-agents
@@ -25,11 +40,26 @@ services:
       - ./.env
     volumes:
       - ./development-agents:/app
-      - ./logs:/app/logs
+      - logs_volume:/app/logs
+    networks:
+      - backend_network
+      - db_network
     depends_on:
-      - postgres
-      - redis
-      - rabbitmq
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7862/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    profiles:
+      - ai
+      - full
 
   project-manager:
     build: ./project-manager
@@ -41,11 +71,26 @@ services:
       - ./.env
     volumes:
       - ./project-manager:/app
-      - ./logs:/app/logs
+      - logs_volume:/app/logs
+    networks:
+      - backend_network
+      - db_network
     depends_on:
-      - postgres
-      - redis
-      - rabbitmq
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7863/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    profiles:
+      - management
+      - full
 
   cmp:
     build: ./cmp
@@ -57,11 +102,26 @@ services:
       - ./.env
     volumes:
       - ./cmp:/app
-      - ./logs:/app/logs
+      - logs_volume:/app/logs
+    networks:
+      - backend_network
+      - db_network
     depends_on:
-      - postgres
-      - redis
-      - rabbitmq
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7864/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    profiles:
+      - monitoring
+      - full
 
   web-frontend:
     build: ./web/frontend
@@ -71,24 +131,52 @@ services:
       - ./.env
     volumes:
       - ./web/frontend:/app
+    networks:
+      - frontend_network
     depends_on:
-      - web-backend
+      web-backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    profiles:
+      - web
+      - full
 
   web-backend:
     build: ./web/backend
     ports:
-      - "${WEB_PORT:-8000}:8000"
+      - "${WEB_PORT:-8001}:8001"
     environment:
       - PYTHONPATH=/app
     env_file:
       - ./.env
     volumes:
       - ./web/backend:/app
-      - ./logs:/app/logs
+      - logs_volume:/app/logs
+    networks:
+      - frontend_network
+      - backend_network
+      - db_network
     depends_on:
-      - postgres
-      - redis
-      - rabbitmq
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    profiles:
+      - web
+      - full
 
   git-service:
     build: ./git-service
@@ -101,10 +189,24 @@ services:
     volumes:
       - ./git-service:/app
       - ${REPOSITORY_PATH:-~/workspace/AI-SYSTEMS-REPO}:/root/workspace/AI-SYSTEMS-REPO
-      - ./logs:/app/logs
+      - logs_volume:/app/logs
+    networks:
+      - backend_network
+      - db_network
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7865/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    profiles:
+      - management
+      - full
 
   postgres:
     image: postgres:14
@@ -116,7 +218,22 @@ services:
       - POSTGRES_PASSWORD=${DB_PASSWORD:-postgres}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    networks:
+      - db_network
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-ai_systems}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    profiles:
+      - infrastructure
+      - ai
+      - web
+      - management
+      - monitoring
+      - full
 
   redis:
     image: redis:6
@@ -124,7 +241,22 @@ services:
       - "6379:6379"
     volumes:
       - redis_data:/data
+    networks:
+      - db_network
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    profiles:
+      - infrastructure
+      - ai
+      - web
+      - management
+      - monitoring
+      - full
 
   rabbitmq:
     image: rabbitmq:3-management
@@ -136,9 +268,73 @@ services:
     environment:
       - RABBITMQ_DEFAULT_USER=${RABBITMQ_USER:-guest}
       - RABBITMQ_DEFAULT_PASS=${RABBITMQ_PASSWORD:-guest}
+    networks:
+      - db_network
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_port_connectivity"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    profiles:
+      - infrastructure
+      - ai
+      - web
+      - management
+      - monitoring
+      - full
+
+# Define custom networks for better isolation and security
+networks:
+  # Frontend network for web services
+  frontend_network:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.28.0.0/24
+  
+  # Backend network for application services
+  backend_network:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.28.1.0/24
+  
+  # Database network for data services
+  db_network:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.28.2.0/24
 
 volumes:
+  # Database volumes with explicit configuration
   postgres_data:
+    driver: local
+    driver_opts:
+      type: none
+      device: ${POSTGRES_DATA_PATH:-./data/postgres}
+      o: bind
   redis_data:
+    driver: local
+    driver_opts:
+      type: none
+      device: ${REDIS_DATA_PATH:-./data/redis}
+      o: bind
   rabbitmq_data:
+    driver: local
+    driver_opts:
+      type: none
+      device: ${RABBITMQ_DATA_PATH:-./data/rabbitmq}
+      o: bind
+  # Shared logs volume for centralized logging
+  logs_volume:
+    driver: local
+    driver_opts:
+      type: none
+      device: ${LOGS_PATH:-./logs}
+      o: bind

@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI-SYSTEMS Terminal</title>
+    <link rel="stylesheet" href="/css/style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚡</text></svg>">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/hack-font@3.3.0/build/web/hack.css">
+</head>
+<body>
+    <div id="matrix-rain" class="matrix-rain"></div>
+    <div class="container">
+        <header>
+            <h1><i class="fas fa-terminal"></i> AI-SYSTEMS_TERMINAL</h1>
+            <div class="status-indicators">
+                <div class="status-item <%= dockerRunning ? 'active' : 'inactive' %>">
+                    <i class="fas fa-server"></i> Docker: <%= dockerRunning ? 'Running' : 'Stopped' %>
+                </div>
+                <div class="status-item <%= servicesRunning ? 'active' : 'inactive' %>">
+                    <i class="fas fa-cogs"></i> Services: <%= servicesRunning ? 'Running' : 'Stopped' %>
+                </div>
+                <div class="status-item">
+                    <i class="fas fa-database"></i> Volumes: <span id="volume-count">Loading...</span>
+                </div>
+                <div class="status-item">
+                    <i class="fas fa-save"></i> Backups: <span id="backup-count">Loading...</span>
+                </div>
+            </div>
+        </header>
+        
+        <main>
+            <div class="dashboard">
+                <div class="system-status">
+                    <h2><span class="typing">System Status</span></h2>
+                    <div id="status-container">
+                        <div class="loading">Loading status...</div>
+                    </div>
+                    <div id="resources-container" class="resources-container">
+                        <div class="resource-section">
+                            <h3>Volumes</h3>
+                            <ul id="volumes-list" class="resource-list">
+                                <li class="loading">Loading volumes...</li>
+                            </ul>
+                        </div>
+                        <div class="resource-section">
+                            <h3>Networks</h3>
+                            <ul id="networks-list" class="resource-list">
+                                <li class="loading">Loading networks...</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="actions">
+                    <h2><span class="typing">Command Center</span></h2>
+                    
+                    <% categoryOrder.forEach(category => { %>
+                        <div class="category">
+                            <h3>
+                                <i class="fas 
+                                <% if (category === 'services') { %>fa-server
+                                <% } else if (category === 'docker') { %>fa-docker
+                                <% } else if (category === 'backup') { %>fa-database
+                                <% } else if (category === 'git') { %>fa-code-branch
+                                <% } else if (category === 'testing') { %>fa-vial
+                                <% } else if (category === 'monitoring') { %>fa-chart-line
+                                <% } else { %>fa-folder<% } %>"></i>
+                                <%= categoryDisplayNames[category] %>
+                                <% if (category === 'testing') { %>
+                                <button class="dropdown-toggle" id="testing-dropdown-toggle">
+                                    <i class="fas fa-chevron-down"></i>
+                                </button>
+                                <% } %>
+                            </h3>
+                            <div class="action-buttons <% if (category === 'testing') { %>dropdown-content<% } %>" <% if (category === 'testing') { %>id="testing-dropdown"<% } %>>
+                                <% categories[category].forEach(script => { %>
+                                    <button class="action-btn" data-script="<%= script.id %>">
+                                        <%= script.name %>
+                                    </button>
+                                <% }); %>
+                            </div>
+                        </div>
+                    <% }); %>
+                </div>
+            </div>
+            
+            <div class="output-container" id="output-container">
+                <div class="output-header">
+                    <h2><span class="typing">Terminal Output</span></h2>
+                    <div class="output-controls">
+                        <button id="toggle-expand" class="control-btn">
+                            <i class="fas fa-expand"></i>
+                        </button>
+                        <button id="clear-output" class="clear-btn">Clear</button>
+                    </div>
+                </div>
+                <div id="output" class="output"></div>
+                <div id="command-input-container" class="command-input-container hidden">
+                    <div class="command-input-wrapper">
+                        <span class="prompt">root@ai-systems:~#</span>
+                        <input type="text" id="command-input" placeholder="Enter command..." />
+                    </div>
+                    <button id="run-command" class="run-btn">Execute</button>
+                </div>
+            </div>
+        </main>
+        
+        <footer>
+            <p>[<span class="terminal-time" id="terminal-time">00:00:00</span>] &copy; 2025 AI-SYSTEMS | GitHub: <a href="https://github.com/oleg121203/AI-SYSTEMS-REPO" target="_blank">oleg121203/AI-SYSTEMS-REPO</a></p>
+        </footer>
+    </div>
+    
+    <!-- Modal for confirmation -->
+    <div id="confirm-modal" class="modal">
+        <div class="modal-content">
+            <h3>Confirm Action</h3>
+            <p id="confirm-message">Are you sure you want to perform this action?</p>
+            <div class="modal-buttons">
+                <button id="confirm-yes" class="btn-primary">Yes</button>
+                <button id="confirm-no" class="btn-secondary">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Help modal -->
+    <div id="help-modal" class="modal">
+        <div class="modal-content help-content">
+            <h3>AI-SYSTEMS Web Manager Help</h3>
+            <div class="help-section">
+                <h4>Management Actions</h4>
+                <p>Click on any button to run the corresponding action. Actions are grouped by category.</p>
+                <ul>
+                    <li><strong>Services:</strong> Start and stop AI-SYSTEMS services</li>
+                    <li><strong>Docker:</strong> Manage Docker containers and profiles</li>
+                    <li><strong>Testing:</strong> Run various tests on your system</li>
+                    <li><strong>Monitoring:</strong> Monitor system performance</li>
+                    <li><strong>Backup:</strong> Manage backups of your data</li>
+                    <li><strong>Git:</strong> Interact with your Git repository</li>
+                </ul>
+            </div>
+            <div class="help-section">
+                <h4>Command Output</h4>
+                <p>The output of commands will be displayed in the Command Output section.</p>
+                <ul>
+                    <li>Click <i class="fas fa-expand"></i> to expand the output to full screen</li>
+                    <li>When expanded, you can enter custom commands</li>
+                    <li>Click <i class="fas fa-compress"></i> to collapse back to normal view</li>
+                </ul>
+            </div>
+            <div class="help-section">
+                <h4>Custom Commands</h4>
+                <p>In expanded view, you can enter custom shell commands to execute on the server.</p>
+                <p>Example commands:</p>
+                <ul>
+                    <li><code>docker ps</code> - List running containers</li>
+                    <li><code>ls -la</code> - List files in the current directory</li>
+                    <li><code>cat .env.example</code> - View the example environment file</li>
+                </ul>
+            </div>
+            <div class="modal-buttons">
+                <button id="help-close" class="btn-primary">Close</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Help button -->
+    <button id="help-button" class="help-btn">
+        <i class="fas fa-question-circle"></i>
+    </button>
+    
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="/js/main.js"></script>
+    <script src="/js/matrix-effect.js"></script>
+</body>
+</html>

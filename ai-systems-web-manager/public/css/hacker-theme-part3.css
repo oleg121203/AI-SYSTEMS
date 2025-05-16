@@ -1,0 +1,386 @@
+/* Expanded output container */
+.output-container.expanded {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 1000;
+  background-color: var(--background-color);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+}
+
+.output-container.expanded .output {
+  flex: 1;
+  height: auto;
+  max-height: calc(100vh - 160px);
+}
+
+/* Command input container */
+.command-input-container {
+  display: flex;
+  margin-top: 10px;
+  background-color: var(--terminal-background);
+  border-radius: 3px;
+  padding: 10px;
+  align-items: center;
+  border: 1px solid var(--border-color);
+}
+
+.command-input-container.hidden {
+  display: none;
+}
+
+.command-input-wrapper {
+  display: flex;
+  align-items: center;
+  flex: 1;
+}
+
+.prompt {
+  color: var(--terminal-prompt);
+  font-weight: bold;
+  margin-right: 10px;
+  font-family: 'Hack', monospace;
+}
+
+.prompt::after {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 15px;
+  background-color: var(--primary-color);
+  margin-left: 5px;
+  animation: blink 1s infinite;
+  vertical-align: middle;
+}
+
+#command-input {
+  background-color: transparent;
+  border: none;
+  color: var(--terminal-text);
+  font-family: 'Hack', monospace;
+  width: 100%;
+  font-size: 14px;
+  outline: none;
+}
+
+.run-btn {
+  background-color: var(--card-background-alt);
+  color: var(--text-color);
+  border: 1px solid var(--border-color);
+  padding: 5px 15px;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: all 0.3s;
+  margin-left: 10px;
+  font-family: 'Hack', monospace;
+}
+
+.run-btn:hover {
+  background-color: var(--dark-color);
+  border-color: var(--primary-color);
+  color: var(--primary-light);
+  box-shadow: 0 0 5px var(--shadow-color);
+}
+
+.output .error {
+  color: var(--terminal-error);
+}
+
+.output .success {
+  color: var(--terminal-success);
+}
+
+.output .command {
+  color: var(--terminal-prompt);
+  font-weight: bold;
+}
+
+footer {
+  margin-top: 30px;
+  text-align: center;
+  padding: 20px 0;
+  border-top: 1px solid var(--border-color);
+  color: var(--text-dim);
+  position: relative;
+}
+
+footer::before {
+  content: "";
+  position: absolute;
+  top: -1px;
+  left: 0;
+  width: 100%;
+  height: 1px;
+  background: linear-gradient(90deg, 
+    transparent, 
+    var(--primary-color), 
+    transparent);
+  box-shadow: 0 0 10px var(--primary-color);
+}
+
+footer a {
+  color: var(--primary-color);
+  text-decoration: none;
+  transition: all 0.3s;
+}
+
+footer a:hover {
+  text-shadow: 0 0 5px var(--primary-color);
+}
+
+/* Status container styles */
+#status-container {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+.status-card {
+  background-color: var(--card-background-alt);
+  border-radius: 3px;
+  padding: 10px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border: 1px solid var(--border-color);
+  transition: all 0.3s;
+}
+
+.status-card:hover {
+  box-shadow: 0 0 5px var(--shadow-color);
+  border-color: var(--primary-color);
+}
+
+.status-card .name {
+  font-weight: 500;
+  color: var(--text-color);
+}
+
+.status-card .status {
+  padding: 3px 8px;
+  border-radius: 3px;
+  font-size: 12px;
+  font-weight: bold;
+}
+
+.status-card .status.running {
+  background-color: rgba(0, 255, 0, 0.1);
+  color: var(--active-color);
+  border: 1px solid var(--active-color);
+}
+
+.status-card .status.stopped {
+  background-color: rgba(170, 0, 0, 0.1);
+  color: var(--inactive-color);
+  border: 1px solid var(--inactive-color);
+}
+
+.loading {
+  text-align: center;
+  color: var(--text-dim);
+  padding: 20px;
+}
+
+/* Resources container */
+.resources-container {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 15px;
+}
+
+@media (max-width: 768px) {
+  .resources-container {
+    grid-template-columns: 1fr;
+  }
+}
+
+.resource-section {
+  background-color: var(--card-background-alt);
+  border-radius: 3px;
+  padding: 10px;
+  border: 1px solid var(--border-color);
+}
+
+.resource-section h3 {
+  margin-top: 0;
+  margin-bottom: 10px;
+  font-size: 16px;
+  color: var(--text-bright);
+}
+
+.resource-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  max-height: 150px;
+  overflow-y: auto;
+}
+
+.resource-list li {
+  padding: 5px 0;
+  border-bottom: 1px solid var(--border-color);
+  font-size: 14px;
+  color: var(--text-color);
+}
+
+.resource-list li:last-child {
+  border-bottom: none;
+}
+
+/* Modal styles */
+.modal {
+  display: none;
+  position: fixed;
+  z-index: 1000;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(0, 0, 0, 0.8);
+  align-items: center;
+  justify-content: center;
+}
+
+.modal-content {
+  background-color: var(--card-background);
+  padding: 20px;
+  border-radius: 4px;
+  width: 400px;
+  max-width: 90%;
+  border: 1px solid var(--border-color);
+  box-shadow: 0 0 20px var(--shadow-color);
+  position: relative;
+}
+
+.modal-content::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--primary-color), transparent);
+  animation: glow 2s infinite;
+}
+
+.help-content {
+  width: 600px;
+  max-width: 90%;
+  max-height: 80vh;
+  overflow-y: auto;
+}
+
+.help-section {
+  margin-bottom: 20px;
+}
+
+.help-section h4 {
+  margin-top: 0;
+  color: var(--text-bright);
+  border-bottom: 1px solid var(--border-color);
+  padding-bottom: 5px;
+}
+
+.help-section code {
+  background-color: var(--terminal-background);
+  padding: 2px 5px;
+  border-radius: 3px;
+  font-family: 'Hack', monospace;
+  font-size: 14px;
+  color: var(--terminal-prompt);
+}
+
+.modal-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.btn-primary {
+  background-color: var(--card-background-alt);
+  color: var(--text-color);
+  border: 1px solid var(--border-color);
+  padding: 8px 15px;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: all 0.3s;
+  font-family: 'Hack', monospace;
+}
+
+.btn-secondary {
+  background-color: var(--card-background-alt);
+  color: var(--text-color);
+  border: 1px solid var(--border-color);
+  padding: 8px 15px;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: all 0.3s;
+  font-family: 'Hack', monospace;
+}
+
+.btn-primary:hover {
+  background-color: var(--dark-color);
+  border-color: var(--primary-color);
+  color: var(--primary-light);
+  box-shadow: 0 0 5px var(--shadow-color);
+}
+
+.btn-secondary:hover {
+  background-color: var(--dark-color);
+  border-color: var(--primary-color);
+  color: var(--primary-light);
+  box-shadow: 0 0 5px var(--shadow-color);
+}
+
+/* Help button */
+.help-btn {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+  background-color: var(--card-background);
+  color: var(--primary-color);
+  border: 1px solid var(--border-color);
+  font-size: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 0 10px var(--shadow-color);
+  z-index: 900;
+  transition: all 0.3s;
+}
+
+.help-btn:hover {
+  background-color: var(--dark-color);
+  border-color: var(--primary-color);
+  color: var(--primary-light);
+  box-shadow: 0 0 15px var(--shadow-color);
+  transform: scale(1.1);
+}
+
+/* Matrix rain effect */
+.matrix-rain {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: -1;
+  opacity: 0.1;
+}
+
+/* Typing effect */
+.typing::after {
+  content: "|";
+  animation: blink 1s infinite;
+}

@@ -1,0 +1,22 @@
+{
+  "name": "ai-systems-web-manager",
+  "version": "1.0.0",
+  "description": "Web interface for managing AI-SYSTEMS",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js"
+  },
+  "author": "Oleg Kizyma <oleg1203@gmail.com>",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "body-parser": "^1.20.2",
+    "child_process": "^1.0.2",
+    "ejs": "^3.1.9",
+    "socket.io": "^4.7.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  }
+}

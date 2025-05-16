@@ -1,0 +1,224 @@
+.dashboard {
+  display: grid;
+  grid-template-columns: 1fr 2fr;
+  gap: 20px;
+}
+
+@media (max-width: 768px) {
+  .dashboard {
+    grid-template-columns: 1fr;
+  }
+}
+
+.system-status, .actions {
+  background-color: var(--card-background);
+  border-radius: 4px;
+  box-shadow: 0 0 10px var(--shadow-color);
+  padding: 20px;
+  border: 1px solid var(--border-color);
+  position: relative;
+  overflow: hidden;
+}
+
+.system-status::before, .actions::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--primary-color), transparent);
+  animation: glow 2s infinite;
+}
+
+h2 {
+  margin-bottom: 15px;
+  color: var(--text-bright);
+  border-bottom: 1px solid var(--border-color);
+  padding-bottom: 10px;
+  font-weight: bold;
+  letter-spacing: 1px;
+  position: relative;
+}
+
+h2::after {
+  content: "";
+  position: absolute;
+  bottom: -1px;
+  left: 0;
+  width: 50px;
+  height: 2px;
+  background-color: var(--primary-color);
+  box-shadow: 0 0 5px var(--primary-color);
+}
+
+h3 {
+  margin: 15px 0 10px;
+  color: var(--text-bright);
+  font-weight: bold;
+  letter-spacing: 0.5px;
+  display: flex;
+  align-items: center;
+}
+
+.category {
+  margin-bottom: 20px;
+  position: relative;
+}
+
+.category::after {
+  content: "";
+  position: absolute;
+  bottom: -10px;
+  left: 0;
+  width: 100%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--border-color), transparent);
+}
+
+.category:last-child::after {
+  display: none;
+}
+
+/* Dropdown styles */
+.dropdown-toggle {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--primary-color);
+  margin-left: 10px;
+  transition: transform 0.3s;
+}
+
+.dropdown-toggle.active i {
+  transform: rotate(180deg);
+}
+
+.dropdown-content {
+  display: none;
+  overflow: hidden;
+  transition: max-height 0.3s ease-out;
+}
+
+.dropdown-content.active {
+  display: flex;
+}
+
+.action-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.action-btn {
+  background-color: var(--card-background-alt);
+  color: var(--text-color);
+  border: 1px solid var(--border-color);
+  padding: 8px 15px;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: all 0.3s;
+  font-family: 'Hack', monospace;
+  font-size: 0.9em;
+  position: relative;
+  overflow: hidden;
+}
+
+.action-btn::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, 
+    transparent, 
+    rgba(0, 255, 0, 0.1), 
+    transparent);
+  transition: left 0.5s;
+}
+
+.action-btn:hover {
+  background-color: var(--dark-color);
+  border-color: var(--primary-color);
+  color: var(--primary-light);
+  box-shadow: 0 0 10px var(--shadow-color);
+}
+
+.action-btn:hover::before {
+  left: 100%;
+}
+
+.action-btn:active {
+  transform: scale(0.98);
+}
+
+.output-container {
+  background-color: var(--card-background);
+  border-radius: 4px;
+  box-shadow: 0 0 10px var(--shadow-color);
+  padding: 20px;
+  margin-top: 20px;
+  border: 1px solid var(--border-color);
+  transition: all 0.3s ease;
+}
+
+.output-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 15px;
+}
+
+.output-controls {
+  display: flex;
+  gap: 10px;
+}
+
+.clear-btn, .control-btn {
+  background-color: var(--card-background-alt);
+  color: var(--text-color);
+  border: 1px solid var(--border-color);
+  padding: 5px 10px;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: all 0.3s;
+  font-family: 'Hack', monospace;
+}
+
+.clear-btn:hover, .control-btn:hover {
+  background-color: var(--dark-color);
+  border-color: var(--primary-color);
+  color: var(--primary-light);
+  box-shadow: 0 0 5px var(--shadow-color);
+}
+
+.output {
+  background-color: var(--terminal-background);
+  color: var(--terminal-text);
+  padding: 15px;
+  border-radius: 3px;
+  font-family: 'Hack', monospace;
+  height: 300px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  border: 1px solid var(--border-color);
+  position: relative;
+}
+
+.output::before {
+  content: "$ AI-SYSTEMS > OUTPUT";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  padding: 2px 15px;
+  background-color: var(--dark-color);
+  font-size: 0.8em;
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.output {
+  padding-top: 25px;
+}
