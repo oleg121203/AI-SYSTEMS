@@ -190,6 +190,87 @@
                 </div>
             </div>
         </div>
+
+        <!-- Service Dependency Map -->
+        <div class="row">
+            <div class="col-md-12">
+                <div class="card">
+                    <div class="card-header">
+                        <h5>Service Dependency Map</h5>
+                    </div>
+                    <div class="card-body">
+                        <div id="dependency-map" style="height: 400px;"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Predictive Analytics -->
+        <div class="row">
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header">
+                        <h5>CPU Usage Prediction</h5>
+                    </div>
+                    <div class="card-body">
+                        <canvas id="cpu-prediction-chart"></canvas>
+                        <div class="mt-3">
+                            <p><strong>Prediction Confidence:</strong> <span id="cpu-prediction-confidence">85%</span></p>
+                            <p><strong>Trend:</strong> <span id="cpu-prediction-trend">Stable</span></p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header">
+                        <h5>Memory Usage Prediction</h5>
+                    </div>
+                    <div class="card-body">
+                        <canvas id="memory-prediction-chart"></canvas>
+                        <div class="mt-3">
+                            <p><strong>Prediction Confidence:</strong> <span id="memory-prediction-confidence">78%</span></p>
+                            <p><strong>Trend:</strong> <span id="memory-prediction-trend">Increasing</span></p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Alert History -->
+        <div class="row">
+            <div class="col-md-12">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5>Alert History</h5>
+                        <div class="btn-group" role="group">
+                            <button type="button" class="btn btn-sm btn-outline-secondary alert-filter active" data-filter="all">All</button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary alert-filter" data-filter="critical">Critical</button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary alert-filter" data-filter="warning">Warning</button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary alert-filter" data-filter="info">Info</button>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="table-responsive">
+                            <table class="table table-hover">
+                                <thead>
+                                    <tr>
+                                        <th>Time</th>
+                                        <th>Service</th>
+                                        <th>Level</th>
+                                        <th>Message</th>
+                                        <th>Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="alert-history-table">
+                                    <!-- Alert history will be populated here -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -272,6 +353,70 @@
                     }
                 }
             });
+            
+            // CPU Prediction Chart
+            const cpuPredictionCtx = document.getElementById('cpu-prediction-chart').getContext('2d');
+            window.cpuPredictionChart = new Chart(cpuPredictionCtx, {
+                type: 'line',
+                data: {
+                    labels: ['Now', '+1h', '+2h', '+4h', '+8h', '+24h'],
+                    datasets: [{
+                        label: 'Historical',
+                        data: [45, 48, 50, 47, 45, 46],
+                        borderColor: 'rgba(75, 192, 192, 1)',
+                        borderDash: [5, 5],
+                        tension: 0.1,
+                        fill: false
+                    }, {
+                        label: 'Predicted',
+                        data: [45, 47, 49, 52, 55, 58],
+                        borderColor: 'rgba(255, 99, 132, 1)',
+                        tension: 0.1,
+                        fill: false
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            max: 100
+                        }
+                    }
+                }
+            });
+            
+            // Memory Prediction Chart
+            const memoryPredictionCtx = document.getElementById('memory-prediction-chart').getContext('2d');
+            window.memoryPredictionChart = new Chart(memoryPredictionCtx, {
+                type: 'line',
+                data: {
+                    labels: ['Now', '+1h', '+2h', '+4h', '+8h', '+24h'],
+                    datasets: [{
+                        label: 'Historical',
+                        data: [60, 62, 65, 68, 70, 72],
+                        borderColor: 'rgba(153, 102, 255, 1)',
+                        borderDash: [5, 5],
+                        tension: 0.1,
+                        fill: false
+                    }, {
+                        label: 'Predicted',
+                        data: [60, 63, 67, 72, 78, 85],
+                        borderColor: 'rgba(255, 159, 64, 1)',
+                        tension: 0.1,
+                        fill: false
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            max: 100
+                        }
+                    }
+                }
+            });
         }
         
         function loadDashboardData(timeRange = 'day') {
@@ -304,13 +449,15 @@
                         health: 95,
                         alerts: {critical: 0, error: 0, warning: 1, info: 2},
                         metrics: {cpu_percent: 45, memory_percent: 60},
-                        status: 'online'
+                        status: 'online',
+                        dependencies: ['postgres', 'redis', 'rabbitmq']
                     },
                     'development-agents': {
                         health: 90,
                         alerts: {critical: 0, error: 0, warning: 0, info: 1},
                         metrics: {cpu_percent: 55, memory_percent: 70},
-                        status: 'online'
+                        status: 'online',
+                        dependencies: ['ai-core', 'postgres']
                     },
                     'project-manager': {
                         health: 100,
@@ -396,6 +543,9 @@
             document.getElementById('healthy-services').textContent = `${data.system.healthy_services} healthy`;
             document.getElementById('alerts-count').textContent = data.system.total_alerts;
             document.getElementById('critical-alerts').textContent = `${data.system.critical_alerts} critical`;
+            
+            // Update dependency map
+            renderDependencyMap(data.services);
             
             // Calculate average CPU and memory usage
             let totalCpu = 0;
@@ -555,6 +705,165 @@
             window.memoryChart.data.labels = trends.timestamps;
             window.memoryChart.data.datasets[0].data = trends.memory_usage;
             window.memoryChart.update();
+        }
+        
+        function renderDependencyMap(services) {
+            const mapContainer = document.getElementById('dependency-map');
+            mapContainer.innerHTML = '';
+            
+            // Create a simple visualization of service dependencies
+            const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+            svg.setAttribute('width', '100%');
+            svg.setAttribute('height', '400');
+            svg.style.border = '1px solid #dee2e6';
+            svg.style.borderRadius = '0.25rem';
+            mapContainer.appendChild(svg);
+            
+            const serviceNames = Object.keys(services);
+            const nodeRadius = 40;
+            const centerX = parseInt(svg.clientWidth / 2);
+            const centerY = 200;
+            const radius = 150;
+            
+            // Create nodes for each service
+            const nodes = {};
+            serviceNames.forEach((name, index) => {
+                const angle = (index / serviceNames.length) * 2 * Math.PI;
+                const x = centerX + radius * Math.cos(angle);
+                const y = centerY + radius * Math.sin(angle);
+                
+                // Create node group
+                const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+                
+                // Create node circle
+                const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                circle.setAttribute('cx', x);
+                circle.setAttribute('cy', y);
+                circle.setAttribute('r', nodeRadius);
+                circle.setAttribute('fill', getHealthColor(services[name].health));
+                circle.setAttribute('stroke', '#343a40');
+                circle.setAttribute('stroke-width', '2');
+                group.appendChild(circle);
+                
+                // Create node label
+                const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                text.setAttribute('x', x);
+                text.setAttribute('y', y);
+                text.setAttribute('text-anchor', 'middle');
+                text.setAttribute('dominant-baseline', 'middle');
+                text.setAttribute('fill', '#ffffff');
+                text.setAttribute('font-weight', 'bold');
+                text.textContent = name;
+                group.appendChild(text);
+                
+                svg.appendChild(group);
+                
+                // Store node position for edge creation
+                nodes[name] = {x, y};
+            });
+            
+            // Create edges for dependencies
+            serviceNames.forEach(name => {
+                const service = services[name];
+                if (service.dependencies && service.dependencies.length > 0) {
+                    service.dependencies.forEach(dep => {
+                        if (nodes[dep]) {
+                            const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                            line.setAttribute('x1', nodes[name].x);
+                            line.setAttribute('y1', nodes[name].y);
+                            line.setAttribute('x2', nodes[dep].x);
+                            line.setAttribute('y2', nodes[dep].y);
+                            line.setAttribute('stroke', '#6c757d');
+                            line.setAttribute('stroke-width', '2');
+                            line.setAttribute('marker-end', 'url(#arrowhead)');
+                            
+                            // Insert line before nodes to ensure it's drawn underneath
+                            svg.insertBefore(line, svg.firstChild);
+                        }
+                    });
+                }
+            });
+        }
+        
+        function getHealthColor(health) {
+            if (health >= 90) return '#28a745'; // Good
+            if (health >= 70) return '#ffc107'; // Warning
+            return '#dc3545'; // Critical
+        }
+        
+        // Set up alert history filtering
+        document.addEventListener('DOMContentLoaded', function() {
+            const alertFilters = document.querySelectorAll('.alert-filter');
+            alertFilters.forEach(filter => {
+                filter.addEventListener('click', function() {
+                    alertFilters.forEach(f => f.classList.remove('active'));
+                    this.classList.add('active');
+                    updateAlertHistory(this.dataset.filter);
+                });
+            });
+        });
+        
+        function updateAlertHistory(filter = 'all') {
+            // In a real implementation, this would fetch alert history from the API
+            // For demo purposes, we'll use mock data
+            const mockAlertHistory = [
+                {
+                    time: new Date().toLocaleTimeString(),
+                    service: 'git-service',
+                    level: 'critical',
+                    message: 'Service crashed unexpectedly',
+                    status: 'resolved'
+                },
+                {
+                    time: new Date(Date.now() - 30 * 60000).toLocaleTimeString(),
+                    service: 'ai-core',
+                    level: 'warning',
+                    message: 'High memory usage detected',
+                    status: 'active'
+                },
+                {
+                    time: new Date(Date.now() - 60 * 60000).toLocaleTimeString(),
+                    service: 'development-agents',
+                    level: 'info',
+                    message: 'Service restarted successfully',
+                    status: 'resolved'
+                },
+                {
+                    time: new Date(Date.now() - 120 * 60000).toLocaleTimeString(),
+                    service: 'project-manager',
+                    level: 'warning',
+                    message: 'Database connection timeout',
+                    status: 'resolved'
+                }
+            ];
+            
+            const filteredAlerts = filter === 'all' ? 
+                mockAlertHistory : 
+                mockAlertHistory.filter(alert => alert.level === filter);
+            
+            const alertHistoryTable = document.getElementById('alert-history-table');
+            alertHistoryTable.innerHTML = '';
+            
+            filteredAlerts.forEach(alert => {
+                const row = document.createElement('tr');
+                
+                let levelBadgeClass = 'bg-info';
+                if (alert.level === 'critical') levelBadgeClass = 'bg-danger';
+                else if (alert.level === 'warning') levelBadgeClass = 'bg-warning';
+                
+                let statusBadgeClass = 'bg-success';
+                if (alert.status === 'active') statusBadgeClass = 'bg-danger';
+                
+                row.innerHTML = `
+                    <td>${alert.time}</td>
+                    <td>${alert.service}</td>
+                    <td><span class="badge ${levelBadgeClass}">${alert.level}</span></td>
+                    <td>${alert.message}</td>
+                    <td><span class="badge ${statusBadgeClass}">${alert.status}</span></td>
+                `;
+                
+                alertHistoryTable.appendChild(row);
+            });
         }
     </script>
 </body>

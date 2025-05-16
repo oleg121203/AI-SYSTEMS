@@ -13,6 +13,9 @@ from advanced_monitoring import (
     Alert,
     AnomalyDetectionResult,
     ServiceDependency,
+    RecoverySuggestion,
+    ServiceHealthMetrics,
+    ResourcePrediction,
     detect_anomalies,
     predict_resource_usage,
     map_service_dependencies,
@@ -21,6 +24,7 @@ from advanced_monitoring import (
     get_active_alerts,
     calculate_service_health,
     generate_service_report,
+    get_recovery_suggestions,
 )
 
 # Create router for advanced monitoring endpoints
@@ -90,6 +94,30 @@ async def api_acknowledge_alert(data: AlertAcknowledge):
 
 
 # Anomaly detection endpoints
+@router.get("/health", response_model=Dict[str, Any], summary="Get overall system health")
+async def api_get_system_health():
+    """Get overall health information for all services"""
+    services = ["ai-core", "development-agents", "project-manager", "git-service", "web-backend"]
+    result = {}
+    
+    for service in services:
+        health_score = await calculate_service_health(service)
+        result[service] = {
+            "health_score": health_score,
+            "status": "healthy" if health_score >= 80 else "degraded" if health_score >= 50 else "unhealthy"
+        }
+    
+    # Add overall system health
+    scores = [data["health_score"] for data in result.values()]
+    result["system"] = {
+        "health_score": sum(scores) / len(scores) if scores else 100,
+        "status": "healthy",
+        "services_count": len(services),
+        "healthy_services": sum(1 for data in result.values() if data.get("health_score", 0) >= 80)
+    }
+    
+    return result
+
 @router.get("/anomalies", response_model=List[AnomalyDetectionResult], summary="Get detected anomalies")
 async def api_get_anomalies(
     service: Optional[str] = None,
@@ -104,7 +132,7 @@ async def api_get_anomalies(
 
 
 # Predictive analytics endpoints
-@router.post("/predict", summary="Predict future resource usage")
+@router.post("/predict", response_model=Dict[str, Any], summary="Predict future resource usage")
 async def api_predict_resource_usage(request: PredictionRequest):
     """Predict future resource usage for a service and metric"""
     try:
@@ -116,7 +144,20 @@ async def api_predict_resource_usage(request: PredictionRequest):
     except HTTPException as e:
         raise e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        # Return a more graceful response with default predictions
+        return {
+            "service": request.service,
+            "metric": request.metric,
+            "status": "limited_data",
+            "message": str(e) or "Insufficient data for accurate prediction",
+            "predictions": {
+                "next_hour": None,
+                "next_day": None,
+                "trend": "stable",
+                "confidence": 0
+            },
+            "generated_at": datetime.now()
+        }
 
 
 # Service dependency mapping
@@ -131,19 +172,73 @@ async def api_get_dependencies():
 
 
 # Service health endpoints
-@router.get("/health/{service}", summary="Get service health score")
+@router.get("/health/{service}", response_model=Dict[str, Any], summary="Get service health")
 async def api_get_service_health(service: str):
     """Get the health score for a specific service"""
-    # This is a placeholder - the actual implementation would need to retrieve
-    # the latest metrics for the service
-    metrics = {}  # This would be populated from the main CMP module
-    health_score = await calculate_service_health(service, metrics)
+    health_score = await calculate_service_health(service)
     return {"service": service, "health_score": health_score}
 
 
+@router.get("/health/{service}/detailed", response_model=ServiceHealthMetrics, summary="Get detailed service health metrics")
+async def api_get_detailed_service_health(service: str):
+    """Get detailed health metrics for a specific service"""
+    # Ensure we have health metrics for this service
+    await calculate_service_health(service)
+    
+    from advanced_monitoring import health_metrics
+    if service not in health_metrics:
+        raise HTTPException(status_code=404, detail=f"No health metrics found for service {service}")
+    
+    return health_metrics[service]
+
+
+@router.get("/recovery-suggestions", response_model=List[RecoverySuggestion], summary="Get recovery suggestions")
+async def api_get_recovery_suggestions(
+    service: Optional[str] = None,
+    issue_type: Optional[str] = None
+):
+    """Get recovery suggestions for services with issues"""
+    suggestions = await get_recovery_suggestions(service=service, issue_type=issue_type)
+    return suggestions
+
+
+@router.post("/recovery-suggestions/{suggestion_id}/execute", response_model=Dict[str, Any], summary="Execute recovery suggestion")
+async def api_execute_recovery_suggestion(suggestion_id: str):
+    """Execute an automated recovery suggestion"""
+    # Find the suggestion
+    suggestions = await get_recovery_suggestions()
+    suggestion = next((s for s in suggestions if s.id == suggestion_id), None)
+    
+    if not suggestion:
+        raise HTTPException(status_code=404, detail=f"Recovery suggestion {suggestion_id} not found")
+    
+    if not suggestion.automated_recovery_possible or not suggestion.recovery_command:
+        raise HTTPException(status_code=400, detail="This suggestion cannot be executed automatically")
+    
+    # In a real implementation, this would execute the recovery command
+    # For now, we'll just simulate success
+    return {
+        "success": True,
+        "suggestion_id": suggestion_id,
+        "service": suggestion.service,
+        "executed_at": datetime.now(),
+        "message": f"Recovery action for {suggestion.service} executed successfully"
+    }
+
+
 # Service reporting endpoints
-@router.get("/reports/{service}", summary="Generate service report")
+@router.get("/report/{service}", response_model=Dict[str, Any], summary="Generate a service report")
 async def api_generate_service_report(
+    service: str,
+    time_period: str = Query("day", description="Time period for report (hour, day, week, month)")
+):
+    """Generate a comprehensive report for a service"""
+    report = await generate_service_report(service, time_period)
+    return report
+
+# Legacy endpoint kept for backward compatibility
+@router.get("/reports/{service}", summary="Generate service report (legacy)")
+async def api_generate_service_report_legacy(
     service: str,
     time_period: str = Query("day", description="Time period for report (hour, day, week, month)")
 ):

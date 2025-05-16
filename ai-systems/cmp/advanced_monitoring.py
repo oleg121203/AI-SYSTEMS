@@ -13,12 +13,13 @@ import json
 import logging
 import os
 import time
+import uuid
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any, Tuple, Set
 
 import numpy as np
 from fastapi import HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 # Configure logging
 logging.basicConfig(
@@ -62,10 +63,48 @@ class AnomalyDetectionResult(BaseModel):
     is_anomaly: bool
 
 
+class ResourcePrediction(BaseModel):
+    """Model for resource usage predictions"""
+    service: str
+    metric: str
+    timestamp: datetime
+    predictions: Dict[str, float]  # time_offset -> predicted_value
+    confidence: float
+    trend: str  # increasing, decreasing, stable
+    model_type: str = "statistical"
+
+
+class RecoverySuggestion(BaseModel):
+    """Model for automated recovery suggestions"""
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    service: str
+    issue_type: str
+    severity: int  # 1-5, with 5 being critical
+    suggestion: str
+    automated_recovery_possible: bool = False
+    recovery_command: Optional[str] = None
+    created_at: datetime = Field(default_factory=datetime.now)
+
+
+class ServiceHealthMetrics(BaseModel):
+    """Detailed health metrics for a service"""
+    service: str
+    overall_score: int  # 0-100
+    metrics: Dict[str, int]  # Individual metric scores
+    issues: List[Dict[str, Any]] = []
+    suggestions: List[RecoverySuggestion] = []
+    last_updated: datetime = Field(default_factory=datetime.now)
+
+
 # Storage for alerts and dependencies
 alerts: List[Alert] = []
 dependencies: Dict[str, ServiceDependency] = {}
 service_metrics_history: Dict[str, Dict[str, List[Tuple[datetime, float]]]] = {}
+
+# Storage for new monitoring features
+predictions: Dict[str, Dict[str, ResourcePrediction]] = {}  # service -> metric -> prediction
+health_metrics: Dict[str, ServiceHealthMetrics] = {}  # service -> health metrics
+recovery_suggestions: List[RecoverySuggestion] = []
 
 
 async def detect_anomalies(service: str, metric: str, value: float) -> Optional[AnomalyDetectionResult]:
@@ -142,9 +181,8 @@ async def detect_anomalies(service: str, metric: str, value: float) -> Optional[
 
 
 async def predict_resource_usage(service: str, metric: str) -> Dict[str, Any]:
-    """
-    Predict future resource usage based on historical data
-    
+    """Predict future resource usage based on historical data using advanced ML techniques
+
     Args:
         service: Service name
         metric: Metric name
@@ -152,44 +190,215 @@ async def predict_resource_usage(service: str, metric: str) -> Dict[str, Any]:
     Returns:
         Dictionary with prediction results
     """
-    if (service not in service_metrics_history or 
-        metric not in service_metrics_history[service] or
-        len(service_metrics_history[service][metric]) < MIN_DATA_POINTS):
+    # Check if we have enough historical data
+    if (
+        service not in service_metrics_history
+        or metric not in service_metrics_history[service]
+        or len(service_metrics_history[service][metric]) < MIN_DATA_POINTS
+    ):
         raise HTTPException(status_code=400, detail="Insufficient data for prediction")
-    
+
     # Get historical data
     history = service_metrics_history[service][metric]
     
-    # Simple linear regression for prediction
-    # In a production system, you would use more sophisticated models
-    x = np.array([(t - history[0][0]).total_seconds() / 3600 for t, _ in history])
-    y = np.array([v for _, v in history])
+    # Sort by timestamp
+    history.sort(key=lambda x: x[0])
     
-    # Fit linear model
-    coeffs = np.polyfit(x, y, 1)
-    slope, intercept = coeffs
+    # Extract values and timestamps
+    timestamps = [h[0] for h in history[-MIN_DATA_POINTS:]]
+    values = [h[1] for h in history[-MIN_DATA_POINTS:]]
     
-    # Predict next hours
-    future_hours = np.arange(1, PREDICTION_WINDOW + 1)
-    last_x = x[-1]
-    predictions = [slope * (last_x + hour) + intercept for hour in future_hours]
+    # Try different prediction models and use the best one
+    prediction_methods = {
+        "linear": predict_linear,
+        "exponential_smoothing": predict_exponential_smoothing,
+        "arima": predict_arima_like
+    }
     
-    # Create prediction times
-    last_time = history[-1][0]
-    prediction_times = [
-        (last_time + timedelta(hours=hour)).isoformat() for hour in future_hours
-    ]
+    best_model = None
+    best_confidence = -1
+    best_predictions = {}
+    best_trend = "stable"
     
-    return {
+    # Try each prediction method and pick the best one
+    for model_name, predict_func in prediction_methods.items():
+        try:
+            predictions, trend, confidence = predict_func(values)
+            
+            if confidence > best_confidence:
+                best_model = model_name
+                best_confidence = confidence
+                best_predictions = predictions
+                best_trend = trend
+        except Exception as e:
+            logger.warning(f"Error using {model_name} prediction: {e}")
+    
+    # If all prediction methods failed, fall back to simple linear regression
+    if best_model is None:
+        predictions, trend, confidence = predict_linear(values)
+        best_model = "linear_fallback"
+        best_predictions = predictions
+        best_trend = trend
+        best_confidence = confidence
+    
+    # Create prediction result
+    result = {
         "service": service,
         "metric": metric,
-        "current_value": history[-1][1],
-        "prediction_times": prediction_times,
-        "predictions": predictions,
-        "trend": "increasing" if slope > 0 else "decreasing",
-        "slope": slope,
-        "confidence": min(1.0, len(history) / MIN_DATA_POINTS)
+        "predictions": {
+            "next_hour": float(best_predictions.get("next_hour", 0)),
+            "next_day": float(best_predictions.get("next_day", 0)),
+            "next_week": float(best_predictions.get("next_week", 0))
+        },
+        "trend": best_trend,
+        "confidence": float(best_confidence),
+        "model": best_model,
+        "generated_at": datetime.now(),
     }
+    
+    # Store prediction for future reference
+    if service not in predictions:
+        predictions[service] = {}
+    
+    predictions[service][metric] = ResourcePrediction(
+        service=service,
+        metric=metric,
+        timestamp=datetime.now(),
+        predictions=result["predictions"],
+        confidence=result["confidence"],
+        trend=result["trend"],
+        model_type=best_model
+    )
+    
+    return result
+
+
+def predict_linear(values: List[float]) -> Tuple[Dict[str, float], str, float]:
+    """Simple linear regression prediction"""
+    x = np.arange(len(values))
+    y = np.array(values)
+    
+    # Calculate slope and intercept
+    slope, intercept = np.polyfit(x, y, 1)
+    
+    # Predict future values
+    future_hours = [1, 24, 168]  # 1 hour, 1 day, 1 week
+    future_x = len(values) + np.array(future_hours)
+    future_y = slope * future_x + intercept
+    
+    # Determine trend
+    if slope > 0.1:
+        trend = "increasing"
+    elif slope < -0.1:
+        trend = "decreasing"
+    else:
+        trend = "stable"
+    
+    # Calculate confidence based on R-squared
+    y_pred = slope * x + intercept
+    ss_tot = np.sum((y - np.mean(y)) ** 2)
+    ss_res = np.sum((y - y_pred) ** 2)
+    r_squared = 1 - (ss_res / ss_tot) if ss_tot != 0 else 0
+    confidence = max(0, min(100, r_squared * 100))
+    
+    return {
+        "next_hour": future_y[0],
+        "next_day": future_y[1],
+        "next_week": future_y[2]
+    }, trend, confidence
+
+
+def predict_exponential_smoothing(values: List[float]) -> Tuple[Dict[str, float], str, float]:
+    """Exponential smoothing prediction"""
+    # Simple implementation of exponential smoothing
+    alpha = 0.3  # Smoothing factor
+    
+    # Apply smoothing
+    smoothed = [values[0]]
+    for i in range(1, len(values)):
+        smoothed.append(alpha * values[i] + (1 - alpha) * smoothed[i-1])
+    
+    # Calculate trend
+    recent_trend = (smoothed[-1] - smoothed[-2]) if len(smoothed) > 1 else 0
+    
+    # Predict future values
+    future_values = []
+    last = smoothed[-1]
+    for _ in range(168):  # Predict for a week
+        next_val = last + recent_trend
+        future_values.append(next_val)
+        last = next_val
+    
+    # Determine trend direction
+    if recent_trend > 0.1:
+        trend = "increasing"
+    elif recent_trend < -0.1:
+        trend = "decreasing"
+    else:
+        trend = "stable"
+    
+    # Calculate confidence based on prediction error
+    errors = [abs(smoothed[i] - values[i]) for i in range(1, len(values))]
+    mean_error = np.mean(errors) if errors else 0
+    max_value = max(values) if values else 1
+    error_ratio = mean_error / max_value if max_value != 0 else 1
+    confidence = max(0, min(100, (1 - error_ratio) * 100))
+    
+    return {
+        "next_hour": future_values[0],
+        "next_day": future_values[23],
+        "next_week": future_values[-1]
+    }, trend, confidence
+
+
+def predict_arima_like(values: List[float]) -> Tuple[Dict[str, float], str, float]:
+    """Simplified ARIMA-like prediction"""
+    # This is a simplified version that mimics some ARIMA behaviors
+    # In a real implementation, you would use a proper ARIMA model
+    
+    # Calculate differences
+    diffs = [values[i] - values[i-1] for i in range(1, len(values))]
+    
+    # Calculate moving averages of differences
+    window = 3
+    if len(diffs) < window:
+        raise ValueError("Not enough data points for ARIMA-like prediction")
+    
+    ma_diffs = []
+    for i in range(len(diffs) - window + 1):
+        ma_diffs.append(sum(diffs[i:i+window]) / window)
+    
+    # Predict future differences
+    future_diffs = [ma_diffs[-1]] * 168  # Use last moving average for all future points
+    
+    # Convert back to levels
+    future_values = [values[-1]]
+    for diff in future_diffs:
+        future_values.append(future_values[-1] + diff)
+    
+    # Determine trend
+    recent_ma = ma_diffs[-1] if ma_diffs else 0
+    if recent_ma > 0.1:
+        trend = "increasing"
+    elif recent_ma < -0.1:
+        trend = "decreasing"
+    else:
+        trend = "stable"
+    
+    # Calculate confidence based on variance of moving averages
+    if len(ma_diffs) > 1:
+        variance = np.var(ma_diffs)
+        mean = np.mean(ma_diffs)
+        cv = (np.sqrt(variance) / abs(mean)) if mean != 0 else float('inf')
+        confidence = max(0, min(100, (1 / (1 + cv)) * 100))
+    else:
+        confidence = 50  # Default confidence
+    
+    return {
+        "next_hour": future_values[1],  # Skip the first value which is the last observed value
+        "next_day": future_values[24],
+        "next_week": future_values[-1]
+    }, trend, confidence
 
 
 async def map_service_dependencies(services: Dict[str, Any]) -> Dict[str, List[str]]:
@@ -293,10 +502,9 @@ async def get_active_alerts(service: Optional[str] = None, level: Optional[str] 
     return filtered_alerts
 
 
-async def calculate_service_health(service: str, metrics: Dict[str, Any]) -> float:
-    """
-    Calculate overall health score for a service (0-100)
-    
+async def calculate_service_health(service: str, metrics: Dict[str, Any] = None) -> int:
+    """Calculate overall health score for a service (0-100)
+
     Args:
         service: Service name
         metrics: Service metrics
@@ -304,43 +512,232 @@ async def calculate_service_health(service: str, metrics: Dict[str, Any]) -> flo
     Returns:
         Health score (0-100)
     """
-    # Start with perfect score
-    health_score = 100.0
+    # Default health score if no metrics are provided
+    if not metrics:
+        # Check if we have stored health metrics for this service
+        if service in health_metrics:
+            return health_metrics[service].overall_score
+        return 100
     
-    # Reduce score based on resource usage
+    # Initialize individual metric scores
+    metric_scores = {}
+    issues = []
+    
+    # CPU usage score
     if "cpu_percent" in metrics:
-        # CPU usage above 80% reduces health
-        cpu_penalty = max(0, (metrics["cpu_percent"] - 80) * 2) if metrics["cpu_percent"] > 80 else 0
-        health_score -= cpu_penalty
+        cpu_percent = metrics["cpu_percent"]
+        if cpu_percent > 90:
+            metric_scores["cpu"] = 40
+            issues.append({
+                "type": "high_cpu",
+                "severity": 4,
+                "message": f"Critical CPU usage: {cpu_percent}%"
+            })
+        elif cpu_percent > 75:
+            metric_scores["cpu"] = 70
+            issues.append({
+                "type": "high_cpu",
+                "severity": 3,
+                "message": f"High CPU usage: {cpu_percent}%"
+            })
+        elif cpu_percent > 60:
+            metric_scores["cpu"] = 85
+            issues.append({
+                "type": "high_cpu",
+                "severity": 2,
+                "message": f"Elevated CPU usage: {cpu_percent}%"
+            })
+        else:
+            metric_scores["cpu"] = 100
     
+    # Memory usage score
     if "memory_percent" in metrics:
-        # Memory usage above 85% reduces health
-        memory_penalty = max(0, (metrics["memory_percent"] - 85) * 2) if metrics["memory_percent"] > 85 else 0
-        health_score -= memory_penalty
+        memory_percent = metrics["memory_percent"]
+        if memory_percent > 90:
+            metric_scores["memory"] = 40
+            issues.append({
+                "type": "high_memory",
+                "severity": 4,
+                "message": f"Critical memory usage: {memory_percent}%"
+            })
+        elif memory_percent > 75:
+            metric_scores["memory"] = 70
+            issues.append({
+                "type": "high_memory",
+                "severity": 3,
+                "message": f"High memory usage: {memory_percent}%"
+            })
+        elif memory_percent > 60:
+            metric_scores["memory"] = 85
+            issues.append({
+                "type": "high_memory",
+                "severity": 2,
+                "message": f"Elevated memory usage: {memory_percent}%"
+            })
+        else:
+            metric_scores["memory"] = 100
     
-    # Reduce score based on error rate
+    # Error rate score
     if "error_rate" in metrics:
-        # Error rate above 1% reduces health
-        error_penalty = metrics["error_rate"] * 20 if metrics["error_rate"] > 0.01 else 0
-        health_score -= error_penalty
+        error_rate = metrics["error_rate"]
+        if error_rate > 0.05:  # More than 5% errors
+            metric_scores["error_rate"] = 30
+            issues.append({
+                "type": "high_error_rate",
+                "severity": 5,
+                "message": f"Critical error rate: {error_rate*100:.2f}%"
+            })
+        elif error_rate > 0.01:  # More than 1% errors
+            metric_scores["error_rate"] = 60
+            issues.append({
+                "type": "high_error_rate",
+                "severity": 4,
+                "message": f"High error rate: {error_rate*100:.2f}%"
+            })
+        elif error_rate > 0.001:  # More than 0.1% errors
+            metric_scores["error_rate"] = 85
+            issues.append({
+                "type": "high_error_rate",
+                "severity": 2,
+                "message": f"Elevated error rate: {error_rate*100:.2f}%"
+            })
+        else:
+            metric_scores["error_rate"] = 100
     
-    # Reduce score based on response time
+    # Response time score
     if "response_time" in metrics:
-        # Response time above 1000ms reduces health
-        response_penalty = (metrics["response_time"] - 1000) / 100 if metrics["response_time"] > 1000 else 0
-        health_score -= response_penalty
+        response_time = metrics["response_time"]
+        if response_time > 5000:  # More than 5 seconds
+            metric_scores["response_time"] = 40
+            issues.append({
+                "type": "slow_response",
+                "severity": 4,
+                "message": f"Very slow response time: {response_time}ms"
+            })
+        elif response_time > 1000:  # More than 1 second
+            metric_scores["response_time"] = 70
+            issues.append({
+                "type": "slow_response",
+                "severity": 3,
+                "message": f"Slow response time: {response_time}ms"
+            })
+        elif response_time > 500:  # More than 500 ms
+            metric_scores["response_time"] = 85
+            issues.append({
+                "type": "slow_response",
+                "severity": 2,
+                "message": f"Moderately slow response time: {response_time}ms"
+            })
+        else:
+            metric_scores["response_time"] = 100
     
-    # Check for active critical or error alerts
-    active_alerts = await get_active_alerts(service=service)
-    critical_alerts = sum(1 for a in active_alerts if a.level == "critical")
-    error_alerts = sum(1 for a in active_alerts if a.level == "error")
+    # Calculate overall health score as weighted average of individual metrics
+    if metric_scores:
+        overall_score = sum(metric_scores.values()) / len(metric_scores)
+    else:
+        overall_score = 100
     
-    # Each critical alert reduces health by 20, each error by 10
-    health_score -= critical_alerts * 20
-    health_score -= error_alerts * 10
+    # Generate recovery suggestions for identified issues
+    suggestions = await generate_recovery_suggestions(service, issues)
     
-    # Ensure health score is between 0 and 100
-    return max(0, min(100, health_score))
+    # Store health metrics for future reference
+    health_metrics[service] = ServiceHealthMetrics(
+        service=service,
+        overall_score=int(overall_score),
+        metrics=metric_scores,
+        issues=issues,
+        suggestions=suggestions,
+        last_updated=datetime.now()
+    )
+    
+    return int(overall_score)
+
+
+async def generate_recovery_suggestions(service: str, issues: List[Dict[str, Any]]) -> List[RecoverySuggestion]:
+    """Generate recovery suggestions for identified issues
+
+    Args:
+        service: Service name
+        issues: List of identified issues
+        
+    Returns:
+        List of recovery suggestions
+    """
+    suggestions = []
+    
+    for issue in issues:
+        issue_type = issue["type"]
+        severity = issue["severity"]
+        
+        if issue_type == "high_cpu":
+            suggestion = RecoverySuggestion(
+                service=service,
+                issue_type=issue_type,
+                severity=severity,
+                suggestion="Consider scaling up the service or optimizing CPU-intensive operations.",
+                automated_recovery_possible=severity >= 4,
+                recovery_command="docker-compose up -d --scale {service}=2" if severity >= 4 else None
+            )
+            suggestions.append(suggestion)
+            
+        elif issue_type == "high_memory":
+            suggestion = RecoverySuggestion(
+                service=service,
+                issue_type=issue_type,
+                severity=severity,
+                suggestion="Check for memory leaks or increase memory allocation.",
+                automated_recovery_possible=severity >= 4,
+                recovery_command="docker-compose restart {service}" if severity >= 4 else None
+            )
+            suggestions.append(suggestion)
+            
+        elif issue_type == "high_error_rate":
+            suggestion = RecoverySuggestion(
+                service=service,
+                issue_type=issue_type,
+                severity=severity,
+                suggestion="Review error logs and fix underlying issues. Consider rolling back to a previous version.",
+                automated_recovery_possible=severity >= 4,
+                recovery_command="docker-compose restart {service}" if severity >= 4 else None
+            )
+            suggestions.append(suggestion)
+            
+        elif issue_type == "slow_response":
+            suggestion = RecoverySuggestion(
+                service=service,
+                issue_type=issue_type,
+                severity=severity,
+                suggestion="Optimize database queries or API calls. Consider scaling up the service.",
+                automated_recovery_possible=False
+            )
+            suggestions.append(suggestion)
+    
+    # Store suggestions for future reference
+    recovery_suggestions.extend(suggestions)
+    
+    return suggestions
+
+
+async def get_recovery_suggestions(service: Optional[str] = None, issue_type: Optional[str] = None) -> List[RecoverySuggestion]:
+    """Get recovery suggestions for services
+
+    Args:
+        service: Filter by service name
+        issue_type: Filter by issue type
+        
+    Returns:
+        List of recovery suggestions
+    """
+    filtered_suggestions = []
+    
+    for suggestion in recovery_suggestions:
+        if service and suggestion.service != service:
+            continue
+        if issue_type and suggestion.issue_type != issue_type:
+            continue
+        filtered_suggestions.append(suggestion)
+    
+    return filtered_suggestions
 
 
 async def generate_service_report(service: str, time_period: str = "day") -> Dict[str, Any]:
