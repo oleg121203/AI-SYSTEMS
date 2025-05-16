@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI-SYSTEMS Advanced Monitoring Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        .card {
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        .health-indicator {
+            width: 100%;
+            height: 10px;
+            border-radius: 5px;
+            margin-top: 5px;
+        }
+        .health-good { background-color: #28a745; }
+        .health-warning { background-color: #ffc107; }
+        .health-critical { background-color: #dc3545; }
+        .alert-badge {
+            font-size: 0.8em;
+            padding: 3px 8px;
+            margin-right: 5px;
+        }
+        .dashboard-header {
+            background-color: #343a40;
+            color: white;
+            padding: 15px 0;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="dashboard-header">
+        <div class="container">
+            <div class="row align-items-center">
+                <div class="col-md-6">
+                    <h1>AI-SYSTEMS Monitoring</h1>
+                </div>
+                <div class="col-md-6 text-end">
+                    <span id="current-time"></span>
+                    <button class="btn btn-outline-light ms-3" id="refresh-btn">Refresh Data</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <!-- System Overview -->
+        <div class="row">
+            <div class="col-md-12">
+                <div class="card">
+                    <div class="card-header">
+                        <h5>System Overview</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="row">
+                            <div class="col-md-3">
+                                <div class="card bg-light">
+                                    <div class="card-body text-center">
+                                        <h6>Services</h6>
+                                        <h2 id="services-count">5</h2>
+                                        <p id="healthy-services">5 healthy</p>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-3">
+                                <div class="card bg-light">
+                                    <div class="card-body text-center">
+                                        <h6>Active Alerts</h6>
+                                        <h2 id="alerts-count">0</h2>
+                                        <p id="critical-alerts">0 critical</p>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-3">
+                                <div class="card bg-light">
+                                    <div class="card-body text-center">
+                                        <h6>CPU Usage</h6>
+                                        <h2 id="cpu-usage">45%</h2>
+                                        <div class="progress">
+                                            <div id="cpu-progress" class="progress-bar" role="progressbar" style="width: 45%"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-3">
+                                <div class="card bg-light">
+                                    <div class="card-body text-center">
+                                        <h6>Memory Usage</h6>
+                                        <h2 id="memory-usage">60%</h2>
+                                        <div class="progress">
+                                            <div id="memory-progress" class="progress-bar" role="progressbar" style="width: 60%"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Service Health -->
+        <div class="row">
+            <div class="col-md-12">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5>Service Health</h5>
+                        <div class="btn-group" role="group">
+                            <button type="button" class="btn btn-sm btn-outline-secondary time-range" data-range="hour">Hour</button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary time-range active" data-range="day">Day</button>
+                            <button type="button" class="btn btn-sm btn-outline-secondary time-range" data-range="week">Week</button>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="table-responsive">
+                            <table class="table table-hover">
+                                <thead>
+                                    <tr>
+                                        <th>Service</th>
+                                        <th>Health</th>
+                                        <th>CPU</th>
+                                        <th>Memory</th>
+                                        <th>Alerts</th>
+                                        <th>Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="services-table">
+                                    <!-- Services will be populated here -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Charts Row -->
+        <div class="row">
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header">
+                        <h5>CPU Usage Trend</h5>
+                    </div>
+                    <div class="card-body">
+                        <canvas id="cpu-chart"></canvas>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header">
+                        <h5>Memory Usage Trend</h5>
+                    </div>
+                    <div class="card-body">
+                        <canvas id="memory-chart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Alerts and Anomalies -->
+        <div class="row">
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header">
+                        <h5>Recent Alerts</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="list-group" id="alerts-list">
+                            <!-- Alerts will be populated here -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header">
+                        <h5>Detected Anomalies</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="list-group" id="anomalies-list">
+                            <!-- Anomalies will be populated here -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Dashboard initialization
+        document.addEventListener('DOMContentLoaded', function() {
+            updateCurrentTime();
+            setInterval(updateCurrentTime, 1000);
+            
+            // Initialize charts
+            initCharts();
+            
+            // Load initial data
+            loadDashboardData();
+            
+            // Set up refresh button
+            document.getElementById('refresh-btn').addEventListener('click', loadDashboardData);
+            
+            // Set up time range buttons
+            document.querySelectorAll('.time-range').forEach(button => {
+                button.addEventListener('click', function() {
+                    document.querySelectorAll('.time-range').forEach(b => b.classList.remove('active'));
+                    this.classList.add('active');
+                    loadDashboardData(this.dataset.range);
+                });
+            });
+        });
+        
+        function updateCurrentTime() {
+            const now = new Date();
+            document.getElementById('current-time').textContent = now.toLocaleString();
+        }
+        
+        function initCharts() {
+            // CPU Chart
+            const cpuCtx = document.getElementById('cpu-chart').getContext('2d');
+            window.cpuChart = new Chart(cpuCtx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'CPU Usage (%)',
+                        data: [],
+                        borderColor: 'rgba(75, 192, 192, 1)',
+                        tension: 0.1,
+                        fill: false
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            max: 100
+                        }
+                    }
+                }
+            });
+            
+            // Memory Chart
+            const memoryCtx = document.getElementById('memory-chart').getContext('2d');
+            window.memoryChart = new Chart(memoryCtx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        label: 'Memory Usage (%)',
+                        data: [],
+                        borderColor: 'rgba(153, 102, 255, 1)',
+                        tension: 0.1,
+                        fill: false
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        y: {
+                            beginAtZero: true,
+                            max: 100
+                        }
+                    }
+                }
+            });
+        }
+        
+        function loadDashboardData(timeRange = 'day') {
+            // In a real implementation, this would fetch data from the API
+            // For demo purposes, we'll use mock data
+            
+            // Simulate API call
+            fetch(`/advanced/dashboard?timeRange=${timeRange}`)
+                .then(response => {
+                    if (!response.ok) {
+                        // If API is not available, use mock data
+                        return getMockData();
+                    }
+                    return response.json();
+                })
+                .catch(error => {
+                    console.error('Error fetching dashboard data:', error);
+                    return getMockData();
+                })
+                .then(data => {
+                    updateDashboard(data);
+                });
+        }
+        
+        function getMockData() {
+            // Mock data for demonstration
+            return {
+                services: {
+                    'ai-core': {
+                        health: 95,
+                        alerts: {critical: 0, error: 0, warning: 1, info: 2},
+                        metrics: {cpu_percent: 45, memory_percent: 60},
+                        status: 'online'
+                    },
+                    'development-agents': {
+                        health: 90,
+                        alerts: {critical: 0, error: 0, warning: 0, info: 1},
+                        metrics: {cpu_percent: 55, memory_percent: 70},
+                        status: 'online'
+                    },
+                    'project-manager': {
+                        health: 100,
+                        alerts: {critical: 0, error: 0, warning: 0, info: 0},
+                        metrics: {cpu_percent: 30, memory_percent: 45},
+                        status: 'online'
+                    },
+                    'cmp': {
+                        health: 98,
+                        alerts: {critical: 0, error: 0, warning: 0, info: 0},
+                        metrics: {cpu_percent: 25, memory_percent: 40},
+                        status: 'online'
+                    },
+                    'git-service': {
+                        health: 85,
+                        alerts: {critical: 0, error: 1, warning: 0, info: 0},
+                        metrics: {cpu_percent: 60, memory_percent: 75},
+                        status: 'online'
+                    }
+                },
+                system: {
+                    total_services: 5,
+                    healthy_services: 5,
+                    total_alerts: 5,
+                    critical_alerts: 0,
+                    system_load: 0.75
+                },
+                trends: {
+                    timestamps: ['10:00', '11:00', '12:00', '13:00', '14:00', '15:00'],
+                    cpu_usage: [40, 42, 45, 43, 45, 45],
+                    memory_usage: [55, 58, 60, 62, 60, 60],
+                    error_rate: [0.01, 0.02, 0.01, 0.01, 0.0, 0.0]
+                },
+                alerts: [
+                    {
+                        id: 'alert-1',
+                        service: 'git-service',
+                        level: 'error',
+                        message: 'High memory usage detected',
+                        timestamp: new Date().toISOString()
+                    },
+                    {
+                        id: 'alert-2',
+                        service: 'ai-core',
+                        level: 'warning',
+                        message: 'API response time degraded',
+                        timestamp: new Date(Date.now() - 10 * 60000).toISOString()
+                    },
+                    {
+                        id: 'alert-3',
+                        service: 'ai-core',
+                        level: 'info',
+                        message: 'Service restarted successfully',
+                        timestamp: new Date(Date.now() - 30 * 60000).toISOString()
+                    }
+                ],
+                anomalies: [
+                    {
+                        service: 'git-service',
+                        metric: 'memory_percent',
+                        timestamp: new Date().toISOString(),
+                        value: 75,
+                        expected_range: [40, 65],
+                        deviation: 2.8,
+                        is_anomaly: true
+                    },
+                    {
+                        service: 'development-agents',
+                        metric: 'cpu_percent',
+                        timestamp: new Date(Date.now() - 15 * 60000).toISOString(),
+                        value: 55,
+                        expected_range: [20, 50],
+                        deviation: 2.2,
+                        is_anomaly: true
+                    }
+                ]
+            };
+        }
+        
+        function updateDashboard(data) {
+            // Update system overview
+            document.getElementById('services-count').textContent = data.system.total_services;
+            document.getElementById('healthy-services').textContent = `${data.system.healthy_services} healthy`;
+            document.getElementById('alerts-count').textContent = data.system.total_alerts;
+            document.getElementById('critical-alerts').textContent = `${data.system.critical_alerts} critical`;
+            
+            // Calculate average CPU and memory usage
+            let totalCpu = 0;
+            let totalMemory = 0;
+            let serviceCount = 0;
+            
+            for (const [service, info] of Object.entries(data.services)) {
+                totalCpu += info.metrics.cpu_percent;
+                totalMemory += info.metrics.memory_percent;
+                serviceCount++;
+            }
+            
+            const avgCpu = Math.round(totalCpu / serviceCount);
+            const avgMemory = Math.round(totalMemory / serviceCount);
+            
+            document.getElementById('cpu-usage').textContent = `${avgCpu}%`;
+            document.getElementById('memory-usage').textContent = `${avgMemory}%`;
+            
+            const cpuProgress = document.getElementById('cpu-progress');
+            cpuProgress.style.width = `${avgCpu}%`;
+            if (avgCpu > 80) {
+                cpuProgress.className = 'progress-bar bg-danger';
+            } else if (avgCpu > 60) {
+                cpuProgress.className = 'progress-bar bg-warning';
+            } else {
+                cpuProgress.className = 'progress-bar bg-success';
+            }
+            
+            const memoryProgress = document.getElementById('memory-progress');
+            memoryProgress.style.width = `${avgMemory}%`;
+            if (avgMemory > 80) {
+                memoryProgress.className = 'progress-bar bg-danger';
+            } else if (avgMemory > 60) {
+                memoryProgress.className = 'progress-bar bg-warning';
+            } else {
+                memoryProgress.className = 'progress-bar bg-success';
+            }
+            
+            // Update services table
+            const servicesTable = document.getElementById('services-table');
+            servicesTable.innerHTML = '';
+            
+            for (const [service, info] of Object.entries(data.services)) {
+                const row = document.createElement('tr');
+                
+                // Determine health class
+                let healthClass = 'health-good';
+                if (info.health < 70) {
+                    healthClass = 'health-critical';
+                } else if (info.health < 90) {
+                    healthClass = 'health-warning';
+                }
+                
+                // Calculate total alerts
+                const totalAlerts = Object.values(info.alerts).reduce((a, b) => a + b, 0);
+                
+                // Create alert badges
+                let alertBadges = '';
+                if (info.alerts.critical > 0) {
+                    alertBadges += `<span class="badge bg-danger alert-badge">${info.alerts.critical} Critical</span>`;
+                }
+                if (info.alerts.error > 0) {
+                    alertBadges += `<span class="badge bg-warning alert-badge">${info.alerts.error} Error</span>`;
+                }
+                if (info.alerts.warning > 0) {
+                    alertBadges += `<span class="badge bg-info alert-badge">${info.alerts.warning} Warning</span>`;
+                }
+                
+                row.innerHTML = `
+                    <td><strong>${service}</strong></td>
+                    <td>
+                        <div class="d-flex align-items-center">
+                            <span class="me-2">${info.health}%</span>
+                            <div class="health-indicator ${healthClass}"></div>
+                        </div>
+                    </td>
+                    <td>${info.metrics.cpu_percent}%</td>
+                    <td>${info.metrics.memory_percent}%</td>
+                    <td>${alertBadges || '<span class="text-muted">None</span>'}</td>
+                    <td><span class="badge bg-success">${info.status}</span></td>
+                `;
+                
+                servicesTable.appendChild(row);
+            }
+            
+            // Update charts
+            updateCharts(data.trends);
+            
+            // Update alerts list
+            const alertsList = document.getElementById('alerts-list');
+            alertsList.innerHTML = '';
+            
+            if (data.alerts.length === 0) {
+                alertsList.innerHTML = '<div class="text-muted p-3">No alerts</div>';
+            } else {
+                data.alerts.forEach(alert => {
+                    const alertTime = new Date(alert.timestamp).toLocaleTimeString();
+                    const alertItem = document.createElement('a');
+                    alertItem.href = '#';
+                    alertItem.className = 'list-group-item list-group-item-action';
+                    
+                    let alertClass = '';
+                    if (alert.level === 'critical') alertClass = 'text-white bg-danger';
+                    else if (alert.level === 'error') alertClass = 'text-white bg-warning';
+                    else if (alert.level === 'warning') alertClass = 'list-group-item-warning';
+                    else if (alert.level === 'info') alertClass = 'list-group-item-info';
+                    
+                    alertItem.classList.add(alertClass);
+                    
+                    alertItem.innerHTML = `
+                        <div class="d-flex w-100 justify-content-between">
+                            <h6 class="mb-1">${alert.service}</h6>
+                            <small>${alertTime}</small>
+                        </div>
+                        <p class="mb-1">${alert.message}</p>
+                        <small>Alert Level: ${alert.level}</small>
+                    `;
+                    
+                    alertsList.appendChild(alertItem);
+                });
+            }
+            
+            // Update anomalies list
+            const anomaliesList = document.getElementById('anomalies-list');
+            anomaliesList.innerHTML = '';
+            
+            if (data.anomalies.length === 0) {
+                anomaliesList.innerHTML = '<div class="text-muted p-3">No anomalies detected</div>';
+            } else {
+                data.anomalies.forEach(anomaly => {
+                    const anomalyTime = new Date(anomaly.timestamp).toLocaleTimeString();
+                    const anomalyItem = document.createElement('a');
+                    anomalyItem.href = '#';
+                    anomalyItem.className = 'list-group-item list-group-item-action list-group-item-warning';
+                    
+                    anomalyItem.innerHTML = `
+                        <div class="d-flex w-100 justify-content-between">
+                            <h6 class="mb-1">${anomaly.service} - ${anomaly.metric}</h6>
+                            <small>${anomalyTime}</small>
+                        </div>
+                        <p class="mb-1">Value: ${anomaly.value.toFixed(2)} (Expected: ${anomaly.expected_range[0].toFixed(2)}-${anomaly.expected_range[1].toFixed(2)})</p>
+                        <small>Deviation: ${anomaly.deviation.toFixed(2)} standard deviations</small>
+                    `;
+                    
+                    anomaliesList.appendChild(anomalyItem);
+                });
+            }
+        }
+        
+        function updateCharts(trends) {
+            // Update CPU chart
+            window.cpuChart.data.labels = trends.timestamps;
+            window.cpuChart.data.datasets[0].data = trends.cpu_usage;
+            window.cpuChart.update();
+            
+            // Update Memory chart
+            window.memoryChart.data.labels = trends.timestamps;
+            window.memoryChart.data.datasets[0].data = trends.memory_usage;
+            window.memoryChart.update();
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,56 @@
+name: Integration Testing
+
+on:
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'ai-systems/**'
+  pull_request:
+    branches: [ main, master ]
+    paths:
+      - 'ai-systems/**'
+  schedule:
+    - cron: '0 0 * * 1'  # Run weekly on Monday at midnight
+  workflow_dispatch:
+
+jobs:
+  integration-tests:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+      
+      - name: Start services with Docker Compose
+        run: |
+          docker-compose up -d
+      
+      - name: Wait for services to be ready
+        run: |
+          sleep 30  # Allow time for services to initialize
+      
+      - name: Run integration tests
+        run: |
+          docker-compose exec -T web-backend pytest tests/integration/
+      
+      - name: Collect service logs
+        if: always()
+        run: |
+          mkdir -p logs
+          docker-compose logs > logs/docker-compose.log
+      
+      - name: Upload test logs
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: integration-test-logs
+          path: logs/
+          retention-days: 7
+      
+      - name: Shutdown services
+        if: always()
+        run: |
+          docker-compose down

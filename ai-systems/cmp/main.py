@@ -43,7 +43,6 @@ logging.basicConfig(
 logger = logging.getLogger("cmp")
 
 # Constants
-DEFAULT_MCP_API_URL = os.getenv("MCP_API_URL", "http://localhost:7860")
 CONFIG_FILE = os.getenv("CONFIG_PATH", "./config.json")
 LOG_DIR = os.getenv("LOG_DIR", "./logs")
 METRICS_RETENTION_DAYS = int(os.getenv("METRICS_RETENTION_DAYS", "7"))
@@ -65,6 +64,14 @@ def load_config():
 config = load_config()
 
 app = FastAPI(title="Continuous Monitoring Platform")
+
+# Import advanced monitoring endpoints
+try:
+    from advanced_endpoints import router as advanced_router
+    app.include_router(advanced_router)
+    logger.info("Advanced monitoring features enabled")
+except ImportError:
+    logger.warning("Advanced monitoring features not available")
 
 # Configure CORS
 app.add_middleware(
@@ -669,116 +676,30 @@ async def websocket_endpoint(websocket: WebSocket):
             manager.disconnect(websocket)
 
 
-# MCP API integration
-class MCPClient:
-    """Client for interacting with the MCP API"""
-
-    def __init__(self, base_url: str = DEFAULT_MCP_API_URL):
-        self.base_url = base_url
-        self.session = None
-
-    async def get_session(self):
-        """Gets or creates the aiohttp session"""
-        if self.session is None or self.session.closed:
-            self.session = aiohttp.ClientSession()
-        return self.session
-
-    async def close_session(self):
-        """Closes the aiohttp session"""
-        if self.session and not self.session.closed:
-            await self.session.close()
-
-    async def send_report(self, report: Dict[str, Any]):
-        """Sends a report to the MCP API"""
-        try:
-            session = await self.get_session()
-            async with session.post(f"{self.base_url}/report", json=report) as response:
-                if response.status == 200:
-                    return await response.json()
-                else:
-                    error_text = await response.text()
-                    logger.error(f"Error sending report to MCP API: {error_text}")
-                    return {"error": error_text}
-        except Exception as e:
-            logger.error(f"Exception sending report to MCP API: {e}")
-            return {"error": str(e)}
-
-    async def get_status(self):
-        """Gets the current status from the MCP API"""
-        try:
-            session = await self.get_session()
-            async with session.get(f"{self.base_url}/api/status") as response:
-                if response.status == 200:
-                    return await response.json()
-                else:
-                    error_text = await response.text()
-                    logger.error(f"Error getting status from MCP API: {error_text}")
-                    return {"error": error_text}
-        except Exception as e:
-            logger.error(f"Exception getting status from MCP API: {e}")
-            return {"error": str(e)}
-
-
-# Initialize MCP client
-mcp_client = MCPClient()
-
-
-# Background task to report system metrics to MCP API
-async def report_metrics_to_mcp():
-    """Reports system metrics to the MCP API periodically"""
-    while True:
-        try:
-            # Collect system metrics
-            cpu_percent = psutil.cpu_percent(interval=1)
-            memory = psutil.virtual_memory()
-            disk = psutil.disk_usage("/")
-
-            # Prepare report
-            report = {
-                "type": "system_metrics",
-                "service": "cmp",
-                "metrics": {
-                    "cpu_percent": cpu_percent,
-                    "memory_percent": memory.percent,
-                    "disk_percent": disk.percent,
-                    "active_tasks": len(
-                        [t for t in task_metrics.values() if not t.get("end_time")]
-                    ),
-                    "total_tasks": len(task_metrics),
-                    "error_count": len(error_logs),
-                },
-                "timestamp": datetime.now().isoformat(),
-            }
-
-            # Send report to MCP API
-            await mcp_client.send_report(report)
-
-            # Wait before next report
-            await asyncio.sleep(60)  # Report every minute
-        except Exception as e:
-            logger.error(f"Error reporting metrics to MCP API: {e}")
-            await asyncio.sleep(120)  # Longer delay on error
+# Background tasks and monitoring code are now handled directly by the CMP
+# MCP API integration has been removed as it's redundant
 
 
 # Startup event to initialize background tasks
 @app.on_event("startup")
 async def startup_event():
-    # Start system metrics collection
-    asyncio.create_task(collect_system_metrics())
-
-    # Start MCP API reporting
-    asyncio.create_task(report_metrics_to_mcp())
-
+    """Initialize background tasks on startup"""
     logger.info("CMP service started successfully")
+    asyncio.create_task(collect_system_metrics())
+    
+    # Serve static files
+    try:
+        app.mount("/dashboard", StaticFiles(directory="static", html=True), name="dashboard")
+        logger.info("Dashboard UI mounted at /dashboard")
+    except Exception as e:
+        logger.warning(f"Could not mount dashboard UI: {e}")
 
 
 # Shutdown event to clean up resources
 @app.on_event("shutdown")
 async def shutdown_event():
-    # Close MCP client session
-    await mcp_client.close_session()
-
-    logger.info("CMP service shutting down")
+    """Clean up resources on shutdown"""
+    logger.info("CMP service shutdown complete")
 
 
 if __name__ == "__main__":
