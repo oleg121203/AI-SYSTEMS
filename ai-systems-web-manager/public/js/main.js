@@ -288,14 +288,21 @@ function setupEventListeners() {
 }
 
 // Show confirmation modal
-function showConfirmation(scriptId, scriptName, customCommand) {
+function showConfirmation(scriptId, scriptName, customCommand, customMessage) {
   // If scriptName is not provided, try to get it from the button
   if (!scriptName) {
     const button = document.querySelector(`[data-script="${scriptId}"]`);
     scriptName = button ? button.textContent.trim() : scriptId;
   }
   
-  confirmMessage.textContent = `Are you sure you want to run "${scriptName}"?`;
+  // Use custom message if provided, otherwise use default
+  if (customMessage) {
+    confirmMessage.textContent = customMessage;
+  } else {
+    confirmMessage.textContent = `Are you sure you want to run "${scriptName}"?`;
+  }
+  
+  // Store script ID for confirmation
   confirmYesBtn.setAttribute('data-script', scriptId);
   
   // Store custom command if provided
@@ -305,6 +312,7 @@ function showConfirmation(scriptId, scriptName, customCommand) {
     confirmYesBtn.removeAttribute('data-custom-command');
   }
   
+  // Show the modal
   confirmModal.style.display = 'flex';
 }
 
@@ -359,8 +367,59 @@ function requestRunScript(scriptId) {
       return;
     }
     
-    // Show confirmation dialog
-    showConfirmation(scriptId, data.scriptName);
+    // Handle different response statuses
+    switch (data.status) {
+      case 'no_action_needed':
+        // No action needed, just show the message
+        appendToOutput(`${data.message}\n`, 'info');
+        // Update system status to reflect current state
+        updateSystemStatus();
+        return;
+        
+      case 'in_progress':
+        // Operation already in progress
+        appendToOutput(`${data.message}\n`, 'warning');
+        // Update system status to reflect current state
+        updateSystemStatus();
+        return;
+        
+      case 'warning':
+        // Warning but action still needed
+        appendToOutput(`${data.message}\n`, 'warning');
+        // Show confirmation with the specific warning message
+        showConfirmation(scriptId, data.scriptName, null, data.confirmMessage);
+        return;
+        
+      case 'needs_confirmation':
+        // Standard confirmation needed
+        showConfirmation(scriptId, data.scriptName);
+        return;
+        
+      default:
+        // Legacy handling for backward compatibility
+        // Check if action is needed
+        if (data.hasOwnProperty('actionNeeded') && !data.actionNeeded) {
+          // No action needed, just show the message
+          appendToOutput(`${data.message}\n`, 'info');
+          // Update system status to reflect current state
+          updateSystemStatus();
+          return;
+        }
+        
+        // Check if there's a warning message but action is still needed
+        if (data.message && data.message.startsWith('Warning:')) {
+          // Show warning message but still proceed with confirmation
+          appendToOutput(`${data.message}\n`, 'warning');
+        }
+        
+        // Show confirmation dialog if required
+        if (data.requiresConfirmation) {
+          showConfirmation(scriptId, data.scriptName);
+        } else {
+          // If no confirmation required but action needed, run directly
+          runScript(scriptId);
+        }
+    }
   })
   .catch(error => {
     appendToOutput(`Error: ${error.message}\n`, 'error');

@@ -20,6 +20,8 @@
   --terminal-prompt: #00ffaa;
   --terminal-error: #ff3333;
   --terminal-success: #00ff00;
+  --terminal-info: #00aaff;
+  --terminal-warning: #ffaa00;
   --terminal-command: #00ffaa;
   --shadow-color: rgba(0, 255, 0, 0.2);
 }
@@ -528,6 +530,14 @@ h3 {
 
 .output .success {
   color: var(--terminal-success);
+}
+
+.output .info {
+  color: var(--terminal-info);
+}
+
+.output .warning {
+  color: var(--terminal-warning);
 }
 
 .output .command {

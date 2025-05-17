@@ -94,6 +94,14 @@
   color: var(--terminal-success);
 }
 
+.output .info {
+  color: var(--terminal-info);
+}
+
+.output .warning {
+  color: var(--terminal-warning);
+}
+
 .output .command {
   color: var(--terminal-prompt);
   font-weight: bold;

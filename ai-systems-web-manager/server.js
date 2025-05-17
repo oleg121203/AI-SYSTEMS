@@ -52,6 +52,84 @@ function getServicesStatus() {
   });
 }
 
+// Check if direct services are running by checking processes on specific ports
+function checkDirectServicesRunning() {
+  return new Promise((resolve) => {
+    // Define the ports used by direct services
+    const servicePorts = [
+      7861, // AI Core
+      7862, // Development Agents
+      7863, // Project Manager
+      7864, // CMP
+      7865, // Git Service
+      8001  // Web Backend
+    ];
+    
+    // Alternative ports that might be used if primary ports are occupied
+    const alternativePorts = [7876, 8002, 8003, 8004, 8005];
+    
+    // Combine all possible ports
+    const allPorts = [...servicePorts, ...alternativePorts];
+    
+    // Check all ports in a single command
+    const portCheckCommand = `lsof -i -P -n | grep LISTEN | grep -E '${allPorts.join('|')}'`;
+    
+    exec(portCheckCommand, (error, stdout) => {
+      if (error) {
+        // No processes found on these ports
+        console.log('No direct services found running on expected ports');
+        resolve({ running: false, services: [] });
+        return;
+      }
+      
+      // Parse the output to get running services
+      const runningServices = [];
+      const lines = stdout.split('\n').filter(Boolean);
+      
+      console.log('Found processes on service ports:', lines.length);
+      
+      lines.forEach(line => {
+        const parts = line.trim().split(/\s+/);
+        if (parts.length >= 9) {
+          const port = parseInt(parts[8].split(':').pop());
+          const pid = parts[1];
+          const processName = parts[0];
+          
+          // Map port to service name
+          let serviceName = 'unknown';
+          if (port === 7861 || port === 7876) serviceName = 'AI Core';
+          else if (port === 7862) serviceName = 'Development Agents';
+          else if (port === 7863) serviceName = 'Project Manager';
+          else if (port === 7864) serviceName = 'CMP';
+          else if (port === 7865) serviceName = 'Git Service';
+          else if (port === 8001 || port === 8002) serviceName = 'Web Backend';
+          
+          runningServices.push({
+            port,
+            pid,
+            processName,
+            serviceName,
+            running: true
+          });
+        }
+      });
+      
+      // Consider direct services running if we found at least 3 services
+      const isRunning = runningServices.length >= 3;
+      console.log('Direct services running check:', { 
+        isRunning, 
+        count: runningServices.length,
+        services: runningServices.map(s => s.serviceName)
+      });
+      
+      resolve({ 
+        running: isRunning, 
+        services: runningServices 
+      });
+    });
+  });
+}
+
 // Set view engine
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
@@ -252,7 +330,7 @@ app.get('/', async (req, res) => {
 // API endpoints for script execution with confirmation flow
 
 // Step 1: Request confirmation before running a script
-app.post('/api/request-run', (req, res) => {
+app.post('/api/request-run', async (req, res) => {
   console.log('Request to /api/request-run received:', req.body);
   const { scriptId, customCommand } = req.body;
   
@@ -274,12 +352,131 @@ app.post('/api/request-run', (req, res) => {
   }
   
   const script = scripts[scriptId];
+  console.log('Checking status before confirming script:', script.name);
+  
+  // Check if the action is necessary based on current state
+  let actionNeeded = true;
+  let statusMessage = '';
+  
+  // Check if it's a start/stop service action and verify current state
+  if (scriptId === 'startAll') {
+    // Get detailed service status
+    const services = await getServicesStatus();
+    console.log('Current services status:', services);
+    
+    // Check if we have any running services
+    const servicesRunning = services.length > 0 && services.some(service => service.running);
+    console.log('Services running check:', servicesRunning, 'Service count:', services.length);
+    
+    if (servicesRunning) {
+      actionNeeded = false;
+      statusMessage = 'Services are already running. No action needed.';
+      console.log('Action not needed:', statusMessage);
+    }
+  } else if (scriptId === 'startServicesDirect') {
+    // Check if direct services are already running
+    const directServicesStatus = await checkDirectServicesRunning();
+    console.log('Direct services status:', directServicesStatus);
+    
+    if (directServicesStatus.running) {
+      actionNeeded = false;
+      statusMessage = 'Direct services are already running. No action needed.';
+      console.log('Action not needed for direct services:', statusMessage);
+    } else {
+      // Check if Docker services are running, which might conflict with direct services
+      const dockerServices = await getServicesStatus();
+      const dockerServicesRunning = dockerServices.length > 0 && dockerServices.some(service => service.running);
+      
+      if (dockerServicesRunning) {
+        // Add a warning that Docker services might conflict with direct services
+        console.log('Warning: Docker services are running which might conflict with direct services');
+        statusMessage = 'Warning: Docker services are running which might conflict with direct services on the same ports.';
+      }
+    }
+  } else if (scriptId === 'stopServices') {
+    // Get detailed service status
+    const services = await getServicesStatus();
+    console.log('Current services status for stop check:', services);
+    
+    // Check if we have any running services
+    const servicesRunning = services.length > 0 && services.some(service => service.running);
+    console.log('Services running check for stop:', servicesRunning, 'Service count:', services.length);
+    
+    // Also check direct services
+    const directServicesStatus = await checkDirectServicesRunning();
+    const anyServicesRunning = servicesRunning || directServicesStatus.running;
+    
+    if (!anyServicesRunning) {
+      actionNeeded = false;
+      statusMessage = 'Services are already stopped. No action needed.';
+      console.log('Action not needed for stop:', statusMessage);
+    }
+  } else if (scriptId.startsWith('start') && scriptId !== 'startAll') {
+    // For individual service profiles, check if that specific profile is running
+    const services = await getServicesStatus();
+    console.log('Current services for profile check:', services);
+    
+    const profileName = scriptId.replace('start', '').toLowerCase();
+    console.log('Checking profile:', profileName);
+    
+    // Map profile names to expected service names
+    const profileServiceMap = {
+      'infrastructure': ['postgres', 'redis', 'rabbitmq'],
+      'ai': ['ai-core', 'development-agents'],
+      'web': ['web-backend'],
+      'management': ['project-manager', 'git-service'],
+      'monitoring': ['prometheus', 'grafana']
+    };
+    
+    // Get the expected services for this profile
+    const expectedServices = profileServiceMap[profileName] || [];
+    console.log('Expected services for profile:', expectedServices);
+    
+    // Check if all expected services for this profile are running
+    const runningServices = services.filter(service => service.running);
+    console.log('Currently running services:', runningServices.map(s => s.name));
+    
+    // Extract just the service names without prefixes for easier matching
+    const runningServiceNames = runningServices.map(s => {
+      // Extract the base name from the full container name
+      const name = s.name.replace('ai-systems_', '').replace('ai-systems-', '');
+      return name.toLowerCase();
+    });
+    
+    console.log('Simplified running service names:', runningServiceNames);
+    
+    // Check if all expected services are running
+    const allExpectedRunning = expectedServices.length > 0 && 
+      expectedServices.every(expected => 
+        runningServiceNames.some(serviceName => serviceName.includes(expected))
+      );
+    
+    console.log('All expected services running:', allExpectedRunning);
+    
+    if (allExpectedRunning) {
+      actionNeeded = false;
+      statusMessage = `${script.name.replace('Start ', '')} are already running. No action needed.`;
+    }
+  }
+  
+  if (!actionNeeded) {
+    console.log(statusMessage);
+    return res.json({
+      success: true,
+      requiresConfirmation: false,
+      actionNeeded: false,
+      message: statusMessage,
+      scriptName: script.name
+    });
+  }
+  
   console.log('Sending confirmation request for script:', script.name);
   
   // Send confirmation request
   return res.json({
     success: true,
     requiresConfirmation: true,
+    actionNeeded: true,
     message: `Please confirm running: ${script.name}`,
     scriptName: script.name
   });
