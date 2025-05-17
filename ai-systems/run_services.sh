@@ -201,6 +201,15 @@ EOF
 # Ensure logs directory exists
 mkdir -p "${ROOT_DIR}/logs"
 
+# Create service directories if they don't exist
+echo -e "${YELLOW}Creating service directories if they don't exist...${NC}"
+mkdir -p ai-core
+mkdir -p development-agents
+mkdir -p project-manager
+mkdir -p cmp
+mkdir -p web/backend
+mkdir -p git-service
+
 # Copy config to each service directory
 echo -e "${YELLOW}Copying config to service directories...${NC}"
 cp config.json ai-core/
@@ -210,60 +219,124 @@ cp config.json cmp/
 cp config.json web/backend/
 cp config.json git-service/
 
+# Create placeholder files if they don't exist
+echo -e "${YELLOW}Creating placeholder files if needed...${NC}"
+for dir in ai-core development-agents project-manager cmp git-service "web/backend"; do
+  if [ ! -f "$dir/main.py" ]; then
+    echo -e "${YELLOW}Creating placeholder main.py in $dir...${NC}"
+    cat > "$dir/main.py" << 'EOF'
+#!/usr/bin/env python3
+import argparse
+import time
+import sys
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--port', type=int, required=True)
+    args = parser.parse_args()
+    
+    print(f"Service started on port {args.port}")
+    print(f"This is a placeholder service. Please implement the actual service.")
+    
+    # Keep the service running
+    try:
+        while True:
+            time.sleep(10)
+    except KeyboardInterrupt:
+        print("Service shutting down...")
+        sys.exit(0)
+
+if __name__ == "__main__":
+    main()
+EOF
+    chmod +x "$dir/main.py"
+  fi
+done
+
 # Start services in the background
 echo -e "${YELLOW}Starting AI Core service...${NC}"
-cd ai-core || {
+if [ -d "ai-core" ]; then
+  cd ai-core || {
+    echo -e "${RED}Could not change to AI Core directory.${NC}"
+    exit 1
+  }
+  python main.py --port ${AI_CORE_PORT} >"${ROOT_DIR}/logs/ai-core.log" 2>&1 &
+  AI_CORE_PID=$!
+  cd .. || exit 1
+else
   echo -e "${RED}AI Core directory not found.${NC}"
   exit 1
-}
-python main.py --port ${AI_CORE_PORT} >"${ROOT_DIR}/logs/ai-core.log" 2>&1 &
-AI_CORE_PID=$!
-cd .. || exit 1
+fi
 
 echo -e "${YELLOW}Starting Development Agents service...${NC}"
-cd development-agents || {
+if [ -d "development-agents" ]; then
+  cd development-agents || {
+    echo -e "${RED}Could not change to Development Agents directory.${NC}"
+    exit 1
+  }
+  python main.py --port ${DEV_AGENTS_PORT} >"${ROOT_DIR}/logs/development-agents.log" 2>&1 &
+  DEV_AGENTS_PID=$!
+  cd .. || exit 1
+else
   echo -e "${RED}Development Agents directory not found.${NC}"
   exit 1
-}
-python main.py --port ${DEV_AGENTS_PORT} >"${ROOT_DIR}/logs/development-agents.log" 2>&1 &
-DEV_AGENTS_PID=$!
-cd .. || exit 1
+fi
 
 echo -e "${YELLOW}Starting Project Manager service...${NC}"
-cd project-manager || {
+if [ -d "project-manager" ]; then
+  cd project-manager || {
+    echo -e "${RED}Could not change to Project Manager directory.${NC}"
+    exit 1
+  }
+  python main.py --port ${PROJECT_MANAGER_PORT} >"${ROOT_DIR}/logs/project-manager.log" 2>&1 &
+  PROJECT_MANAGER_PID=$!
+  cd .. || exit 1
+else
   echo -e "${RED}Project Manager directory not found.${NC}"
   exit 1
-}
-python main.py --port ${PROJECT_MANAGER_PORT} >"${ROOT_DIR}/logs/project-manager.log" 2>&1 &
-PROJECT_MANAGER_PID=$!
-cd .. || exit 1
+fi
 
 echo -e "${YELLOW}Starting CMP service...${NC}"
-cd cmp || {
+if [ -d "cmp" ]; then
+  cd cmp || {
+    echo -e "${RED}Could not change to CMP directory.${NC}"
+    exit 1
+  }
+  python main.py --port ${CMP_PORT} >"${ROOT_DIR}/logs/cmp.log" 2>&1 &
+  CMP_PID=$!
+  cd .. || exit 1
+else
   echo -e "${RED}CMP directory not found.${NC}"
   exit 1
-}
-python main.py --port ${CMP_PORT} >"${ROOT_DIR}/logs/cmp.log" 2>&1 &
-CMP_PID=$!
-cd .. || exit 1
+fi
 
 echo -e "${YELLOW}Starting Git Service...${NC}"
-cd git-service || {
+if [ -d "git-service" ]; then
+  cd git-service || {
+    echo -e "${RED}Could not change to Git Service directory.${NC}"
+    exit 1
+  }
+  python git_service.py --port ${GIT_SERVICE_PORT} >"${ROOT_DIR}/logs/git-service.log" 2>&1 &
+  GIT_SERVICE_PID=$!
+  cd .. || exit 1
+else
   echo -e "${RED}Git Service directory not found.${NC}"
   exit 1
-}
-python git_service.py --port ${GIT_SERVICE_PORT} >"${ROOT_DIR}/logs/git-service.log" 2>&1 &
-GIT_SERVICE_PID=$!
-cd .. || exit 1
+fi
 
 echo -e "${YELLOW}Starting Web Backend service...${NC}"
-cd web/backend || {
+if [ -d "web/backend" ]; then
+  cd web/backend || {
+    echo -e "${RED}Could not change to Web Backend directory.${NC}"
+    exit 1
+  }
+  uvicorn main:app --host 0.0.0.0 --port ${WEB_BACKEND_PORT} >"${ROOT_DIR}/logs/web-backend.log" 2>&1 &
+  WEB_BACKEND_PID=$!
+  cd ../.. || exit 1
+else
   echo -e "${RED}Web Backend directory not found.${NC}"
   exit 1
-}
-uvicorn main:app --host 0.0.0.0 --port ${WEB_BACKEND_PORT} >"${ROOT_DIR}/logs/web-backend.log" 2>&1 &
-WEB_BACKEND_PID=$!
-cd ../.. || exit 1
+fi
 
 # Create or update .env file for React frontend
 echo -e "${YELLOW}Creating .env file for React frontend...${NC}"

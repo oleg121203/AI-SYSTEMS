@@ -27,6 +27,10 @@ const helpCloseBtn = document.getElementById('help-close');
 
 // Current script being executed
 let currentScriptId = null;
+let currentCustomCommand = null;
+
+// Flag to track if the current script is confirmed and should display output
+let scriptConfirmed = false;
 
 // Initialize the page
 document.addEventListener('DOMContentLoaded', function() {
@@ -218,7 +222,7 @@ function setupEventListeners() {
   actionButtons.forEach(button => {
       button.addEventListener('click', () => {
           const scriptId = button.getAttribute('data-script');
-          showConfirmation(scriptId);
+          requestRunScript(scriptId);
       });
   });
   
@@ -251,8 +255,16 @@ function setupEventListeners() {
   // Confirmation modal buttons
   confirmYesBtn.addEventListener('click', () => {
       const scriptId = confirmYesBtn.getAttribute('data-script');
+      const customCommand = confirmYesBtn.getAttribute('data-custom-command');
       hideConfirmation();
-      runScript(scriptId, true); // Pass true to indicate confirmation
+      
+      if (customCommand) {
+          // Execute custom command
+          executeConfirmedCustomCommand(customCommand);
+      } else {
+          // Execute script
+          runScript(scriptId);
+      }
   });
   
   confirmNoBtn.addEventListener('click', hideConfirmation);
@@ -276,7 +288,7 @@ function setupEventListeners() {
 }
 
 // Show confirmation modal
-function showConfirmation(scriptId, scriptName) {
+function showConfirmation(scriptId, scriptName, customCommand) {
   // If scriptName is not provided, try to get it from the button
   if (!scriptName) {
     const button = document.querySelector(`[data-script="${scriptId}"]`);
@@ -286,6 +298,13 @@ function showConfirmation(scriptId, scriptName) {
   confirmMessage.textContent = `Are you sure you want to run "${scriptName}"?`;
   confirmYesBtn.setAttribute('data-script', scriptId);
   
+  // Store custom command if provided
+  if (customCommand) {
+    confirmYesBtn.setAttribute('data-custom-command', customCommand);
+  } else {
+    confirmYesBtn.removeAttribute('data-custom-command');
+  }
+  
   confirmModal.style.display = 'flex';
 }
 
@@ -294,8 +313,11 @@ function hideConfirmation() {
   confirmModal.style.display = 'none';
 }
 
-// Run a script
-function runScript(scriptId, confirmed = false) {
+// Request to run a script (first step - request confirmation)
+function requestRunScript(scriptId) {
+  // Reset the confirmation flag - no output should be displayed until confirmed
+  scriptConfirmed = false;
+  
   // Clear output if a different script is being run
   if (currentScriptId !== scriptId) {
     outputElement.innerHTML = '';
@@ -303,37 +325,87 @@ function runScript(scriptId, confirmed = false) {
   
   currentScriptId = scriptId;
   
+  // Disable the button temporarily
+  const button = document.querySelector(`[data-script="${scriptId}"]`);
+  button.disabled = true;
+  
+  // Send request to get confirmation
+  fetch('/api/request-run', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ scriptId })
+  })
+  .then(response => {
+    if (!response.ok) {
+      throw new Error(`Server responded with status: ${response.status}`);
+    }
+    return response.text().then(text => {
+      try {
+        return JSON.parse(text);
+      } catch (e) {
+        appendToOutput(`Error parsing JSON response: ${text.substring(0, 100)}...\n`, 'error');
+        throw new Error('Invalid JSON response from server');
+      }
+    });
+  })
+  .then(data => {
+    // Re-enable the button
+    button.disabled = false;
+    
+    if (!data.success) {
+      appendToOutput(`Error: ${data.message}\n`, 'error');
+      return;
+    }
+    
+    // Show confirmation dialog
+    showConfirmation(scriptId, data.scriptName);
+  })
+  .catch(error => {
+    appendToOutput(`Error: ${error.message}\n`, 'error');
+    button.disabled = false;
+  });
+}
+
+// Actually run a script (second step - after confirmation)
+function runScript(scriptId) {
+  // Set the script as confirmed
+  scriptConfirmed = true;
+  
   // Disable the button
   const button = document.querySelector(`[data-script="${scriptId}"]`);
   button.disabled = true;
   
-  // Send request to run the script
+  // Show loading message
+  appendToOutput(`Running script...\n`, 'normal');
+  
+  // Send request to actually run the script
   fetch('/api/run', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify({ scriptId, confirmed })
+    body: JSON.stringify({ scriptId })
   })
-  .then(response => response.json())
+  .then(response => {
+    if (!response.ok) {
+      throw new Error(`Server responded with status: ${response.status}`);
+    }
+    return response.text().then(text => {
+      try {
+        return JSON.parse(text);
+      } catch (e) {
+        appendToOutput(`Error parsing JSON response: ${text.substring(0, 100)}...\n`, 'error');
+        throw new Error('Invalid JSON response from server');
+      }
+    });
+  })
   .then(data => {
     if (!data.success) {
       appendToOutput(`Error: ${data.message}\n`, 'error');
       button.disabled = false;
-      return;
     }
-    
-    // Check if confirmation is required
-    if (data.requiresConfirmation) {
-      // Re-enable the button until confirmation
-      button.disabled = false;
-      // Show confirmation dialog
-      showConfirmation(scriptId, data.scriptName);
-      return;
-    }
-    
-    // Show loading message for confirmed execution
-    appendToOutput(`Running script...\n`, 'normal');
   })
   .catch(error => {
     appendToOutput(`Error: ${error.message}\n`, 'error');
@@ -343,7 +415,8 @@ function runScript(scriptId, confirmed = false) {
 
 // Handle script output from Socket.IO
 function handleScriptOutput(data) {
-  if (data.scriptId === currentScriptId) {
+  // Only display output if the script has been confirmed
+  if (data.scriptId === currentScriptId && scriptConfirmed) {
     const outputClass = data.error ? 'error' : 'normal';
     appendToOutput(data.data, outputClass);
   }
@@ -352,12 +425,27 @@ function handleScriptOutput(data) {
 // Handle script completion from Socket.IO
 function handleScriptComplete(data) {
   if (data.scriptId === currentScriptId) {
+    // Make sure the completed message is displayed even if script wasn't confirmed
+    scriptConfirmed = true;
+    
     const outputClass = data.success ? 'success' : 'error';
     appendToOutput(`\nScript completed with exit code: ${data.exitCode}\n`, outputClass);
+    
+    // Reset script confirmation flag
+    scriptConfirmed = false;
     
     // Re-enable the button
     const button = document.querySelector(`[data-script="${data.scriptId}"]`);
     button.disabled = false;
+    
+    // Add success/error class for flashing effect
+    button.classList.remove('success', 'error');
+    button.classList.add(data.success ? 'success' : 'error');
+    
+    // Remove the class after 5 seconds
+    setTimeout(() => {
+      button.classList.remove('success', 'error');
+    }, 5000);
     
     // Update system status after script completion
     updateSystemStatus();
@@ -419,26 +507,106 @@ function collapseOnEscape(e) {
   }
 }
 
-// Execute custom command
+// Request to execute custom command (first step - request confirmation)
 function executeCustomCommand() {
   const command = commandInput.value.trim();
   
   if (!command) return;
   
+  // Reset the confirmation flag - no output should be displayed until confirmed
+  scriptConfirmed = false;
+  
+  // Store the command for later execution
+  currentCustomCommand = command;
+  
   // Clear the input
   commandInput.value = '';
+  
+  // Request confirmation before executing
+  fetch('/api/request-run', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ customCommand: command })
+  })
+  .then(response => {
+    if (!response.ok) {
+      throw new Error(`Server responded with status: ${response.status}`);
+    }
+    return response.text().then(text => {
+      try {
+        return JSON.parse(text);
+      } catch (e) {
+        appendToOutput(`Error parsing JSON response: ${text.substring(0, 100)}...\n`, 'error');
+        throw new Error('Invalid JSON response from server');
+      }
+    });
+  })
+  .then(data => {
+    if (!data.success) {
+      appendToOutput(`Error: ${data.message}\n`, 'error');
+      return;
+    }
+    
+    // Show confirmation dialog
+    showConfirmation('custom', data.scriptName, data.customCommand);
+  })
+  .catch(error => {
+    appendToOutput(`Error: ${error.message}\n`, 'error');
+  });
+}
+
+// Execute custom command after confirmation
+function executeConfirmedCustomCommand(command) {
+  // Set the script as confirmed
+  scriptConfirmed = true;
   
   // Show command in output
   appendToOutput(`$ ${command}\n`, 'command');
   
-  // Send the command to the server
-  socket.emit('executeCommand', command);
+  // Send request to actually run the command
+  fetch('/api/run', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ customCommand: command })
+  })
+  .then(response => {
+    if (!response.ok) {
+      throw new Error(`Server responded with status: ${response.status}`);
+    }
+    return response.text().then(text => {
+      try {
+        return JSON.parse(text);
+      } catch (e) {
+        appendToOutput(`Error parsing JSON response: ${text.substring(0, 100)}...\n`, 'error');
+        throw new Error('Invalid JSON response from server');
+      }
+    });
+  })
+  .catch(error => {
+    appendToOutput(`Error: ${error.message}\n`, 'error');
+  });
 }
 
 // Update system status
 function updateSystemStatus() {
   fetch('/api/status')
-    .then(response => response.json())
+    .then(response => {
+      if (!response.ok) {
+        throw new Error(`Server responded with status: ${response.status}`);
+      }
+      return response.text().then(text => {
+        try {
+          return JSON.parse(text);
+        } catch (e) {
+          console.error(`Error parsing JSON response: ${text.substring(0, 100)}...`);
+          throw new Error('Invalid JSON response from server');
+        }
+      });
+    })
     .then(data => {
       // Update status container
       let statusHtml = '';

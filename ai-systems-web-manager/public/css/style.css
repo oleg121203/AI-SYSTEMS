@@ -46,7 +46,7 @@
 
 body {
   font-family: 'Hack', 'Courier New', monospace;
-  font-size: 14px;
+  font-size: 15px;
   line-height: 1.6;
   background-color: var(--background-color);
   color: var(--text-color);
@@ -55,7 +55,9 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
-  letter-spacing: 0.03em;
+  letter-spacing: 0.05em;
+  font-weight: 500;
+  text-shadow: 0 0 1px rgba(0, 255, 0, 0.2);
 }
 
 body::before {
@@ -333,6 +335,27 @@ h3 {
   left: 100%;
 }
 
+/* Success and error flashing effects */
+@keyframes flash-success {
+  0%, 100% { box-shadow: 0 0 5px rgba(0, 255, 0, 0.5); border-color: var(--border-color); }
+  50% { box-shadow: 0 0 20px rgba(0, 255, 0, 0.8); border-color: #00ff00; }
+}
+
+@keyframes flash-error {
+  0%, 100% { box-shadow: 0 0 5px rgba(255, 0, 0, 0.5); border-color: var(--border-color); }
+  50% { box-shadow: 0 0 20px rgba(255, 0, 0, 0.8); border-color: #ff0000; }
+}
+
+.action-btn.success {
+  animation: flash-success 1.5s infinite;
+  border-color: rgba(0, 255, 0, 0.7);
+}
+
+.action-btn.error {
+  animation: flash-error 1.5s infinite;
+  border-color: rgba(255, 0, 0, 0.7);
+}
+
 .action-btn:active {
   transform: scale(0.98);
 }
@@ -383,15 +406,16 @@ h3 {
   padding: 15px;
   border-radius: 3px;
   font-family: 'Hack', monospace;
-  font-size: 14px;
-  font-weight: 500;
+  font-size: 15px;
+  font-weight: 600;
   height: 300px;
   overflow-y: auto;
   white-space: pre-wrap;
   border: 1px solid var(--border-color);
   position: relative;
-  text-shadow: 0 0 1px rgba(0, 255, 0, 0.5);
-  line-height: 1.5;
+  text-shadow: 0 0 2px rgba(0, 255, 0, 0.4);
+  line-height: 1.6;
+  letter-spacing: 0.05em;
 }
 
 .output::before {
